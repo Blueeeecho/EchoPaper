@@ -1,0 +1,46 @@
+{
+  "id": "hzau-clean",
+  "version": "1.0.0",
+  "name": "HZAU 学术汇报",
+  "description": "原版 HZAU 16:9 模板；固定中文四段导航，中文隶书、英文 Times New Roman。",
+  "templateHash": "e386999fffbaa4ce4f95ff41e559072b2ef9c58810a7f2849bd920da65069833",
+  "chineseFont": "隶书",
+  "englishFont": "Times New Roman",
+  "navigation": [
+    "研究背景",
+    "研究内容",
+    "研究结果",
+    "未来计划"
+  ],
+  "width": 1280,
+  "height": 720,
+  "layouts": [
+    "cover",
+    "contents",
+    "explanation",
+    "comparison",
+    "table",
+    "figure",
+    "pipeline",
+    "case",
+    "thanks"
+  ],
+  "previewUrl": "/api/presentation-styles/hzau-clean/1.0.0/preview.png",
+  "template": "template.pptx",
+  "preview": "preview.png",
+  "provenance": {
+    "template": "My_Report_ppt_GENERIC_clean_template_v2.pptx",
+    "workflow": "My_Report_ppt",
+    "fontOverride": "All editable English text uses Times New Roman; Chinese uses 隶书.",
+    "logo": "Original template image4.png with original srcRect and luminance settings, retained as SVG wrapper.",
+    "privacy": "Document author and custom metadata removed for this sharing copy; slide content retained."
+  },
+  "logoUrl": "/api/presentation-styles/hzau-clean/1.0.0/logo.svg",
+  "logo": "logo.svg",
+  "assetHashes": {
+    "logo.png": "107d20b8cb64d6f2bf2e9cf1e541223fbac6ddce4ccb2981db7ba2d974531c4f",
+    "preview.png": "263243d34e584edc2ea6780bdd6606f376bc8dfa2b37e6a2f6406694aa7f4de3",
+    "cover.jpeg": "8588f673d9b1ed9d4d5a82761362e90ab2af009fbf9fc3e69032f43a96d6d0d0",
+    "logo.svg": "67bf6a36d41fbc14f501751535939950d7bebdeeed0f3594e0f73a5c95eb7468"
+  }
+}

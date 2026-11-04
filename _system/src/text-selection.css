@@ -1,0 +1,11 @@
+/* Keep selection on the original text; no reading overlay or layout changes. */
+.source-editor .cm-editor .cm-selectionBackground,
+.source-editor .cm-editor.cm-focused>.cm-scroller>.cm-selectionLayer .cm-selectionBackground,
+.source-editor .cm-editor:not(.cm-focused)>.cm-scroller>.cm-selectionLayer .cm-selectionBackground{background-color:var(--sync-highlight-fill)!important;border-radius:2px;outline:1px solid #d79b1740}
+.source-editor .cm-content::selection,
+.source-editor .cm-content ::selection{background-color:var(--sync-highlight-fill);color:#111820;text-shadow:none}
+/* Never repaint PDF text with the browser's substitute font: it doubles the canvas ink. */
+.preview-panel .textLayer ::selection{background:transparent;color:transparent;text-shadow:none}
+.preview-panel .textLayer mark.pdf-emphasis::selection{color:#142039}
+.pdf-live-selection{position:absolute;inset:0;z-index:2;pointer-events:none;user-select:none;mix-blend-mode:darken;line-height:0}
+.pdf-live-selection>span{position:absolute;background:var(--sync-highlight-fill);pointer-events:none}

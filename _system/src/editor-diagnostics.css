@@ -1,0 +1,29 @@
+.source-editor .ep-diagnostic-gutter { width: 15px; }
+.source-editor .ep-diagnostic-gutter .cm-gutterElement { padding: 0 2px; }
+.source-editor button.ep-diagnostic-marker { display: inline-block; width: 10px; height: 10px; min-width: 0; margin: 0; padding: 0; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px currentColor; cursor: pointer; vertical-align: middle; }
+.source-editor .ep-diagnostic-marker-error { color: #cc3c47; background: #cc3c47; }
+.source-editor .ep-diagnostic-marker-warning { color: #ba841e; background: #d09a30; }
+.source-editor .ep-diagnostic-marker-info { color: #6b83a7; background: #6b83a7; }
+.source-editor .ep-diagnostic-marker:focus-visible { outline: 2px solid #3d6aaa; outline-offset: 3px; }
+.source-editor .cm-lintRange.ep-diagnostic-range { background-image: none; text-decoration-line: underline; text-decoration-style: wavy; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+.source-editor .cm-lintRange-error.ep-diagnostic-range { text-decoration-color: #cc3c4770; }
+.source-editor .cm-lintRange-warning.ep-diagnostic-range { text-decoration-color: #ba841e80; }
+.source-editor .cm-lintRange-info.ep-diagnostic-range { text-decoration-color: #6b83a770; }
+.source-editor [data-diagnostics-stale="true"] .ep-diagnostic-marker { opacity: .65; }
+.source-editor [data-diagnostics-stale="true"] .ep-diagnostic-range { text-decoration-style: dotted; }
+.ep-diagnostic-tooltip, .source-editor .cm-tooltip-lint { max-width: min(480px, 75vw); padding: 9px 11px; color: #35445d; background: #fff; font: 12px/1.6 system-ui, sans-serif; white-space: normal; overflow-wrap: anywhere; }
+.ep-diagnostic-tooltip-item + .ep-diagnostic-tooltip-item { margin-top: 7px; padding-top: 7px; border-top: 1px solid #e5eaf1; }
+.ep-diagnostic-message { display: grid; gap: 3px; }
+.ep-diagnostic-baseline { display: block; color: #737e90; font-size: 10px; }
+.ep-diagnostic-tooltip > button { margin-top: 8px; padding: 3px 7px; border: 1px solid #d6deea; border-radius: 4px; color: #42618c; background: #f7f9fc; cursor: pointer; }
+.source-editor .cm-panel.cm-panel-lint { max-height: 150px; background: #fafbfd; font: 12px/1.6 system-ui, sans-serif; }
+.source-editor .cm-panel-lint ul { max-height: 130px; }
+.source-editor .cm-diagnostic { overflow-wrap: anywhere; }
+.source-editor .ep-diagnostic-marker-error{color:#ff0000;background:#ff0000}
+.source-editor .cm-lintRange-error.ep-diagnostic-range{text-decoration-color:#ff0000;text-decoration-thickness:1.5px}
+/* Placeholders are gutter reminders, not paragraph-wide inline errors.
+   A real error overlapping the same range retains its own underline. */
+.source-editor .cm-lintRange.ep-diagnostic-placeholder:not(.ep-diagnostic-range){background-image:none;background-color:transparent;text-decoration:none}
+.source-editor .ep-diagnostic-marker-warning{color:#d5a000;background:#f1bd28}
+/* Some lint versions still mount an empty tooltip after filtering reminders. */
+.source-editor .cm-tooltip-lint:empty,.source-editor .cm-tooltip-hover:has(.cm-tooltip-lint:empty){display:none}

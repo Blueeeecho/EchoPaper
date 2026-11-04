@@ -1,0 +1,7 @@
+import {useEffect,useRef} from 'react';
+import {X} from 'lucide-react';
+export default function HubDialog({title,onClose,children,wide=false}:{title:string;onClose:()=>void;children:React.ReactNode;wide?:boolean}) {
+ const panel=useRef<HTMLElement>(null),close=useRef(onClose);close.current=onClose;
+ useEffect(()=>{const before=document.activeElement as HTMLElement|null;(panel.current?.querySelector<HTMLElement>('input,textarea,select')||panel.current?.querySelector<HTMLElement>('button'))?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape')close.current();if(e.key==='Tab'){const nodes=Array.from(panel.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')||[]);if(!nodes.length)return;const first=nodes[0],last=nodes.at(-1)!;if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};document.addEventListener('keydown',key);return()=>{document.removeEventListener('keydown',key);before?.isConnected&&before.focus();};},[]);
+ return <div className="academic-dialog-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><section ref={panel} className={`academic-dialog ${wide?'wide':''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button onClick={onClose} aria-label="关闭"><X size={19}/></button></header>{children}</section></div>;
+}

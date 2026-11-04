@@ -1,0 +1,35 @@
+.build-issues-panel{font:11px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#3b4b63}
+.build-issues-context{display:flex;align-items:center;gap:12px;padding:6px 12px;border-bottom:1px solid #e1e7f0;background:#f8faff;font-size:10px;color:#7c8aa0}
+.build-issues-context strong{font-size:10px;color:#9b792e;font-weight:500;margin-left:auto}
+.build-issues-filters{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:7px 11px;border-bottom:1px solid #e2e8f1;position:sticky;top:0;background:#fff;z-index:1}
+.build-issue-filter{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border:1px solid #d7e0ed;border-radius:4px;font-size:10px;color:#627897}
+.build-issue-filter span{font-variant-numeric:tabular-nums;opacity:.8}
+.build-issue-filter[aria-pressed=true]{background:#e6edf8;border-color:#a9bddb;color:#354f7c}
+.build-issue-filter.error{color:#ac5864}.build-issue-filter.reference,.build-issue-filter.warning{color:#9b772f}
+.build-issue-group>header{display:flex;align-items:center;gap:12px;padding:7px 12px;background:#f5f8fc;border-bottom:1px solid #e5ebf3}
+.build-issue-group>header strong{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px;font-weight:600}
+.build-issue-group>header strong small{font-weight:400;color:#7b8ba3}
+.build-issue-group>header>span{font-size:10px;color:#7a8ba4}
+.issue-dot{width:6px;height:6px;border-radius:50%;background:#d0a03b;flex-shrink:0}
+.build-issue-group.error .issue-dot{background:#b85f6a}.build-issue-group.info .issue-dot,.build-issue-group.placeholder .issue-dot{background:#8b9ebd}
+.build-issue-row{display:flex;align-items:flex-start;gap:8px;width:100%;padding:8px 12px;border-bottom:1px solid #edf1f7;text-align:left;color:#4a5f7d}
+.build-issue-row:hover:not(:disabled){background:#edf3fc}
+.build-issue-row:disabled{opacity:1;cursor:default}
+.build-issue-row>svg{margin-top:2px;flex-shrink:0;color:#ba903a}.build-issue-row.error>svg{color:#b75d68}.build-issue-row.info>svg{color:#7d93b4}
+.build-issue-row>span{flex:1;min-width:0}
+.build-issue-message{display:block;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px}
+.build-issue-row small{display:flex;align-items:center;gap:4px;color:#8a99af;font:10px/1.5 'SFMono-Regular',Consolas,monospace;margin-top:3px;overflow-wrap:anywhere}
+.build-issues-empty{display:flex;align-items:center;justify-content:center;gap:7px;min-height:70px;color:#7b8da8;font-size:11px}
+.focus-status.succeeded.has-issues{color:#9b7931}
+.focus-status.succeeded.has-errors{color:#ad5964}
+.editor-issues-stale{color:#a18344;margin-left:5px}
+.build-console.expanded{height:260px;max-height:38vh}
+
+.build-issue-repair{margin:0 12px 8px 36px;font-size:10px;color:#697d99}.build-issue-repair summary{cursor:pointer;width:fit-content}.build-issue-repair p{margin:6px 0;line-height:1.7}.build-issue-repair button{display:flex;gap:5px;align-items:center;color:#506a90;font-size:10px;padding:4px 0;overflow-wrap:anywhere;text-align:left}.build-issue-repair button:hover{text-decoration:underline}
+.build-issue-group.error .issue-dot,.build-issue-group.reference .issue-dot,.build-issue-group.placeholder .issue-dot{background:#ff0000}
+.build-issue-group.error>header strong,.build-issue-group.reference>header strong,.build-issue-group.placeholder>header strong,.build-issue-row.error>svg{color:#e00000}
+.build-issue-filter.error,.build-issue-filter.reference,.build-issue-filter.placeholder{color:#d00000}
+.focus-status.has-errors,.focus-tool.issues-tool.has-errors{color:#df0000}
+.focus-status.succeeded.has-errors,.focus-status.failed.has-errors{color:#df0000}
+
+.build-status.succeeded.has-errors{color:#df0000}.build-status.succeeded.has-issues{color:#966e32}

@@ -1,0 +1,10 @@
+import {useEffect,useRef,useState} from 'react';
+import {FilePlus2,FolderPlus,LoaderCircle,X} from 'lucide-react';
+export default function FileCreateDialog({kind,directory,onCreate,onClose}:{kind:'file'|'directory';directory:string;onCreate:(path:string)=>Promise<void>;onClose:()=>void}){
+ const [name,setName]=useState(kind==='file'?'untitled.tex':'新建文件夹'),[busy,setBusy]=useState(false),[error,setError]=useState(''),input=useRef<HTMLInputElement>(null);
+ const destination=directory?`${directory}/${name.trim()}`:name.trim();
+ useEffect(()=>{input.current?.focus();input.current?.select();},[]);
+ useEffect(()=>{const key=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!busy)onClose();};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[busy,onClose]);
+ async function create(event:React.FormEvent){event.preventDefault();if(!name.trim())return;setBusy(true);setError('');try{await onCreate(destination);onClose();}catch(error:any){setError(error.message||'创建失败，请重试。');}finally{setBusy(false);}}
+ return <div className="modal-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget&&!busy)onClose();}}><section className="modal" role="dialog" aria-modal="true" aria-label={kind==='file'?'新建文件':'新建目录'}><div className="modal-heading"><h2>{kind==='file'?'新建文件':'新建目录'}</h2><button className="icon-button" aria-label="关闭新建窗口" disabled={busy} onClick={onClose}><X size={18}/></button></div><form className="modal-form" onSubmit={create}><label><span>{kind==='file'?'文件名':'目录名'}</span><input ref={input} aria-label={kind==='file'?'新文件名称':'新目录名称'} required maxLength={200} value={name} onChange={event=>setName(event.target.value)}/><small>创建位置：{destination||directory||'项目根目录'}</small></label>{error&&<p role="alert" className="project-file-error">{error}</p>}<div className="modal-actions"><button type="button" className="button" disabled={busy} onClick={onClose}>取消</button><button type="submit" className="button primary" disabled={busy||!name.trim()}>{busy?<LoaderCircle size={14} className="spin"/>:kind==='file'?<FilePlus2 size={14}/>:<FolderPlus size={14}/>}创建</button></div></form></section></div>;
+}

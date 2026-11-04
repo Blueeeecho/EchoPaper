@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "DEMO",
+  "title": "EchoPaper 示例",
+  "stage": "writing",
+  "venue": "",
+  "deadline": "",
+  "targets": [
+    {
+      "id": "main",
+      "label": "主论文",
+      "main": "manuscript/main.tex"
+    }
+  ],
+  "autoCompile": false,
+  "createdAt": "2026-11-04T00:00:00Z",
+  "updatedAt": "2026-11-04T00:00:00Z"
+}

@@ -1,0 +1,43 @@
+.pdf-issue-summary{position:relative;flex-shrink:0;line-height:1.4}
+.pdf-issue-counts{display:flex;align-items:center;gap:4px}
+.pdf-issue-count{display:inline-flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid transparent;border-radius:4px;font-size:9px;white-space:nowrap;color:#966e32;background:#f6efdf}
+.pdf-issue-count b{font-variant-numeric:tabular-nums;font-weight:650}
+.pdf-issue-count:hover,.pdf-issue-count[aria-expanded=true]{border-color:#d7bd8f;background:#f2e8d3}
+.pdf-issue-count.error{color:#a45e60;background:#f6e9e8}
+.pdf-issue-count.error:hover,.pdf-issue-count.error[aria-expanded=true]{border-color:#d6adae;background:#f1dfdf}
+.pdf-issue-count.placeholder{color:#6e778b;background:#eaf0f5}
+.pdf-issue-count.placeholder:hover,.pdf-issue-count.placeholder[aria-expanded=true]{border-color:#b6c4d5;background:#e3ebf3}
+.pdf-issue-popover{position:absolute;right:0;top:calc(100% + 11px);z-index:30;width:360px;max-width:calc(100vw - 40px);border:1px solid #cfd7e3;border-radius:9px;box-shadow:0 9px 28px #24354d24;background:#fff;color:#3d4d65;text-align:left;font-size:11px;overflow:hidden}
+.pdf-issue-popover>header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;background:#f6f8fb;border-bottom:1px solid #e3e8ef}
+.pdf-issue-popover>header>span{display:flex;align-items:center;gap:6px}
+.pdf-issue-popover>header b{font-size:10px;color:#7b879a;font-weight:500}
+.pdf-issue-version{display:flex;flex-direction:column;gap:4px;padding:9px 11px;font-size:10px;border-bottom:1px solid #edf0f5;background:#fcfdff;color:#79869a}
+.pdf-issue-version strong{font-size:10px;color:#596b85;font-weight:500}
+.pdf-issue-version small{font-size:10px;color:#9d743c}
+.pdf-issue-list{max-height:300px;overflow:auto;overscroll-behavior:contain}
+.pdf-issue-item{padding:9px 11px;border-bottom:1px solid #edf0f5;border-left:2px solid #d9b878}
+.pdf-issue-item.error{border-left-color:#bb7c7e}.pdf-issue-item.placeholder{border-left-color:#abb6c5}
+.pdf-issue-message{display:flex;width:100%;flex-direction:column;gap:6px;text-align:left;padding:0;line-height:1.55;color:#45546c;overflow-wrap:anywhere}
+.pdf-issue-message:disabled{opacity:1;cursor:default}.pdf-issue-message:not(:disabled):hover{color:#93692b}
+.pdf-issue-message small{font-size:9px;color:#8995a6}.pdf-issue-message:not(:disabled) small{color:#9a743e}
+.pdf-issue-source{display:flex;align-items:center;gap:4px;margin-top:6px;font-size:10px;color:#6b7e9a;padding:2px 0}.pdf-issue-source:hover{color:#344f7d}
+.pdf-issue-source span{font-size:9px;color:#96a0b0}
+.pdf-issue-open-console{display:flex;width:100%;align-items:center;justify-content:space-between;padding:9px 11px;background:#f8fafd;color:#627692;font-size:10px}.pdf-issue-open-console:hover{background:#edf2f9}
+.pdf-unresolved-marks{position:absolute;inset:0;z-index:2;pointer-events:none;user-select:none;mix-blend-mode:multiply}
+.pdf-unresolved-mark{position:absolute;pointer-events:none;border-radius:2px;background:linear-gradient(to bottom,transparent 10%,rgb(255 0 0 / 70%) 10% 92%,transparent 92%)}
+@media(max-width:1100px){.pdf-issue-count{font-size:8px;padding:3px}.pdf-issue-counts{gap:3px}}
+/* Keep counts readable when sidebars leave a narrow PDF pane. */
+.preview-panel>.panel-title,.focus-writing .preview-panel>.panel-title{height:auto;min-height:32px;flex-wrap:wrap;row-gap:5px;padding-top:5px;padding-bottom:5px}
+.preview-panel>.panel-title>div:first-child{flex-shrink:0}
+.preview-panel>.panel-title>div:first-child .quiet{white-space:nowrap}
+.preview-panel>.panel-title>div:last-child{flex-shrink:0;margin-left:auto}
+/* Submission blockers use unmistakable red, even when the engine produced a PDF. */
+.pdf-issue-count.error,.pdf-issue-count.reference,.pdf-issue-count.placeholder{color:#d00000;background:#ffe7e7;border-color:#ffb3b3}
+.pdf-issue-count.error::before,.pdf-issue-count.reference::before,.pdf-issue-count.placeholder::before{content:'';width:5px;height:5px;border-radius:50%;background:#ff0000}
+.pdf-issue-count.error:hover,.pdf-issue-count.reference:hover,.pdf-issue-count.placeholder:hover,.pdf-issue-count.error[aria-expanded=true],.pdf-issue-count.reference[aria-expanded=true],.pdf-issue-count.placeholder[aria-expanded=true]{color:#d00000;background:#ffd9d9;border-color:#ff0000}
+.pdf-issue-item.serious{border-left:3px solid #ff0000;background:#fffafa}
+.pdf-issue-item.serious .pdf-issue-message:not(:disabled):hover{color:#d00000}
+.pdf-issue-message small{display:flex;align-items:center;gap:5px;overflow-wrap:anywhere}
+.pdf-issue-message:not(:disabled) small{color:#6b7e9a}
+/* A translucent highlighter stroke preserves the original black PDF glyphs.
+   Do not recolour glyphs or add an opaque screen-blended ink overlay. */
