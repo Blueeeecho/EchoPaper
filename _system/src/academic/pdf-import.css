@@ -1,0 +1,33 @@
+#root .academic-app .pdf-import-feedback{padding:8px 16px;border-bottom:1px solid var(--ep-border);font-size:12px;color:var(--ep-text-2);line-height:1.65;background:var(--ep-surface-2)}
+#root .academic-app .pdf-import-feedback p{margin:0;overflow-wrap:anywhere}
+#root .academic-app .pdf-import-feedback p+p{margin-top:4px}
+#root .academic-app .pdf-import-feedback .pdf-import-destination{color:var(--ep-text-3)}
+#root .academic-app .pdf-import-feedback .pdf-import-error{color:var(--ep-danger,#ad3c36);margin-top:6px}
+#root .academic-app .pdf-import-feedback ul{margin:0 0 6px;padding-left:18px}
+#root .academic-app .pdf-import-feedback button{font-size:12px;min-height:30px;padding:4px 9px}
+#root .academic-app .pdf-import-overlay{position:fixed;inset:18px;z-index:160;display:grid;align-content:center;justify-items:center;gap:12px;padding:24px;border:2px dashed var(--ep-accent);border-radius:var(--ep-radius-lg);background:color-mix(in srgb,var(--ep-surface) 95%,transparent);color:var(--ep-accent);pointer-events:none;text-align:center}
+#root .academic-app .pdf-import-overlay strong{font-size:18px;overflow-wrap:anywhere}
+#root .academic-app .pdf-import-overlay small{font-size:13px;color:var(--ep-text-2)}
+#root .academic-app .academic-library-page>.academic-page-heading>div:last-child{display:flex;align-items:center;gap:8px}
+#root .academic-app .academic-library-page>.pdf-import-feedback{flex-shrink:0;border:1px solid var(--ep-border);border-radius:var(--ep-radius-lg) var(--ep-radius-lg) 0 0}
+@media(max-width:600px){#root .academic-app .pdf-import-overlay{inset:8px;padding:16px}#root .academic-app .pdf-import-overlay strong{font-size:15px}#root .academic-app .pdf-import-overlay small{font-size:12px}}
+@media(max-width:760px){
+ #root .academic-app:has(.academic-library-page){min-width:0}
+ #root .academic-app:has(.academic-library-page) .academic-sidebar{width:54px;padding:12px 4px}
+ #root .academic-app:has(.academic-library-page) .academic-brand{margin:0 0 18px;padding:0;justify-content:center}
+ #root .academic-app:has(.academic-library-page) .academic-brand-symbol{display:grid}
+ #root .academic-app:has(.academic-library-page) .academic-brand>span:last-child,#root .academic-app:has(.academic-library-page) .academic-nav-label,#root .academic-app:has(.academic-library-page) .academic-sidebar-note,#root .academic-app:has(.academic-library-page) .academic-sidebar nav a>span,#root .academic-app:has(.academic-library-page) .academic-sidebar nav a>small,#root .academic-app:has(.academic-library-page) .academic-sidebar footer>div{display:none}
+ #root .academic-app:has(.academic-library-page) .academic-sidebar nav a{justify-content:center;gap:0;padding:11px 8px}
+ #root .academic-app:has(.academic-library-page) .academic-sidebar footer button{font-size:0;justify-content:center;padding:9px 4px;gap:0}
+ #root .academic-app:has(.academic-library-page) .academic-global-header{padding:8px 10px;gap:8px;min-height:54px;height:auto}
+ #root .academic-app:has(.academic-library-page) .academic-global-header>form,#root .academic-app:has(.academic-library-page) .academic-breadcrumb>button,#root .academic-app:has(.academic-library-page) .academic-breadcrumb>svg{display:none}
+ #root .academic-app:has(.academic-library-page) .research-scope-control{margin-left:auto;min-width:0}
+ #root .academic-app:has(.academic-library-page) .research-scope-control label{font-size:0;gap:0}
+ #root .academic-app:has(.academic-library-page) .research-scope-control select{font-size:12px;min-width:0;max-width:145px}
+ #root .academic-app .academic-library-page{padding:14px 10px;min-width:0}
+ #root .academic-app .academic-library-page .academic-page-heading{flex-wrap:wrap;gap:8px}
+ #root .academic-app .academic-library-page .library-document-head{flex-wrap:wrap}
+ #root .academic-app .academic-library-page .library-view-tabs{flex-wrap:wrap}
+ #root .academic-app .academic-library-page .academic-locations{position:absolute;left:64px;top:170px;bottom:20px;width:220px;max-width:calc(100vw - 84px);z-index:25;box-shadow:var(--ep-shadow-sm)}
+ #root .academic-app .academic-library-page .academic-resource-detail{max-width:calc(100vw - 64px)}
+}

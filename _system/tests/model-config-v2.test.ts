@@ -32,7 +32,7 @@ async function fixture(options:{raw?:unknown;legacyDefault?:string;fetch?:typeof
 }
 
 test('fresh settings have no implicit assistant or translation selection, and GET does not persist presets',async()=>{
- const f=await fixture();try{const config=await f.read();assert.equal(config.version,2);assert.deepEqual(config.assistant.modelIds,[]);assert.equal(config.assistant.defaultModelId,null);assert.equal(config.assistant.roles.length,7);assert.deepEqual(config.translations,[]);assert.equal((await f.app.inject('/api/ai/config')).json().defaultModel,null);assert.deepEqual((await f.app.inject('/api/ai/config')).json().models,[]);assert.equal(await fs.stat(path.join(f.root,'_system/runtime/model-providers.json')).catch(()=>null),null);assert.equal(f.calls.length,0);assert.equal(f.writes.length,0);assert.ok(!JSON.stringify(config).includes(secret));}finally{await f.close();}
+ const f=await fixture();try{const config=await f.read();assert.equal(config.version,2);assert.deepEqual(config.assistant.modelIds,[]);assert.equal(config.assistant.defaultModelId,null);assert.equal(config.assistant.roles.length,8);assert.deepEqual(config.translations,[]);assert.equal((await f.app.inject('/api/ai/config')).json().defaultModel,null);assert.deepEqual((await f.app.inject('/api/ai/config')).json().models,[]);assert.equal(await fs.stat(path.join(f.root,'_system/runtime/model-providers.json')).catch(()=>null),null);assert.equal(f.calls.length,0);assert.equal(f.writes.length,0);assert.ok(!JSON.stringify(config).includes(secret));}finally{await f.close();}
 });
 
 test('v1 migration preserves IDs, explicit default, all chat availability and sources without writing until revision-checked save',async()=>{

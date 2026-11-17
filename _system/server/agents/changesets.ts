@@ -3,7 +3,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import type {AgentRun,ChangeImage,ChangeOperation,ChangeSet} from '../../shared/agent-types';
+import type {AgentEditTarget,AgentRun,ChangeImage,ChangeOperation,ChangeSet} from '../../shared/agent-types';
 import type {Project} from '../../shared/types';
 import {HttpError,assertNoSymlinks,editablePath} from '../security';
 import {atomicWrite,hash,withProjectMutation,preserveRecovery} from '../storage';
@@ -11,21 +11,32 @@ import {checkpoint} from '../history';
 import {listFiles} from '../files';
 import {validateTargets} from '../projects';
 import {prepareEditorCommit} from './editor-barrier';
+import {readAgentAttachment} from './attachments';
+import type {ProjectSnapshot} from './project-snapshot';
+import {captureProjectSnapshot} from './project-snapshot';
+import {resolveEditTarget,validateEditTarget} from './edit-targets';
 const execute=promisify(execFile);
 const protectedExtension=/\.(cls|sty|bst|bbx|cbx|def|cfg|clo|fd|ltx)$/i;
 const safeId=(id:string)=>{if(!/^[\w-]{1,100}$/.test(id))throw new HttpError(400,'变更集编号无效。');return id;};
 async function readBytes(root:string,file:string):Promise<Buffer|null>{const target=await assertNoSymlinks(root,file,true);try{const stat=await fs.stat(target);if(!stat.isFile()||stat.size>50*1024*1024)throw new HttpError(413,'变更文件无效或超过 50 MB。');return await fs.readFile(target);}catch(e:any){if(e.code==='ENOENT')return null;throw e;}}
 const digest=(bytes:Buffer|null)=>bytes===null?null:hash(bytes);
+function checkMoveFormat(from:string,to:string,bytes:Buffer){
+ const original=path.posix.extname(from).toLowerCase(),next=path.posix.extname(to).toLowerCase(),equivalent=(ext:string)=>ext==='.jpeg'?'.jpg':ext;
+ const actual=bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'.png':bytes.subarray(0,3).equals(Buffer.from([255,216,255]))?'.jpg':bytes.subarray(0,5).toString()==='%PDF-'?'.pdf':undefined;
+ const assetExtensions=new Set(['.png','.jpg','.jpeg','.pdf','.webp','.gif','.svg','.eps']);
+ if((actual&&equivalent(next)!==actual)||!actual&&(assetExtensions.has(original)||assetExtensions.has(next))&&equivalent(original)!==equivalent(next))throw new HttpError(400,'重命名不会转换文件编码，须保留真实格式扩展名；JPEG 不能直接改为 PNG。');
+}
 function writable(run:AgentRun,file:string){
  editablePath(file);
  if(!/^(manuscript\/|notes\/|literature\/|reviews\/[^/]+\/response\/)/.test(file)||protectedExtension.test(file)||/^notes\/(?:(?:ai-conversations|pdf-annotations)\.json$|agent-runs(?:\/|$))/i.test(file))throw new HttpError(403,`助手不能修改受保护文件：${file}`);
- if(run.scope.readOnly)throw new HttpError(403,'此任务仅允许检查。');
- if(run.scope.paths?.length&&!run.scope.paths.some(p=>file===p||file.startsWith(p.replace(/\/$/,'')+'/')))throw new HttpError(403,`超出本次任务的文件范围：${file}`);
- if(run.scope.selection&&file!==run.scope.selection.path)throw new HttpError(403,'选区任务不能修改其他文件。');
+ // A scope refusal can never succeed on retry: mark it and say what the author can do.
+ if(run.scope.readOnly)throw new HttpError(403,'当前请求设置为只读。请在允许写入的新请求中提交 '+file+' 的修改。',{scopeViolation:'readOnly',file});
+ if(run.scope.paths?.length&&!run.scope.paths.some(p=>file===p||file.startsWith(p.replace(/\/$/,'')+'/')))throw new HttpError(403,'本轮文件范围限定为 '+run.scope.paths.join('、')+'。提案涉及 '+file+'，请核对新请求的明确写入范围。',{scopeViolation:'paths',file,allowed:run.scope.paths});
+ if(run.scope.selection&&file!==run.scope.selection.path)throw new HttpError(403,'本轮写入范围是 '+run.scope.selection.path+' 内的已选文字。提案涉及 '+file+'，请核对明确选区与文件目标。',{scopeViolation:'selection',file,allowed:[run.scope.selection.path]});
 }
 function selectionCheck(run:AgentRun,op:ChangeOperation){
  const s=run.scope.selection;if(!s)return;
- if(op.kind!=='write'||op.path!==s.path||op.expectedHash!==hash(s.documentText)||!op.content.startsWith(s.documentText.slice(0,s.from))||!op.content.endsWith(s.documentText.slice(s.to))||op.content.length<s.documentText.length-(s.to-s.from))throw new HttpError(409,'选区修改基线不一致，或修改超出了指定选区。');
+ if(op.kind!=='write'||op.path!==s.path||op.expectedHash!==hash(s.documentText)||!op.content.startsWith(s.documentText.slice(0,s.from))||!op.content.endsWith(s.documentText.slice(s.to))||op.content.length<s.documentText.length-(s.to-s.from))throw new HttpError(409,'本轮限定只改所选的那段文字，但这次修改超出了选区，或选区所在文件已被改动。请重新选择要改的文字，或把本轮范围改为「当前文件」。',{scopeViolation:'selectionBounds',file:s.path});
  if(/润色|polish|proofread/i.test(run.input)){
   const next=op.content.slice(s.from,op.content.length-(s.documentText.length-s.to));
   const invariants=(text:string)=>[...(text.matchAll(/\\(?:cite\w*|ref|eqref|autoref|label)\*?(?:\[[^\]]*\])*\{[^}]*\}|\$\$[\s\S]*?\$\$|(?<!\\)\$[^$]*?(?<!\\)\$|\\\[[\s\S]*?\\\]/g))].map(m=>m[0]);
@@ -34,13 +45,16 @@ function selectionCheck(run:AgentRun,op:ChangeOperation){
 }
 async function journal(root:string,change:ChangeSet){const folder=await assertNoSymlinks(root,'.workbench/agent-changes',true);await fs.mkdir(folder,{recursive:true,mode:0o700});await assertNoSymlinks(root,'.workbench/agent-changes');const file=path.join(folder,safeId(change.id)+'.json');await atomicWrite(file,JSON.stringify(change));await fs.chmod(file,0o600);}
 /** Expand only proven literal LaTeX resources. Never do a global filename replacement. */
-async function expandMoves(root:string,run:AgentRun,operations:ChangeOperation[],readSet:Record<string,string|null>):Promise<ChangeOperation[]>{
+export async function expandMoves(root:string,run:AgentRun,operations:ChangeOperation[],readSet:Record<string,string|null>,snapshot?:ProjectSnapshot):Promise<ChangeOperation[]>{
  const moves=operations.filter((o):o is Extract<ChangeOperation,{kind:'move'}>=>o.kind==='move');if(!moves.length)return operations;
- const project=JSON.parse((await readBytes(root,'project.json'))!.toString()) as Project,target=project.targets.find(t=>t.id===run.targetId);if(!target)throw new HttpError(409,'本次任务的编译目标不存在。');
+ const projectBytes=(await readBytes(root,'project.json'))!;
+ if(Object.hasOwn(readSet,'project.json')&&readSet['project.json']!==hash(projectBytes))throw new HttpError(409,'重命名依赖的项目配置已变化。');
+ const project=JSON.parse(projectBytes.toString()) as Project,target=project.targets.find(t=>t.id===run.targetId);if(!target)throw new HttpError(409,'本次任务的编译目标不存在。');
  const base=path.posix.dirname(target.main),planned=new Map(operations.filter((o):o is Extract<ChangeOperation,{kind:'write'}>=>o.kind==='write').map(o=>[o.path,o]));
  for(const entry of await listFiles(root)){
   if(entry.type!=='file'||!entry.path.startsWith(base+'/')||!entry.path.endsWith('.tex'))continue;
   const original=(await readBytes(root,entry.path))!,existing=planned.get(entry.path),originalHash=hash(original);
+  if(snapshot&&snapshot.files[entry.path]?.hash!==originalHash)throw new HttpError(409,`引用文件不再匹配任务快照：${entry.path}。请比较后重新生成修改。`);
   if(existing&&existing.expectedHash!==originalHash||Object.hasOwn(readSet,entry.path)&&readSet[entry.path]!==originalHash)throw new HttpError(409,`路径更新所依赖的文件已变化：${entry.path}。旧补丁不会绑定新哈希。`);
   let text=existing?.content??original.toString('utf8');
   if(/\\(?:input|include|includegraphics|bibliography|addbibresource|import|subimport)\*?(?:\[[^\]]*\])?\s*\{[^}]*\\/.test(text))throw new HttpError(409,`存在动态资源路径，不能可靠移动文件：${entry.path}`);
@@ -61,9 +75,11 @@ async function expandMoves(root:string,run:AgentRun,operations:ChangeOperation[]
  const result:ChangeOperation[]=[...operations.filter(o=>o.kind!=='write'),...planned.values()];
  if(changed&&!result.some(o=>o.kind==='project'))result.push({kind:'project',patch:{targets},expectedUpdatedAt:project.updatedAt});return result;
 }
-export async function createChangeSet(root:string,run:AgentRun,description:string,operations:ChangeOperation[],baseline:Record<string,string|null>):Promise<ChangeSet>{
+export async function createChangeSet(root:string,run:AgentRun,description:string,operations:ChangeOperation[],baseline:Record<string,string|null>,attachmentIds:readonly string[]=run.attachments?.map(item=>item.id)||[],snapshot?:ProjectSnapshot,target?:AgentEditTarget):Promise<ChangeSet>{
  if(!Array.isArray(operations)||!operations.length||operations.length>100||typeof description!=='string'||description.length>2000)throw new HttpError(400,'请提供 1–100 项有效的文件修改。');
- const readSet={...baseline};operations=await expandMoves(root,run,structuredClone(operations),readSet);
+ const readSet={...baseline};operations=await expandMoves(root,run,structuredClone(operations),readSet,snapshot);
+ if(run.targeting==='structured'&&!target)throw new HttpError(400,'请在修改建议中声明结构化目标。',{editTargetError:'targetRequired'});
+ const verifiedTarget=target?resolveEditTarget(target,run.editContext,snapshot??await captureProjectSnapshot(root),operations):undefined;
  const images=new Map<string,ChangeImage>(),seen=new Set<string>();let total=0,projectBefore:Project|undefined,projectAfter:Project|undefined;
  async function image(file:string,after:Buffer|null,expected:string|null,allowProject=false){
   if(!allowProject)writable(run,file);const identity=file.normalize('NFC').toLowerCase();if(seen.has(identity))throw new HttpError(400,`变更集含重叠或大小写冲突：${file}`);seen.add(identity);
@@ -73,13 +89,20 @@ export async function createChangeSet(root:string,run:AgentRun,description:strin
   images.set(file,{path:file,beforeHash:digest(before),afterHash:digest(after),...(before!==null?{beforeBase64:before.toString('base64')}:{}),...(after!==null?{afterBase64:after.toString('base64')}:{} )});readSet[file]=expected;
  }
  for(const op of operations){
-  if(!op||!['write','move','delete','project'].includes(op.kind))throw new HttpError(400,'未知变更操作。');selectionCheck(run,op);
+  if(!op||!['write','attachment','move','delete','project'].includes(op.kind))throw new HttpError(400,'未知变更操作。');selectionCheck(run,op);
   if(op.kind==='write'){if(typeof op.content!=='string'||Buffer.byteLength(op.content)>3*1024*1024||op.content.includes('\0'))throw new HttpError(400,'文本修改无效或超过 3 MB。');if(!operations.some(other=>other.kind==='move'&&other.from===op.path))await image(op.path,Buffer.from(op.content),op.expectedHash);}
-  else if(op.kind==='move'){writable(run,op.from);writable(run,op.to);const bytes=await readBytes(root,op.from);if(!bytes)throw new HttpError(404,'待移动文件不存在。');const edit=operations.find((other):other is Extract<ChangeOperation,{kind:'write'}>=>other.kind==='write'&&other.path===op.from);if(edit&&edit.expectedHash!==op.expectedHash)throw new HttpError(409,'移动与内容修改的基线不一致。');await image(op.from,null,op.expectedHash);await image(op.to,edit?Buffer.from(edit.content):bytes,null);}
+  else if(op.kind==='attachment'){
+   writable(run,op.path);if(!attachmentIds.includes(op.attachmentId))throw new HttpError(403,'只能导入当前会话已经提供的附件。');
+   const item=await readAgentAttachment(root,op.attachmentId),extension=path.posix.extname(op.path).toLowerCase();
+   const formats:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.pdf':'application/pdf'};
+   if(!op.path.startsWith('manuscript/')||!formats[extension]||formats[extension]!==item.metadata.mimeType)throw new HttpError(400,'插图须保存为 manuscript 内与原件格式一致的 PNG、JPEG 或 PDF。');
+   await image(op.path,item.bytes,op.expectedHash);
+  }
+  else if(op.kind==='move'){writable(run,op.from);writable(run,op.to);const bytes=await readBytes(root,op.from);if(!bytes)throw new HttpError(404,'待移动文件不存在。');checkMoveFormat(op.from,op.to,bytes);const edit=operations.find((other):other is Extract<ChangeOperation,{kind:'write'}>=>other.kind==='write'&&other.path===op.from);if(edit&&edit.expectedHash!==op.expectedHash)throw new HttpError(409,'移动与内容修改的基线不一致。');await image(op.from,null,op.expectedHash);await image(op.to,edit?Buffer.from(edit.content):bytes,null);}
   else if(op.kind==='delete')await image(op.path,null,op.expectedHash);
   else{if(run.scope.readOnly||run.scope.selection||run.scope.paths?.length)throw new HttpError(403,'本次任务不能修改项目目标。');if(!op.patch||Object.keys(op.patch).some(k=>k!=='targets'))throw new HttpError(403,'助手仅可同步文件移动对应的编译目标。');projectBefore=JSON.parse((await readBytes(root,'project.json'))!.toString());if(!projectBefore||op.expectedUpdatedAt!==projectBefore.updatedAt)throw new HttpError(409,'项目目标配置已经变化。');const targets=validateTargets(op.patch.targets);for(const t of targets){const previous=projectBefore.targets.find(p=>p.id===t.id);if(!previous||t.label!==previous.label||!operations.some(o=>o.kind==='move'&&o.from===previous.main&&o.to===t.main)&&t.main!==previous.main)throw new HttpError(403,'目标修改必须对应本批文件移动。');}if(targets.length!==projectBefore.targets.length)throw new HttpError(403,'不能在文件整理时增删编译目标。');projectAfter={...projectBefore,targets,updatedAt:new Date(Math.max(Date.now(),Date.parse(projectBefore.updatedAt)+1)).toISOString()};await image('project.json',Buffer.from(JSON.stringify(projectAfter,null,2)+'\n'),hash((await readBytes(root,'project.json'))!),true);}
  }
- const change:ChangeSet={id:'cs-'+randomUUID(),runId:run.id,description,operations,readSet,status:'proposed',images:[...images.values()],createdAt:new Date().toISOString(),...(projectBefore?{projectBefore,projectAfter}:{} )};await journal(root,change);return change;
+ const change:ChangeSet={id:'cs-'+randomUUID(),runId:run.id,description,operations,readSet,status:'proposed',images:[...images.values()],createdAt:new Date().toISOString(),...(verifiedTarget?{target:verifiedTarget}:{}),...(projectBefore?{projectBefore,projectAfter}:{} )};await journal(root,change);return change;
 }
 async function checkReadSet(root:string,readSet:Record<string,string|null>){for(const[file,expected]of Object.entries(readSet)){if(digest(await readBytes(root,file))!==expected)throw new HttpError(409,`读取基线已变化：${file}。请比较当前文件后重新生成修改。`,{path:file});}}
 async function setImage(root:string,image:ChangeImage,reverse=false){
@@ -91,6 +114,14 @@ async function setImage(root:string,image:ChangeImage,reverse=false){
 }
 export async function applyChangeSet(root:string,run:AgentRun,change:ChangeSet,options:{signal?:AbortSignal;decisionConfirmed?:boolean;beforeCommit?:()=>Promise<void>}={}):Promise<ChangeSet>{
  if(change.runId!==run.id)throw new HttpError(403,'变更集不属于此任务。');if(change.status==='applied')return change;if(change.status!=='proposed')throw new HttpError(409,'此变更集不能再次提交。');
+ if(change.target){
+  const snapshot:ProjectSnapshot={files:{},entries:[],capturedAt:change.createdAt};
+  for(const image of change.images)if(image.beforeBase64!==undefined&&image.beforeHash){
+   const bytes=Buffer.from(image.beforeBase64,'base64');
+   snapshot.files[image.path]={path:image.path,hash:image.beforeHash,size:bytes.length,binary:change.target.kind!=='selection',...(change.target.kind==='selection'?{text:new TextDecoder('utf-8',{fatal:true}).decode(bytes)}:{})};
+  }
+  validateEditTarget(change.target,change.operations,snapshot);
+ }
  if(change.operations.some(o=>o.kind==='delete')&&!options.decisionConfirmed)throw new HttpError(428,'删除文件需要审阅具体清单后确认。',{requiresConfirmation:true,changesetId:change.id});
  const release=await prepareEditorCommit(root,change.images.map(i=>i.path),options.signal);
  try{return await withProjectMutation(root,async()=>{
@@ -98,7 +129,7 @@ export async function applyChangeSet(root:string,run:AgentRun,change:ChangeSet,o
   await options.beforeCommit?.();await checkReadSet(root,change.readSet);
   change.checkpoint=(await checkpoint(root,`AI 修改前：${change.description}`)).hash;
   await checkReadSet(root,change.readSet);change.status='applying';await journal(root,change);
-  try{for(const image of change.images){release.assertActive();await setImage(root,image);}for(const image of change.images)if(digest(await readBytes(root,image.path))!==image.afterHash)throw new HttpError(409,`提交后文件已有外部变化：${image.path}`);change.status='applied';change.appliedAt=new Date().toISOString();await journal(root,change);return change;}
+  try{for(const image of change.images){release.assertActive();await setImage(root,image);}for(const image of change.images)if(digest(await readBytes(root,image.path))!==image.afterHash)throw new HttpError(409,`提交后文件已有外部变化：${image.path}`);await checkpoint(root,`AI 修改后：${change.description}`,[...new Set(change.images.map(image=>image.path))]);change.status='applied';change.appliedAt=new Date().toISOString();await journal(root,change);return change;}
   catch(error){let collision=false;for(const image of [...change.images].reverse()){const current=digest(await readBytes(root,image.path));if(current===image.afterHash&&current!==image.beforeHash){try{await setImage(root,image,true);}catch{collision=true;}}else if(current!==image.beforeHash)collision=true;}change.status=collision?'conflicted':'failed';change.error=String((error as Error).message);await journal(root,change);throw new HttpError(409,change.error+(collision?'；存在外部修改，已保留恢复记录。':''));}
  });}finally{release();}
 }

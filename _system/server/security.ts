@@ -2,7 +2,8 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 
 export class HttpError extends Error {
-  constructor(public statusCode: number, message: string, public extra?: Record<string, unknown>) { super(message); }
+  /** expose: 5xx 也把 message 原样返回给前端。只用于上游服务与配置这类对用户可操作、且不含内部细节的错误。 */
+  constructor(public statusCode: number, message: string, public extra?: Record<string, unknown>, public expose = false) { super(message); }
 }
 export function projectId(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(value)) throw new HttpError(400, '项目编号只能使用字母、数字、点、下划线和连字符。');

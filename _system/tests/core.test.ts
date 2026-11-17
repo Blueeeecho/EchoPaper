@@ -107,3 +107,61 @@ test('filesystem watcher streams external Codex edits over SSE',async()=>{
     assert.ok(event.includes('file.changed'));assert.ok(event.includes('Alpha'));
   }finally{controller.abort();await reader?.cancel().catch(()=>undefined);await cleanup();}
 });
+
+test('a paths-limited checkpoint only commits the named files and skips empty after-commits',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  try {
+    await create('Alpha');
+    const project=path.join(root,'papers/Alpha');
+    const main=(await app.inject('/api/projects/Alpha/file?path=manuscript/main.tex')).json();
+    await fs.writeFile(path.join(project,'notes/scratch.md'),'residual note\n');
+    await app.inject({method:'PUT',url:'/api/projects/Alpha/file',payload:{path:main.path,content:'AI body\n',expectedHash:main.hash}});
+    const rejected=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'bad',paths:'manuscript/main.tex'}});
+    assert.equal(rejected.statusCode,400);
+    const after=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'AI 修改后：应用 AI 建议 · manuscript/main.tex',paths:['manuscript/main.tex']}});
+    assert.equal(after.statusCode,200,after.body);
+    assert.equal(after.json().message,'AI 修改后：应用 AI 建议 · manuscript/main.tex');
+    assert.equal(after.json().committed,true);
+    const {execFile}=await import('node:child_process');
+    const {promisify}=await import('node:util');
+    const run=promisify(execFile);
+    const files=(await run('/usr/bin/git',['--no-pager','-C',project,'show','--pretty=format:','--name-only','HEAD'],{encoding:'utf8'})).stdout.split('\n').map(s=>s.trim()).filter(Boolean);
+    assert.deepEqual(files,['manuscript/main.tex']);
+    const empty=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'AI 修改后：空提交',paths:['manuscript/main.tex']}});
+    assert.equal(empty.statusCode,200,empty.body);
+    assert.equal(empty.json().message,'AI 修改后：应用 AI 建议 · manuscript/main.tex');
+    assert.equal(empty.json().committed,false);
+    assert.equal(await fs.readFile(path.join(project,'notes/scratch.md'),'utf8'),'residual note\n');
+    const dirty=(await run('/usr/bin/git',['--no-pager','-C',project,'status','--porcelain','--','notes/scratch.md'],{encoding:'utf8'})).stdout.trim();
+    assert.ok(dirty);
+  }finally{await cleanup();}
+});
+
+test('checkpoints report committed true or false, and omit-paths responses stay compatible',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  try {
+    await create('Alpha');
+    const project=path.join(root,'papers/Alpha');
+    await fs.writeFile(path.join(project,'notes/scratch.md'),'residual note\n');
+    const saved=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'手工保存残留'}});
+    assert.equal(saved.statusCode,200,saved.body);
+    const savedBody=saved.json();
+    assert.equal(typeof savedBody.hash,'string');
+    assert.ok(savedBody.hash);
+    assert.equal(typeof savedBody.date,'string');
+    assert.equal(savedBody.message,'手工保存残留');
+    assert.equal(savedBody.committed,true);
+    const noop=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'没有新改动'}});
+    assert.equal(noop.statusCode,200,noop.body);
+    const noopBody=noop.json();
+    assert.equal(typeof noopBody.hash,'string');
+    assert.equal(typeof noopBody.date,'string');
+    assert.equal(noopBody.hash,savedBody.hash);
+    assert.equal(noopBody.message,'手工保存残留');
+    assert.equal(noopBody.committed,false);
+    const emptyPaths=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'带路径但无变更',paths:['notes/scratch.md']}});
+    assert.equal(emptyPaths.statusCode,200,emptyPaths.body);
+    assert.equal(emptyPaths.json().committed,false);
+    assert.equal(emptyPaths.json().hash,savedBody.hash);
+  }finally{await cleanup();}
+});

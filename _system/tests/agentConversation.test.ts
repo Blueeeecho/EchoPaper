@@ -23,6 +23,16 @@ test('legacy context remains readable for estimates with snapshots, without tool
   assert.ok(history.every(item => Object.keys(item).sort().join(',') === 'content,role'));
 });
 
+test('a continued reply is delivered without a stopped banner while an explicit stop stays stopped', () => {
+  const continued = reconcileAgentConversation(conversation([]), [run({status:'cancelled',continuedBy:'run-2',error:'Aborted'})]);
+  const reply = continued.messages.find(message => message.role === 'assistant')!;
+  assert.equal(reply.status, 'complete');
+  assert.equal(reply.error, undefined);
+  assert.match(reply.content, /后续消息继续处理/);
+  const stopped = reconcileAgentConversation(conversation([]), [run({status:'cancelled',reply:'已停止'})]);
+  assert.equal(stopped.messages.find(message => message.role === 'assistant')?.status, 'stopped');
+});
+
 test('a valid continuity checkpoint replaces its exact historical prefix while retaining recent corrections', () => {
   const messages = [message('1', 'user', '创建 notes/proof.md'), message('2', 'assistant', '已创建'), message('3', 'user', '把刚才笔记改为第二版'), message('4', 'assistant', '已修改')];
   const checkpoint: ContextCheckpoint = { id: 'c', summary: '已创建并确认 notes/proof.md，不能修改正文。', throughMessageId: '2', sourceFingerprint: contextFingerprint(chatMessages(messages.slice(0, 2))), messageCount: 2, createdAt: '2026-10-23T00:00:00Z', model: 'chosen-model', beforeTokens: 100, afterTokens: 50, round: 1 };
@@ -210,4 +220,15 @@ test('an explicit final reply, including an empty one, is authoritative over str
     const result = reconcileAgentConversation(conversation([]), [complete], { 'run-1': { run: complete, events, tools: [] } });
     assert.equal(result.messages[1].content, reply);
   }
+});
+
+test('remote stale task placeholders and local authoritative reply reach a stable merge/reconcile fixed point',()=>{
+ const completed=run({reply:'已完成的最终回答。'});const local=reconcileAgentConversation(conversation([{...message('optimistic-user','user',completed.input),taskId:completed.id},{...message('optimistic-reply','assistant',completed.reply!),taskId:completed.id}]),[completed]);
+ const stale=conversation([{...message('agent-user-'+completed.id,'user',completed.input),taskId:completed.id},{...message('agent-assistant-'+completed.id,'assistant',''),taskId:completed.id,status:'streaming'}]);
+ let current={version:1 as const,selectedId:local.id,conversations:[local]};const remote={...current,conversations:[stale]};
+ for(let i=0;i<10;i++){const merged=mergeConversationSelection(remote,current);assert.equal(merged.conversations[0].messages.length,2);assert.equal(merged.conversations[0].messages[1].content,completed.reply);const next={...merged,conversations:merged.conversations.map(c=>reconcileAgentConversation(c,[completed]))};assert.deepEqual(next,current);current=next;}
+});
+
+test('two explicit terminal variants remain recoverable when the durable run supplies its current answer',()=>{
+ const before=conversation([{...message('u','user','创建笔记'),taskId:'run-1'},{...message('a','assistant','不同的明确终态内容'),taskId:'run-1',taskTerminal:true,taskVersion:1}]);const after=reconcileAgentConversation(before,[run({version:2})]);assert.ok(after.messages.some(m=>!m.taskId&&m.content==='不同的明确终态内容'));assert.ok(after.messages.some(m=>m.taskId==='run-1'&&m.content==='笔记已创建。'));assert.equal(reconcileAgentConversation(after,[run({version:2})]),after);
 });

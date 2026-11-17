@@ -1,0 +1,36 @@
+.markdown-editor{min-width:0;flex:1;cursor:text}
+.markdown-editor .cm-editor{background:transparent;color:var(--ep-text,#27313a);font-size:14px}
+.markdown-editor .cm-editor.cm-focused{outline:none}
+.markdown-editor .cm-scroller{font-family:inherit;line-height:1.85;overflow:auto}
+.markdown-editor .cm-content{padding:14px 0 28px;caret-color:var(--ep-accent,#2b5a8c)}
+.markdown-editor .cm-line{padding:0 18px;text-align:justify;text-align-last:start;text-justify:auto}
+.markdown-editor .cm-placeholder{color:var(--ep-text-3,#8b9098);font-family:inherit}
+.markdown-editor .markdown-live-heading{font-weight:650;line-height:1.5;padding-top:16px;padding-bottom:8px;color:var(--ep-text,#27313a);text-align:start;text-align-last:auto}
+.markdown-editor .markdown-live-heading span{text-decoration:none}
+.markdown-editor .markdown-live-heading.h1{font-size:22px}
+.markdown-editor .markdown-live-heading.h2{font-size:19px}
+.markdown-editor .markdown-live-heading.h3{font-size:16px}
+.markdown-editor .markdown-live-heading:is(.h4,.h5,.h6){font-size:14px}
+.markdown-live-strong{font-weight:650}
+.markdown-live-em{font-style:italic}
+.markdown-live-strike{text-decoration:line-through}
+.markdown-editor .markdown-live-widget a,.markdown-live-link{color:var(--ep-accent,#2b5a8c);text-decoration:underline;text-underline-offset:3px}
+.markdown-live-code{font-family:var(--ep-mono,monospace);font-size:.92em;background:var(--ep-surface-2,#f3f4f6);border-radius:3px}
+.markdown-editor .markdown-live-code-line{font-family:var(--ep-mono,monospace);font-size:13px;background:var(--ep-surface-2,#f3f4f6);text-align:start;text-align-last:auto}
+.markdown-editor .markdown-live-quote{border-left:3px solid var(--ep-border-strong,#c4d2e1);margin-left:18px;padding-left:12px;color:var(--ep-text-2,#576270)}
+.markdown-live-bullet{color:var(--ep-text-2,#576270)}
+.markdown-live-widget.block{padding:8px 18px;overflow-x:auto;cursor:text}
+.markdown-live-widget.inline,.markdown-live-widget.inline p{display:inline;margin:0;padding:0}
+.markdown-live-widget :is(h1,h2,h3,h4){line-height:1.5;margin:10px 0;font-weight:650}
+.markdown-live-widget h1{font-size:22px}.markdown-live-widget h2{font-size:19px}
+.markdown-live-widget :is(h3,h4){font-size:16px}
+.markdown-live-widget pre{white-space:pre-wrap;background:var(--ep-surface-2,#f3f4f6);padding:12px;border-radius:6px;font-size:13px;line-height:1.7}
+.markdown-live-widget table{width:auto;max-width:100%;min-width:240px;border-collapse:collapse;font-size:13px;line-height:1.65}
+.markdown-live-widget :is(th,td){border:1px solid var(--ep-border,#dce1e7);padding:7px 10px;text-align:left}
+.markdown-live-widget th{font-weight:600;background:var(--ep-surface-2,#f3f4f6)}
+.markdown-live-widget .katex-display{margin:8px 0;overflow-x:auto;overflow-y:hidden}
+.markdown-editor .cm-selectionBackground{background:#d8e6f7!important}
+.markdown-editor .cm-cursor{border-left-color:var(--ep-accent,#2b5a8c)}
+.research-text-editor:has(>.markdown-editor){border:1px solid var(--ep-border,#dce1e7);border-radius:6px;background:var(--ep-surface,#fff);overflow:hidden}
+.research-text-editor>.note-assistant{flex:none}
+.research-text-editor:has(>.markdown-editor)>.note-assistant{padding:2px 8px}

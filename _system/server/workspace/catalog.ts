@@ -2,12 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import type {ResearchTopic,SourceRoot,Resource,FileOperation} from '../../shared/workspace-types.ts';
+import type {ResearchNoteSection} from '../../shared/research-notes';
 import type {ConferenceTimeline} from '../../shared/conference-timeline.ts';
 import {atomicWrite} from '../storage.ts';
 import {assertNoSymlinks,HttpError} from '../security.ts';
 
 export interface IndexedResource extends Resource {text?:string}
 export interface JournalOperation extends FileOperation {
+  researchNote?:{topicId:string;section:ResearchNoteSection;noteId:string;name:string;legacyField?:'experimentPlan'|'resultSummary';legacyContent?:string};
   phase?:'prepared'|'copying'|'copied'|'applied'|'undoing';
   beforeHash?:string;
   afterHash?:string;

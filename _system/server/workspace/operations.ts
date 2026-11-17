@@ -8,7 +8,13 @@ import {HttpError} from '../security.ts';
 import {hash} from '../storage.ts';
 import {absent,contains,copyExclusive,fileError,removeVerified,resourcePath,rootFile,snapshot,trashName} from './paths.ts';
 
-export function publicOperation(item:JournalOperation):FileOperation {const{id,kind,status,source,destination,recovery,resourceId,createdAt,error,undoable}=item;return structuredClone({id,kind,status,source,destination,recovery,resourceId,createdAt,error,undoable});}
+export function publicOperation(item:JournalOperation):FileOperation {const{id,kind,status,source,destination,recovery,resourceId,createdAt,error,undoable}=item;return structuredClone({id,kind,status,source,destination,recovery,resourceId,createdAt,error,undoable,...(item.researchNote?{label:item.researchNote.name}:{})});}
+/** Explicitly trashed originals remain addressable by ID for recovery. */
+export function trashedResourceIds(state:CatalogState){
+ const ids=new Set<string>();
+ for(const operation of state.operations)if(operation.kind==='trash'&&operation.status==='applied')for(const item of operation.records||[])ids.add(item.id);
+ return ids;
+}
 export function createFileOperations(workspaceRoot:string,state:CatalogState,save:()=>Promise<void>){
   function root(id:string,write=true):SourceRoot {const item=state.roots.find(r=>r.id===id);if(!item)throw new HttpError(404,'来源目录不存在。');if(write&&item.permission!=='write')throw new HttpError(403,'此来源仅允许读取，请先明确授予文件管理权限。');return item;}
   function resource(id:unknown){const item=state.resources.find(r=>r.id===id);if(!item)throw new HttpError(404,'资源不存在。');return item;}
@@ -41,10 +47,11 @@ export function createFileOperations(workspaceRoot:string,state:CatalogState,sav
     if((await snapshot(source)).hash!==before.hash)throw new HttpError(409,'复制期间原始内容发生变化，双方内容均已保留。');
     await onCopied();await removeVerified(source,before);
   }
-  async function apply(input:FileOperationInput):Promise<FileOperation>{
+  async function apply(input:FileOperationInput,context?:{id:string;researchNote:NonNullable<JournalOperation['researchNote']>}):Promise<FileOperation>{
     if(!input||!['mkdir','create-file','move','trash'].includes(input.kind)||typeof input.rootId!=='string')throw new HttpError(400,'文件操作参数无效。');
     const sourceRoot=root(input.rootId);let item:IndexedResource|undefined,source:string|undefined,destination:string,destinationRoot=sourceRoot,relative:string,records:IndexedResource[];
-    const id=randomUUID(),createdAt=new Date().toISOString();let beforeHash:string;
+    const id=context?.id??randomUUID();if(state.operations.some(operation=>operation.id===id))throw new HttpError(409,'该文件操作编号已使用，请核对已有操作。');
+    const createdAt=new Date().toISOString();let beforeHash:string;
     if(creates(input)){
       if(input.kind==='create-file'){
         if(input.expectedHash!==null)throw new HttpError(400,'新建文件必须明确使用 expectedHash:null，不覆盖已有内容。');
@@ -64,7 +71,7 @@ export function createFileOperations(workspaceRoot:string,state:CatalogState,sav
         const target=await trashTarget(sourceRoot,id);relative=target.relative;destination=target.filename;
       }
     }
-    const operation:JournalOperation={id,kind:input.kind,status:'interrupted',source:creates(input)?undefined:{rootId:sourceRoot.id,path:item!.path},destination:{rootId:destinationRoot.id,path:relative},resourceId:item!.id,createdAt,undoable:false,phase:'prepared',beforeHash,afterHash:beforeHash,records};
+    const operation:JournalOperation={id,kind:input.kind,status:'interrupted',source:creates(input)?undefined:{rootId:sourceRoot.id,path:item!.path},destination:{rootId:destinationRoot.id,path:relative},resourceId:item!.id,createdAt,undoable:false,phase:'prepared',beforeHash,afterHash:beforeHash,records,...(context?{researchNote:context.researchNote}:{})};
     state.operations.push(operation);await save();
     try{
       operation.phase='copying';await save();
@@ -79,6 +86,19 @@ export function createFileOperations(workspaceRoot:string,state:CatalogState,sav
   }
   async function undo(id:string):Promise<FileOperation>{
     const operation=state.operations.find(o=>o.id===id);if(!operation)throw new HttpError(404,'文件操作不存在。');if(operation.status!=='applied'||!operation.undoable)throw new HttpError(409,'此操作目前不能安全撤销。');
+    const note=operation.researchNote;
+    if(note&&state.topics.find(item=>item.id===note.topicId)?.archived)throw new HttpError(409,'课题已归档，请恢复课题后再还原记录。');
+    if(note?.legacyField){
+      const topic=state.topics.find(item=>item.id===note.topicId),field=note.legacyField;
+      if(!topic)throw new HttpError(404,'原课题已不存在，恢复内容仍保存在回收记录中。');
+      if(topic.archived)throw new HttpError(409,'课题已归档，请恢复课题后再还原记录。');
+      if(!['experimentPlan','resultSummary'].includes(field)||typeof note.legacyContent!=='string'||hash(note.legacyContent)!==operation.beforeHash)throw new HttpError(409,'原有记录的恢复数据无法校验。');
+      if(hash(topic[field]??'')!==operation.afterHash)throw new HttpError(409,'原有记录已新增内容，请下载回收副本进行合并。');
+      const before=structuredClone(topic),previous=structuredClone(operation);
+      topic[field]=note.legacyContent;topic.revision++;topic.updatedAt=new Date().toISOString();operation.status='undone';operation.undoable=false;
+      try{await save();}catch(error){Object.assign(topic,before);if(!Object.hasOwn(before,field))delete topic[field];Object.assign(operation,previous);throw error;}
+      return publicOperation(operation);
+    }
     for(const[resourceId,revision]of Object.entries(operation.appliedRevisions||{}))if(resource(resourceId).revision!==revision)throw new HttpError(409,'资源标签、内容或路径在操作后已变化，请比较后处理。');
     const destinationRoot=root(operation.destination!.rootId),current=await rootFile(workspaceRoot,destinationRoot,operation.destination!.path,{internal:operation.kind==='trash'});
     if((await snapshot(current)).hash!==operation.afterHash)throw new HttpError(409,'操作后的内容已被修改，保留当前内容且不撤销。');
@@ -104,8 +124,9 @@ export function createFileOperations(workspaceRoot:string,state:CatalogState,sav
       return{content,name:operation.records?.[0]?.name||path.posix.basename(operation.destination!.path)};
     }finally{await handle.close();}
   }
-  async function recover(){
+  async function recover(id?:string){
     let changed=false;for(const operation of state.operations){
+      if(id&&operation.id!==id)continue;
       if(!operation.phase||operation.phase==='applied'||operation.status==='failed'||operation.status==='undone')continue;
       try{
         const undoing=operation.phase==='undoing',sourceLocation=undoing?operation.destination:operation.source,destinationLocation=undoing?(operation.kind==='create-file'?operation.recovery:operation.source):operation.destination;

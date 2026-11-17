@@ -1,0 +1,15 @@
+.lit-selection-summary {display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px;padding:12px 18px;border-block:1px solid var(--line);background:var(--surface-muted,var(--surface));font-size:12px;color:var(--muted)}
+.lit-selection-summary strong {color:var(--ink);font-weight:600}
+.lit-selection-summary>span {flex:1;min-width:220px;line-height:1.6}
+.lit-selection-summary button {border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:5px 9px;color:var(--ink);font:inherit;cursor:pointer}
+.lit-action-help {font-size:12px;line-height:1.65;color:var(--ink);margin:10px 0}
+.research-note-markdown {padding:18px 22px;color:var(--ink);font-size:14px;line-height:1.85;overflow-wrap:anywhere}
+.research-note-markdown>p,.research-note-markdown>ul,.research-note-markdown>ol {max-width:80ch}
+.research-note-markdown h1,.research-note-markdown h2,.research-note-markdown h3 {font-size:18px;line-height:1.5;margin:1.3em 0 .5em}
+.research-note-markdown table {display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:13px}
+.research-note-markdown th,.research-note-markdown td {padding:8px 12px;border:1px solid var(--line);text-align:left;min-width:110px}
+.research-note-markdown th {background:var(--surface-muted,var(--surface));font-weight:600}
+.research-note-markdown pre {padding:12px;overflow:auto;background:var(--surface-muted,var(--surface));font-size:12px;line-height:1.7}
+.research-note-markdown blockquote {margin-left:0;padding-left:16px;border-left:3px solid var(--accent);color:var(--muted)}
+.research-note-markdown summary {cursor:pointer;color:var(--accent);font-size:13px;padding:8px 0}
+.lit-selection-summary button:focus-visible,.research-note-markdown summary:focus-visible {outline:2px solid var(--accent);outline-offset:3px}

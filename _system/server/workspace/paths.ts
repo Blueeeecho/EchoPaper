@@ -9,7 +9,12 @@ export const trashName='.echopaper-trash';
 export const contains=(parent:string,child:string)=>child===parent||child.startsWith(parent+path.sep);
 export const overlaps=(a:string,b:string)=>contains(a,b)||contains(b,a);
 export function resourcePath(value:unknown){const relative=relativePath(value);if(relative.split('/').some(part=>part.startsWith('.')))throw new HttpError(403,'隐藏目录和回收区不通过文件管理器直接访问。');return relative;}
-export function protectedPath(workspaceRoot:string,candidate:string){return ['papers','_system','shared','workspace','build','submissions','backups','archive'].some(name=>overlaps(path.join(workspaceRoot,name),candidate));}
+export function protectedPath(workspaceRoot:string,candidate:string){
+  const noteParts=path.relative(path.join(workspaceRoot,'workspace','research-notes'),candidate).split(path.sep);
+  const managedNotes=noteParts.length>=2&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,100}$/.test(noteParts[0])&&['课题笔记','方案与实验','结果与证据'].includes(noteParts[1])&&noteParts.slice(2).every(part=>!!part&&!part.startsWith('.'));
+  if(managedNotes)return false;
+  return ['papers','_system','shared','workspace','build','submissions','backups','archive'].some(name=>overlaps(path.join(workspaceRoot,name),candidate));
+}
 export async function canonicalRoot(workspaceRoot:string,value:unknown){
   if(typeof value!=='string'||!path.isAbsolute(value)||value.includes('\0')||value.length>4096)throw new HttpError(400,'来源目录必须是有效的绝对路径。');
   const resolved=path.resolve(value);if(protectedPath(workspaceRoot,resolved))throw new HttpError(403,'来源目录与工作台管理目录重叠；请选择独立的原始资料目录。');

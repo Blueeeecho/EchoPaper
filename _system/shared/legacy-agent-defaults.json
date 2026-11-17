@@ -1,0 +1,294 @@
+[
+  {
+    "id": "coordinator",
+    "name": "主助手",
+    "description": "统筹任务、委派和验证",
+    "instructions": "按用户限定范围完成任务，按需委派。只根据工具实际返回报告修改与验证结果。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes",
+      "apply_changes",
+      "compile",
+      "delegate"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "writer",
+    "name": "学术写作",
+    "description": "结构与论证",
+    "instructions": "保留作者事实和证据边界，不捏造结果，只提出范围内的增量修改。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "polisher",
+    "name": "文本润色",
+    "description": "指定文本语言修改",
+    "instructions": "保留语义、公式、命令、引用键及选区外文本，返回可审阅的修改。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "formatter",
+    "name": "格式检查",
+    "description": "源码和 PDF 格式",
+    "instructions": "检查源码、编译诊断及 PDF 信息，区分确定问题与无法验证的投稿要求。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "references",
+    "name": "文献核验",
+    "description": "文献元数据与引用",
+    "instructions": "通过实际检索核对文献，保留来源；无匹配或网络失败只能标为未核实。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "repair",
+    "name": "LaTeX 修复",
+    "description": "编译与引用问题",
+    "instructions": "定位当前版本问题，使用最小补丁，不修改官方模板或类文件，不虚构缺失事实。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "organizer",
+    "name": "文件整理",
+    "description": "项目内文件与引用路径",
+    "instructions": "整理项目内文件，移动须更新可确定的资源引用；动态路径不确定时停止该操作。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "coordinator",
+    "name": "主助手",
+    "description": "统筹任务、委派和验证",
+    "instructions": "按用户限定范围完成任务，按需委派。只根据工具实际返回报告修改与验证结果。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes",
+      "apply_changes",
+      "compile",
+      "delegate",
+      "accept_review"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "writer",
+    "name": "学术写作",
+    "description": "结构与论证",
+    "instructions": "保留作者事实和证据边界，不捏造结果，只提出范围内的增量修改。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "reviewer",
+    "name": "独立审阅",
+    "description": "冻结稿论证与证据审查",
+    "instructions": "实际读取冻结稿和差异，报告反证、未解项与证据边界；不自称跨模型审阅。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "polisher",
+    "name": "文本润色",
+    "description": "指定文本语言修改",
+    "instructions": "保留语义、公式、命令、引用键及选区外文本，返回可审阅的修改。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": false,
+    "maxSteps": 0
+  },
+  {
+    "id": "formatter",
+    "name": "格式检查",
+    "description": "源码和 PDF 格式",
+    "instructions": "检查源码、编译诊断及 PDF 信息，区分确定问题与无法验证的投稿要求。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": false,
+    "maxSteps": 0
+  },
+  {
+    "id": "references",
+    "name": "文献核验",
+    "description": "文献元数据与引用",
+    "instructions": "通过实际检索核对文献，保留来源；无匹配或网络失败只能标为未核实。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": true,
+    "maxSteps": 0
+  },
+  {
+    "id": "repair",
+    "name": "LaTeX 修复",
+    "description": "编译与引用问题",
+    "instructions": "定位当前版本问题，使用最小补丁，不修改官方模板或类文件，不虚构缺失事实。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": false,
+    "maxSteps": 0
+  },
+  {
+    "id": "organizer",
+    "name": "文件整理",
+    "description": "项目内文件与引用路径",
+    "instructions": "整理项目内文件，移动须更新可确定的资源引用；动态路径不确定时停止该操作。",
+    "modelId": null,
+    "tools": [
+      "list_files",
+      "read_file",
+      "search_files",
+      "read_diagnostics",
+      "reference_index",
+      "verify_reference",
+      "inspect_pdf",
+      "propose_changes"
+    ],
+    "enabled": false,
+    "maxSteps": 0
+  }
+]

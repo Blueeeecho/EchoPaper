@@ -17,7 +17,7 @@ const assistantSentinel='ASSISTANT_PRIVATE_CONTEXT_MUST_NOT_ENTER_TRANSLATION';
 const selection={projectId:'Paper',text:'Evidence',target:'zh-CN' as const,source:'pdf' as const,sourceLanguage:'en' as const};
 interface ObservedRequest{url:string;contentType:string;body:any}
 
-async function fixture(t:TestContext){
+async function fixture(t:TestContext,failUpstream=false,includeZhipu=false){
  const workspace=await fs.mkdtemp(path.join(os.tmpdir(),'echopaper-translation-format-'));
  const upstreamCalls:ObservedRequest[]=[],requests:ObservedRequest[]=[];
  const upstream=Fastify({forceCloseConnections:true}),app=Fastify({forceCloseConnections:true});
@@ -34,15 +34,23 @@ async function fixture(t:TestContext){
   assert.equal(request.headers.authorization,'DeepL-Auth-Key '+fakeKey);
   return{translations:[{text:'证据'}]};
  });
+ upstream.post('/glm/chat/completions',async request=>{
+  upstreamCalls.push({url:request.url,contentType:String(request.headers['content-type']||''),body:request.body});
+  return {choices:[{message:{content:'证据'},finish_reason:'stop'}]};
+ });
  const upstreamOrigin=await upstream.listen({host:'127.0.0.1',port:0});
  const providers:ModelProvider[]=[
-  {id:'llm',label:'Local mock LLM',kind:'openai-compatible',baseUrl:upstreamOrigin+'/v1',plan:'test',auth:'none',enabled:true,includeUsage:false,passReasoning:false},
+  {id:'llm',label:'Local mock LLM',kind:'openai-compatible',baseUrl:upstreamOrigin+'/v1',plan:'test',auth:failUpstream?'bearer':'none',enabled:true,includeUsage:false,passReasoning:false},
   {id:'deepl',label:'Local mock DeepL',kind:'deepl',baseUrl:upstreamOrigin+'/v2',plan:'test',auth:'bearer',enabled:true,includeUsage:false,passReasoning:false},
  ];
  const models:ProviderModel[]=[
   {id:'llm-model',providerId:'llm',label:'Translator',model:'fixture-translator',contextWindow:32000,reasoning:'none',enabled:true},
   {id:'deepl-model',providerId:'deepl',label:'Dedicated translator',model:'text-translation',contextWindow:0,reasoning:'none',enabled:true},
  ];
+ if(includeZhipu){
+  providers.push({id:'zhipu',label:'Local mock Zhipu',kind:'zhipu-translate',baseUrl:upstreamOrigin+'/glm',plan:'test',auth:'bearer',enabled:true,includeUsage:false,passReasoning:false});
+  models.push({id:'zhipu-model',providerId:'zhipu',label:'GLM translator',model:'glm-4-flash',contextWindow:0,reasoning:'none',enabled:true});
+ }
  const data=normalizeRegistry({version:1,providers,models,translations:models.map(model=>({id:'source-'+model.providerId,label:model.label,modelId:model.id,enabled:true,color:'#556677'})),translationLayout:'stack'},'llm-model');
  data.assistant.roles=data.assistant.roles.map(role=>({...role,instructions:assistantSentinel}));
  await fs.mkdir(path.join(workspace,'_system/runtime'),{recursive:true});
@@ -57,10 +65,12 @@ async function fixture(t:TestContext){
   if(request.url==='/api/ai/translate')requests.push({url:request.url,contentType:String(request.headers['content-type']||''),body:request.body});
  });
  await registerAiRoutes(app,workspace,{
+  validateResource:async id=>{if(id!=='fixture-resource')throw Object.assign(new Error('资源不存在'),{statusCode:404});},
   getKey:async()=>fakeKey,
   credentials:{read:async()=>fakeKey,write:async()=>{throw Error('The test must never write credentials.');}},
   fetch:async(input,init)=>{
    assert.equal(new URL(String(input)).origin,upstreamOrigin,'an upstream request must stay on the local mock server');
+   if(failUpstream)return new Response(JSON.stringify({error:{message:'Unavailable '+fakeKey}}),{status:503,headers:{'Content-Type':'application/json'}});
    return nativeFetch(input,init);
   },
  });
@@ -141,6 +151,25 @@ test('a real 6001-character selection is rejected before any upstream request; 6
  assert.equal(f.upstreamCalls.length,1);
 });
 
+test('configured engines omit unsupported context while LLM and DeepL retain it over HTTP',async t=>{
+ const f=await fixture(t,false,true),originalFetch=globalThis.fetch;
+ globalThis.fetch=(input,init)=>nativeFetch(new URL(String(input),f.origin),init);
+ t.after(()=>{globalThis.fetch=originalFetch;});
+ const context='The evidence supports the logical conclusion.';
+ const adapters=configuredTranslationAdapters(f.config);
+ for(const adapter of adapters){
+  assert.equal(adapter.supportsContext,adapter.id!=='source-zhipu');
+  assert.equal(await adapter.translate({...selection,context},AbortSignal.timeout(3000),()=>{}),'证据');
+ }
+ assert.equal(f.requests.length,3);
+ for(const request of f.requests){
+  if(request.body.sourceId==='source-zhipu')assert.ok(!Object.hasOwn(request.body,'context'));
+  else assert.equal(request.body.context,context);
+ }
+ assert.equal(f.upstreamCalls.find(call=>call.url==='/v2/translate')!.body.context,context);
+ assert.ok(!JSON.stringify(f.upstreamCalls.find(call=>call.url==='/glm/chat/completions')!.body).includes(context));
+});
+
 test('the 6000-character boundary counts Unicode code points rather than UTF-16 units',async t=>{
  const f=await fixture(t),astral='🖋';
  assert.equal(astral.length,2,'the fixture must contain a supplementary Unicode character');
@@ -168,4 +197,31 @@ test('invalid language and selection source fields report their own errors witho
   const body=await response.json();assert.match(body.error,field);assert.doesNotMatch(body.error,/6000/);
  }
  assert.equal(f.upstreamCalls.length,0);
+});
+
+ test('资料翻译不需要论文项目，验证资料后仅发送选区',async t=>{
+ const f=await fixture(t);const response=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'fixture-resource',sourceId:'source-llm',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(response.status,200);assert.match(await response.text(),/done/);assert.equal(f.upstreamCalls.length,1);assert.ok(!JSON.stringify(f.upstreamCalls[0].body).includes(assistantSentinel));const missing=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'missing',sourceId:'source-llm',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(missing.status,404);assert.equal(f.upstreamCalls.length,1);
+});
+
+ test('translation failure returns correlated safe diagnostics without leaking credentials',async t=>{
+ const f=await fixture(t,true);const response=await f.post();
+ assert.equal(response.status,502);const body=await response.json();
+ assert.equal(body.code,'translation_upstream_error');
+ assert.equal(body.sourceId,'source-llm');assert.equal(typeof body.elapsedMs,'number');assert.ok(body.elapsedMs>=0);
+ assert.ok(body.requestId);assert.equal(response.headers.get('x-translation-request-id'),body.requestId);
+ assert.match(body.error,/502/);assert.ok(!JSON.stringify(body).includes(fakeKey));
+ assert.ok(!JSON.stringify(body).includes('Evidence'));
+});
+
+test('bounded reading context reaches LLM as separate data and oversized context never goes upstream',async t=>{
+ const f=await fixture(t);const context='Previous paragraph explains evidence. Next paragraph limits the claim.';
+ const response=await f.post({context});assert.equal(response.status,200);await response.text();
+ const messages=f.upstreamCalls[0].body.messages;assert.match(messages[0].content,/只翻译 text/);
+ const payload=JSON.parse(messages[1].content.slice(messages[1].content.indexOf('{')));assert.equal(payload.text,'Evidence');assert.equal(payload.context,context);
+ const invalid=await f.post({context:'x'.repeat(9001)});assert.equal(invalid.status,400);assert.equal(f.upstreamCalls.length,1);
+});
+
+test('DeepL receives reading context separately from translated text',async t=>{
+ const f=await fixture(t);const response=await f.post({sourceId:'source-deepl',context:'This is surrounding source text.'});
+ assert.equal(response.status,200);await response.text();assert.equal(f.upstreamCalls[0].body.context,'This is surrounding source text.');assert.deepEqual(f.upstreamCalls[0].body.text,['Evidence']);
 });

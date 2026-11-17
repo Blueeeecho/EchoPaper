@@ -10,7 +10,7 @@ export interface ModelMessage { role:'system'|'user'|'assistant'|'tool'; content
 export interface ModelTool { type:'function'; function:{name:string;description:string;parameters:Record<string,unknown>} }
 // Durable messages hold image references, never base64. Pixel token cost is estimated separately.
 export function estimateModelTokens(messages:ModelMessage[],tools:ModelTool[]=[]){return estimateTokens(JSON.stringify(messages)+JSON.stringify(tools))+messages.reduce((sum,message)=>sum+(message.images?.length||0)*4096,0);}
-export interface ModelAnswer { text:string; reasoning:string; toolCalls:NativeToolCall[]; finishReason:'stop'|'tool_calls'; model:string; usage?:{prompt_tokens:number;completion_tokens:number;total_tokens:number} }
+export interface ModelAnswer { text:string; reasoning:string; toolCalls:NativeToolCall[]; finishReason:'stop'|'tool_calls'; model:string; responseModel?:string; usage?:{prompt_tokens:number;completion_tokens:number;total_tokens:number} }
 export class AgentBudgetError extends Error {}
 export class AgentContextWindowError extends Error { readonly code='context_length_exceeded'; }
 export function isContextWindowError(error:unknown):boolean {
@@ -39,13 +39,13 @@ export async function withAgentModelSlot<T>(projectId:string,providerId:string,s
 }
 
 /** Parse native tool calls only after an explicit normal terminal packet. No textual JSON fallback. */
-export async function readAgentCompletion(response:Response,model:string,touch:()=>void,onText?:(text:string)=>void):Promise<ModelAnswer> {
+export async function readAgentCompletion(response:Response,model:string,touch:()=>void,onText?:(text:string)=>void,onDiagnostic?:(value:{text:string;finishReason:string})=>void):Promise<ModelAnswer> {
  if(!response.body)throw Error('模型服务没有返回数据流。');
  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',text='',reasoning='',finish='',terminal=false,bytes=0;
- let usage:ModelAnswer['usage'];const calls=new Map<number,{id:string;name:string;args:string;type:string}>();
+ let responseModel:string|undefined;let usage:ModelAnswer['usage'];const calls=new Map<number,{id:string;name:string;args:string;type:string}>();
  const packet=(line:string)=>{if(!line.startsWith('data:'))return;const raw=line.slice(5).trim();if(!raw)return;if(raw==='[DONE]'){terminal=true;return;}
   const value=JSON.parse(raw);if(value.error||value.base_resp?.status_code)throw providerError(value);
-  if(typeof value.model==='string')model=value.model;
+  if(typeof value.model==='string'){model=value.model;responseModel=value.model;}
   if(value.usage&&['prompt_tokens','completion_tokens','total_tokens'].every(k=>Number.isSafeInteger(value.usage[k])&&value.usage[k]>=0))usage=value.usage;
   const choice=value.choices?.[0];if(!choice)return;const delta=choice.delta||{};
   if(choice.finish_reason){if(finish&&finish!==choice.finish_reason)throw Error('模型返回相互矛盾的结束状态。');finish=choice.finish_reason;}
@@ -66,12 +66,12 @@ export async function readAgentCompletion(response:Response,model:string,touch:(
   if(finish==='stop'&&calls.size)throw Error('工具调用缺少明确的 tool_calls 结束状态。');
   const ids=new Set<string>();const toolCalls:NativeToolCall[]=[...calls.entries()].sort((a,b)=>a[0]-b[0]).map(([,call])=>{if(!/^[A-Za-z0-9_.:-]{1,160}$/.test(call.id)||ids.has(call.id)||!/^[_a-z][_a-z0-9]{0,80}$/i.test(call.name))throw Error('工具调用编号或名称无效。');ids.add(call.id);let args:unknown;try{args=JSON.parse(call.args);}catch{throw Error('工具参数不完整或不是有效 JSON，未执行工具。');}if(!args||typeof args!=='object'||Array.isArray(args))throw Error('工具参数必须是对象。');return{id:call.id,type:'function',function:{name:call.name,arguments:call.args}};});
   if(!text.trim()&&!toolCalls.length)throw Error('模型没有返回可见结果或工具调用。');
-  return{text,reasoning,toolCalls,finishReason:finish,model,...(usage?{usage}:{})};
- }finally{await reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}}
+  return{text,reasoning,toolCalls,finishReason:finish,model,responseModel,...(usage?{usage}:{})};
+ }finally{onDiagnostic?.({text,finishReason:finish});await reader.cancel().catch(()=>{});try{reader.releaseLock();}catch{}}
 }
 
 export function createAgentModelGateway(registry:ProviderRegistry,options:AiOptions={},imageData?:(projectId:string,id:string)=>Promise<{mimeType:string;base64:string}>) {
- return async(input:{projectId:string;provider:ModelProvider;model:ProviderModel;messages:ModelMessage[];tools:ModelTool[];effort?:string;signal:AbortSignal;onText?:(text:string)=>void;onReserve:(estimatedInput:number)=>void;onSettled:(tokens:number,estimated:boolean)=>void}):Promise<ModelAnswer>=>{
+ return async(input:{projectId:string;provider:ModelProvider;model:ProviderModel;messages:ModelMessage[];tools:ModelTool[];effort?:string;signal:AbortSignal;onText?:(text:string)=>void;onDiagnostic?:(value:{text:string;finishReason:string})=>void;onReserve:(estimatedInput:number)=>void;onSettled:(tokens:number,estimated:boolean)=>void}):Promise<ModelAnswer>=>{
   const activeMessages=input.messages.map(message=>({...message,...(!input.provider.passReasoning?{reasoning_content:undefined}:{})}));
   const estimatedInput=estimateModelTokens(activeMessages,input.tools);
   // A per-request context boundary, independent of cumulative usage. Leave 20%
@@ -86,9 +86,9 @@ export function createAgentModelGateway(registry:ProviderRegistry,options:AiOpti
   try{input.onReserve(estimatedInput);reserved=true;touch();key=await registry.getKey(input.provider);checkAbort(input.signal);checkAbort(controller.signal);if(input.provider.auth==='bearer'&&!key)throw Error('所选模型服务尚未配置此地址的凭据。');
    const response=await(options.fetch??fetch)(input.provider.baseUrl+'/chat/completions',{method:'POST',redirect:'error',signal:controller.signal,headers:{'Content-Type':'application/json',...(key?{Authorization:`Bearer ${key}`}:{})},body:JSON.stringify({model:input.model.model,messages:wireMessages,...(input.tools.length?{tools:input.tools,tool_choice:'auto'}:{}),stream:true,...(input.provider.includeUsage?{stream_options:{include_usage:true}}:{}),...(input.provider.kind==='minimax'?{reasoning_split:true}:{}),...(modelEfforts(input.model).length?{reasoning_effort:modelEfforts(input.model).includes(input.effort||'medium')?input.effort||'medium':'medium'}:{})})});
    if(!response.ok||response.headers.get('content-type')?.includes('application/json')){const value=await response.json().catch(()=>({})),error=providerError(value,`模型服务请求失败 (${response.status})：`);if(activeMessages.some(message=>message.images?.length)&&[400,415,422].includes(response.status)&&!isContextWindowError(error))throw Error('当前模型或服务未接受图片，请切换支持视觉的模型重试。'+error.message);throw error;}
-   const answer=await readAgentCompletion(response,input.model.model,touch,chunk=>{partial+=chunk;input.onText?.(chunk);});
+   const answer=await readAgentCompletion(response,input.model.model,touch,chunk=>{partial+=chunk;input.onText?.(chunk);},value=>input.onDiagnostic?.({...value,text:redact(value.text,key)}));
    input.onSettled(answer.usage?.total_tokens??estimatedInput+estimateTokens(answer.text+answer.reasoning+JSON.stringify(answer.toolCalls)),!answer.usage);settled=true;checkAbort(input.signal);
-   const offered=new Set(input.tools.map(tool=>tool.function.name));if(answer.toolCalls.some(call=>!offered.has(call.function.name)))throw Error('模型请求了本轮未提供的工具；未执行任何调用。');return answer;
+   const offered=new Set(input.tools.map(tool=>tool.function.name)),unavailable=answer.toolCalls.filter(call=>!offered.has(call.function.name)).map(call=>call.function.name);if(unavailable.length)throw Error('模型请求了本轮未提供的工具（'+[...new Set(unavailable)].join('、')+'）；未执行任何调用。');return answer;
   }catch(error){if(error instanceof AgentBudgetError)throw error;if(input.signal.aborted)throw abortError();if(isContextWindowError(error))throw new AgentContextWindowError(redact(String((error as Error).message),key));throw Error(redact(controller.signal.aborted?String(controller.signal.reason?.message??'模型请求超时。'):String((error as Error).message),key));}
   finally{if(reserved&&!settled)input.onSettled(estimatedInput+estimateTokens(partial),true);clearTimeout(timer);controller.abort();input.signal.removeEventListener('abort',abort);}
   })();}finally{release();}

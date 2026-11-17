@@ -147,3 +147,59 @@ test('dirty close protection outlives the clean-session lease',async t=>{
  const next=f.begin();assert.equal(next.barrier,undefined,'a clean inactive editor may expire normally');
  (await soon(next.waiting))();
 });
+
+test('switching a clean editor to another file releases the old file handshake',async t=>{
+ const f=await fixture(t);await f.post('moving-editor');
+ const {waiting,barrier}=f.begin();assert.ok(barrier);
+ await f.post('moving-editor',false,1,'manuscript/other.tex');
+ const release=await soon(waiting);release.assertActive();release();
+});
+
+test('registration exposes a pending barrier so a missed event can be recovered over HTTP',async t=>{
+ const f=await fixture(t);await f.post('live-editor',true,1);
+ const {waiting,barrier}=f.begin();assert.ok(barrier);
+ const response=await f.post('live-editor',true,1);
+ assert.equal(response.json().barriers[0].id,barrier.id);
+ await f.post('live-editor',false,2);await f.ack('live-editor',barrier,true,2);
+ const release=await soon(waiting);release.assertActive();release();
+});
+
+test('a refused save identifies the affected file instead of reporting an acknowledgement timeout',async t=>{
+ const f=await fixture(t);await f.post('conflicted-editor',true,1);
+ const {waiting,barrier}=f.begin();assert.ok(barrier);
+ await f.ack('conflicted-editor',barrier,false,1);
+ await assert.rejects(soon(waiting),(error:any)=>error.statusCode===409&&error.extra?.editorCommit?.reason==='unsaved'&&error.message.includes(file));
+});
+
+test('timeout preserves session diagnostics and accepts only known progress stages',async t=>{
+ const f=await fixture(t);await f.post('offline-window',true,7);
+ const {waiting,barrier}=f.begin();assert.ok(barrier);
+ const progress=(stage:string)=>f.app.inject({method:'POST',url:'/api/projects/Test/editor-sessions/offline-window/progress',payload:{barrierId:barrier.id,stage}});
+ assert.equal((await progress('正文内容')).statusCode,409);
+ assert.equal((await progress('同步失败')).statusCode,200);
+ assert.equal((await f.app.inject({method:'POST',url:'/api/projects/Test/editor-sessions/unknown-window/progress',payload:{barrierId:barrier.id,stage:'保存'}})).statusCode,409);
+ await f.post('unrelated-window',false,1,'other.tex');
+ assert.equal((await f.app.inject({method:'POST',url:'/api/projects/Test/editor-sessions/unrelated-window/progress',payload:{barrierId:barrier.id,stage:'保存'}})).statusCode,409);
+
+ await assert.rejects(waiting,(error:any)=>{
+  const detail=error.extra?.editorCommit;
+  assert.equal(error.statusCode,409);assert.equal(detail.reason,'unconfirmed');
+  assert.equal(detail.barrierId,barrier.id);
+  assert.deepEqual(detail.unconfirmed,[file]);
+  assert.equal(detail.sessions[0].id,'offline-window');
+  assert.equal(detail.sessions[0].dirty,true);
+  assert.equal(detail.sessions[0].progress.stage,'同步失败');
+  assert.equal(typeof detail.sessions[0].lastSeen,'number');
+  return true;
+ });
+ assert.equal((await progress('确认')).statusCode,409);
+ const next=f.begin();assert.ok(next.barrier);
+ await f.ack('offline-window',next.barrier,true,8);
+ const release=await soon(next.waiting);release.assertActive();release();
+});
+
+test('a silent window whose last report was clean does not block the commit',async t=>{
+ const f=await fixture(t);await f.post('background-window',false,3);
+ const {waiting,barrier}=f.begin();assert.ok(barrier);
+ const release=await waiting;release.assertActive();release();
+});

@@ -50,6 +50,8 @@ export function validateChatData(value: unknown): JsonObject {
       const m = object(rawMessage), messageId = string(m.id,100,'消息编号');
       if (!messageId || messageIds.has(messageId) || !['user','assistant'].includes(m.role) || !['complete','streaming','stopped','error'].includes(m.status)) throw new HttpError(400,'消息格式无效。'); messageIds.add(messageId);
       const result: JsonObject = {id:messageId, role:m.role, content:string(m.content,16_000_000,'消息'), createdAt:date(m.createdAt), status:m.status};
+      if(m.taskVersion!==undefined){if(!Number.isSafeInteger(m.taskVersion)||m.taskVersion<0)throw new HttpError(400,'任务消息版本无效。');result.taskVersion=m.taskVersion;}
+      if(m.taskTerminal!==undefined){if(typeof m.taskTerminal!=='boolean')throw new HttpError(400,'任务消息终态无效。');result.taskTerminal=m.taskTerminal;}
       for (const [key,max] of [['reasoning_content',16_000_000],['model',100],['providerLabel',100],['finishReason',100],['error',10000],['contextPath',1000],['taskId',100]] as const) if (m[key] !== undefined) result[key] = string(m[key],max,'消息字段');
       if (m.attachment !== undefined) { const a=object(m.attachment); result.attachment={path:string(a.path,1000,'附件路径'),content:string(a.content,4_000_000,'附件内容')}; }
       if (m.attachments !== undefined) result.attachments=attachments(m.attachments);
@@ -84,10 +86,12 @@ export async function registerChatRoutes(app: FastifyInstance,workspaceRoot:stri
       if(current.hash!==expected)throw new HttpError(409,'对话已被其他窗口修改，已保留当前窗口内容。',{current});
       const data=validateChatData(ensureActiveChat(await update(current.data) as unknown as PersistedChat)),content=JSON.stringify(data)+'\n';
       if(Buffer.byteLength(content)>limit)throw new HttpError(413,'对话文件超过 128 MB。');
+      // After normalisation, identical bytes must not rewrite the file or bump mtime.
+      if(current.hash===hash(content))return{data,hash:current.hash,wrote:false as const};
       const filename=await assertNoSymlinks(root,relative,true);await fs.mkdir(path.dirname(filename),{recursive:true});await assertNoSymlinks(root,relative,true);
       maintenance.assertAvailable();if(current.data)await preserveRecovery(root,relative,JSON.stringify(current.data,null,2)+'\n');
       const latest=await readChats(root);if(latest.hash!==expected)throw new HttpError(409,'对话在保存期间变化，请比较后再保存。',{current:latest});
-      maintenance.assertAvailable();await atomicWrite(filename,content);return{data,hash:hash(content)};
+      maintenance.assertAvailable();await atomicWrite(filename,content);return{data,hash:hash(content),wrote:true as const};
     }));
   }
   app.get<{Params:{id:string}}>('/api/projects/:id/chats', async request => readChats(await registeredRoot(workspaceRoot,request.params.id)));
@@ -106,7 +110,7 @@ export async function registerChatRoutes(app: FastifyInstance,workspaceRoot:stri
       });
       for(const conversation of prior.values())if(!seen.has((conversation as JsonObject).id))conversations.push(conversation);
       return{...data,conversations};
-    });emit({type:'file.changed',projectId:request.params.id,path:relative});return result;
+    });if(result.wrote)emit({type:'file.changed',projectId:request.params.id,path:relative});const {wrote:_wrote,...payload}=result;return payload;
   });
   app.patch<{Params:{id:string;conversationId:string};Body:{action:unknown;expectedHash:unknown}}>('/api/projects/:id/chats/:conversationId',async request=>{
     maintenance.assertAvailable();const root=await registeredRoot(workspaceRoot,request.params.id),body=object(request.body),expected=expectedHash(body.expectedHash);
@@ -120,6 +124,6 @@ export async function registerChatRoutes(app: FastifyInstance,workspaceRoot:stri
       const revision=(conversation.lifecycle?.revision||0)+1;if(!Number.isSafeInteger(revision))throw new HttpError(409,'对话生命周期版本已超出范围。');
       const updatedAt=new Date(Math.max(Date.now(),conversation.lifecycle?Date.parse(conversation.lifecycle.updatedAt)+1:0)).toISOString();
       return{...current,conversations:current!.conversations.map((item:JsonObject)=>item.id===conversation.id?{...item,updatedAt,lifecycle:{state:next,revision,updatedAt}}:item)};
-    });emit({type:'file.changed',projectId:request.params.id,path:relative});return result;
+    });if(result.wrote)emit({type:'file.changed',projectId:request.params.id,path:relative});const {wrote:_wrote,...payload}=result;return payload;
   });
 }

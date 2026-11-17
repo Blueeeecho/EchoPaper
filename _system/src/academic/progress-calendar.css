@@ -1,0 +1,93 @@
+.progress-calendar{display:grid;grid-template-columns:minmax(310px,.85fr) minmax(0,1.3fr);gap:20px;align-items:start;margin:18px 0 24px}
+.work-calendar,.daily-report{min-width:0;border:1px solid var(--line,#dce1da);border-radius:8px;background:var(--surface,#fffefa);overflow:hidden}
+.work-calendar>header,.daily-report>header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.work-calendar h2,.daily-report h2{font-size:19px;font-weight:600;margin:0}
+.work-calendar header small,.daily-report>header span{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+.work-calendar header>div:last-child{display:flex;align-items:center;gap:10px}
+.work-calendar header button{display:flex;align-items:center;padding:4px;color:var(--accent);font:inherit;font-size:13px}
+.work-calendar-week,.work-calendar-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.work-calendar-week{padding-top:9px;text-align:center;font-size:12px;color:var(--muted)}
+.work-calendar-week>span{padding:6px}
+.work-calendar-days{padding:4px 8px 10px;gap:3px}
+.work-calendar-days>button{display:flex;align-items:flex-start;flex-direction:column;min-height:64px;padding:6px;border:1px solid transparent;border-radius:5px;text-align:left;color:var(--ink);font:inherit;background:transparent;cursor:pointer}
+.work-calendar-days>button:hover{background:#f0f4eb}
+.work-calendar-days>button.outside{color:#8c948c}
+.work-calendar-days>button[aria-pressed=true]{background:#e4eddf;border-color:var(--accent)}
+.work-calendar-days>button>span{font-size:16px;line-height:1.3}
+.work-calendar-days>button.today>span{font-weight:700;color:var(--accent);text-decoration:underline;text-underline-offset:4px}
+.work-calendar-days small{font-size:10px;color:var(--accent);white-space:nowrap;line-height:1.5;margin-top:3px}
+.work-calendar-days small.calendar-tasks{color:#886326;margin-top:0}
+.work-calendar>footer{border-top:1px solid var(--line);padding:10px 14px;font-size:11px;color:var(--muted);line-height:1.6}
+.daily-report>header .academic-secondary{white-space:nowrap;font-size:12px;padding:7px 10px}
+.daily-report-section{padding:16px 18px;border-bottom:1px solid var(--line)}
+.daily-report-section:last-child{border-bottom:0}
+.daily-report h3{font-size:16px;font-weight:600;margin:0 0 12px}
+.daily-report h3>span{font-size:12px;font-weight:400;color:var(--muted);margin-left:8px}
+.daily-report table{width:100%;border-collapse:collapse;table-layout:fixed}
+.daily-report th,.daily-report td{font-size:13px;line-height:1.75;text-align:left;vertical-align:top;padding:8px 10px;border:1px solid var(--line);overflow-wrap:anywhere}
+.daily-report th:first-child{width:24%;font-weight:500}
+.daily-report thead{background:#f2f4ee;color:var(--muted)}
+.daily-report td>p{margin:0}
+.daily-report details>summary{font-size:12px;color:var(--accent);cursor:pointer;margin-top:7px}
+.daily-report details .ai-markdown{font-size:13px}
+.daily-empty{font-size:13px;color:var(--muted);line-height:1.8;margin:0}
+.daily-task-list{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.daily-task-list label{display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.7;cursor:pointer;overflow-wrap:anywhere}
+.daily-task-list>li>input[type=checkbox]{flex-shrink:0;width:16px;height:16px;accent-color:var(--accent);margin-top:4px}
+.daily-task-list small{display:block;font-size:11px;color:var(--muted)}
+.daily-task-list .done{text-decoration:line-through;color:var(--muted)}
+.daily-task-list .done small{text-decoration:none}
+.research-history-records>summary{font-size:14px;color:var(--accent);cursor:pointer;margin:12px 0}
+@media(max-width:1050px){.progress-calendar{grid-template-columns:minmax(0,1fr)}.work-calendar{max-width:620px}.work-calendar-days>button{min-height:60px}}
+@media(max-width:560px){.work-calendar>header,.daily-report>header{padding:12px}.daily-report-section{padding:12px}.work-calendar-days>button{padding:4px;min-height:56px}.daily-report th:first-child{width:28%}}
+/* Editing lives in the selected date, with no record button or modal. */
+.daily-topic-choice{display:flex;align-items:center;gap:10px;padding:14px 18px 0;color:var(--muted);font-size:12px}
+.daily-topic-choice select{flex:1;min-width:0;padding:7px 9px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);font:inherit}
+.day-progress-fields{display:grid;gap:10px}
+.day-field{min-width:0;width:100%;margin:0}
+.day-field-topic{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+.day-field textarea{display:block;width:100%;box-sizing:border-box;padding:6px 9px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);font:inherit;font-size:14px;line-height:1.6;resize:none;min-height:36px;max-height:224px;overflow-y:hidden}
+.day-field textarea:focus{outline:2px solid #b6bec8;outline-offset:1px;border-color:#858c96}
+.day-field textarea::placeholder{color:var(--muted)}
+.day-field footer{display:flex;justify-content:flex-end;gap:8px;padding-top:8px}
+.day-field footer button{font-size:12px;padding:6px 10px}
+.daily-task-list.day-inline-tasks{gap:10px;margin-bottom:10px}
+.daily-task-list.day-inline-tasks>li{display:flex;align-items:flex-start;gap:10px}
+.daily-task-list.day-inline-tasks>li>input{width:16px;height:16px;margin:10px 0 0;flex-shrink:0;accent-color:var(--accent)}
+.daily-task-list.day-inline-tasks .task-complete textarea{color:var(--muted);text-decoration:line-through}
+
+.daily-task-list.day-inline-tasks>li:has(.day-field-topic)>input{margin-top:29px}
+
+/* Calendar redesign: dots instead of text, readable day header, inline add at the end of lists. */
+#root .academic-app .progress-calendar{grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:20px}
+#root .academic-app .work-calendar,#root .academic-app .daily-report{background:var(--ep-surface);border:1px solid var(--ep-border);border-radius:var(--ep-radius-lg);box-shadow:var(--ep-shadow-sm)}
+#root .academic-app .work-calendar>header{padding:14px 16px}
+#root .academic-app .work-calendar h2{font-size:16px}
+#root .academic-app .work-calendar header small{display:flex;align-items:center;gap:4px;color:var(--ep-text-3)}
+#root .academic-app .work-calendar-days>button{min-height:46px;align-items:center;justify-content:flex-start;gap:4px;padding:6px 2px;border-radius:8px}
+#root .academic-app .work-calendar-days>button>span{font-size:14px}
+#root .academic-app .work-calendar-days>button:hover{background:var(--ep-surface-2)}
+#root .academic-app .work-calendar-days>button[aria-pressed=true]{background:var(--ep-accent);border-color:var(--ep-accent);color:#fff}
+#root .academic-app .work-calendar-days>button[aria-pressed=true] .mark-progress,#root .academic-app .work-calendar-days>button[aria-pressed=true] .mark-task{box-shadow:0 0 0 1.5px #fff}
+#root .academic-app .work-calendar-days>button.today>span{text-decoration:none;font-weight:700;color:var(--ep-accent)}
+#root .academic-app .work-calendar-days>button.today[aria-pressed=true]>span{color:#fff}
+#root .academic-app .calendar-marks{display:flex;gap:3px;font-style:normal}
+#root .academic-app :is(.mark-progress,.mark-task){display:inline-grid;place-items:center;min-width:7px;height:7px;border-radius:999px;font-size:9px;font-weight:600;color:#fff;line-height:1}
+#root .academic-app .mark-progress{background:var(--ep-accent)}
+#root .academic-app .mark-task{background:#d08a1e}
+#root .academic-app .calendar-marks b:not(:empty){height:14px;min-width:14px;padding:0 3px}
+#root .academic-app .daily-report>header{padding:12px 14px}
+#root .academic-app .daily-title{display:flex;align-items:center;gap:6px;margin-right:auto}
+#root .academic-app .daily-title h2{font-size:17px;font-weight:650;display:flex;align-items:baseline;gap:8px;margin:0}
+#root .academic-app .daily-title h2 small{font-size:12.5px;font-weight:500;color:var(--ep-text-3)}
+#root .academic-app .daily-title button{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--ep-border);border-radius:7px;background:var(--ep-surface);color:var(--ep-text-2);cursor:pointer}
+#root .academic-app .daily-title button:hover{background:var(--ep-surface-2)}
+#root .academic-app .daily-report h3{font-size:13.5px;font-weight:620;display:flex;align-items:baseline;gap:8px}
+#root .academic-app .daily-report h3>span{font-size:12px;color:var(--ep-text-3);margin:0}
+#root .academic-app .daily-report-section{padding:14px 16px}
+#root .academic-app .day-field textarea{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;padding:7px 10px;font:inherit;font-size:14px;line-height:1.7;resize:none;color:var(--ep-text)}
+#root .academic-app .day-field textarea:hover{background:var(--ep-surface-2)}
+#root .academic-app .day-field textarea:focus{background:var(--ep-surface);border-color:var(--ep-accent);box-shadow:var(--ep-ring);outline:none}
+#root .academic-app .day-field textarea:placeholder-shown{border:1px dashed var(--ep-border-strong);background:transparent;color:var(--ep-text-3)}
+#root .academic-app .day-progress-fields{display:flex;flex-direction:column;gap:6px}
+#root .academic-app .day-field footer{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}

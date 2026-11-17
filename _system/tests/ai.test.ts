@@ -1,3 +1,4 @@
+import {ASSISTANT_OUTPUT_POLICY} from '../shared/research-writing-prompts.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -152,6 +153,8 @@ test('multiturn history preserves assistant reasoning and includes only explicit
     assert.equal(plain.statusCode, 200);
     const sent = f.captured[0].body.messages;
     assert.equal(sent[0].role, 'system');
+    assert.ok(sent[0].content.endsWith(ASSISTANT_OUTPUT_POLICY));
+    assert.match(sent[0].content, /当前用户只问一个判断、概念或原因/);
     assert.equal(sent[2].reasoning_content, '上一轮思考原文');
     assert.equal(sent[3].content, '第二轮问题');
     assert.equal(sent[3].reasoning_content, undefined);
@@ -406,3 +409,71 @@ test('failed compaction preserves old state and never sends a false success or f
 test('idle timeout resets on ongoing output rather than cutting off a long running answer',async()=>{let timer:ReturnType<typeof setInterval>|undefined;const f=await fixture({timeoutMs:80,handler:r=>{const stream=controlledStream(r.signal);let count=0;timer=setInterval(()=>{stream.send({choices:[{delta:{content:'持续输出'}}]});if(++count===8){clearInterval(timer);stream.finish();}},20);return stream.response;}});try{const r=await f.app.inject({method:'POST',url:'/api/ai/chat',payload:f.payload()});assert.ok(events(r).some(e=>e.type==='done'),r.body);assert.ok(!events(r).some(e=>e.type==='error'));}finally{clearInterval(timer);await f.cleanup();}});
 test('cancellation during compaction aborts summary work and releases the project slot without a false checkpoint',async()=>{let signal:AbortSignal|undefined;const f=await fixture({handler:r=>{signal=r.signal;return controlledStream(r.signal).response;}}),controller=new AbortController();let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;try{const base=await f.app.listen({host:'127.0.0.1',port:0});const response=await fetch(base+'/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f.payload({forceCompact:true,messages:[{id:'u',role:'user',content:'材料'.repeat(300)},{id:'a',role:'assistant',content:'建议'.repeat(300)},{id:'v',role:'user',content:'继续'}]})),signal:controller.signal});reader=response.body!.getReader();const first=new TextDecoder().decode((await reader.read()).value);assert.match(first,/compacting/);assert.ok(!first.includes('compacted'));await until(()=>!!signal);controller.abort();await until(()=>signal?.aborted===true);f.setHandler(()=>answer('取消后可继续'));await until(async()=>{const r=await f.app.inject({method:'POST',url:'/api/ai/chat',payload:f.payload()});return r.statusCode===200;});}finally{controller.abort();await reader?.cancel().catch(()=>{});await f.cleanup();}});
 test('actual usage baseline triggers compaction, while a changed prefix invalidates the baseline',async()=>{const f=await fixture({handler:r=>answer(r.body.messages[0].content.includes('接续摘要')?'保留论文的证据边界。':'正常回答')});try{const messages=[{id:'u',role:'user' as const,content:'论文材料'.repeat(300)},{id:'a',role:'assistant' as const,content:'已保留要求'.repeat(300)},{id:'v',role:'user' as const,content:'继续'}],contextUsage={throughMessageId:'a',fingerprint:contextFingerprint(messages.slice(0,2)),model:FLASH,checkpointId:'',tokens:850000};const first=await f.app.inject({method:'POST',url:'/api/ai/chat',payload:f.payload({messages,contextUsage})});assert.ok(events(first).some(e=>e.type==='compacted'),first.body);const calls=f.captured.length;messages[0].content+='改变';const second=await f.app.inject({method:'POST',url:'/api/ai/chat',payload:f.payload({messages,contextUsage})});assert.ok(events(second).some(e=>e.type==='done'));assert.ok(!events(second).some(e=>e.type==='compacted'));assert.equal(f.captured.length,calls+1);}finally{await f.cleanup();}});
+
+test('note assistant uses the configured default without requiring a paper and only returns a proposal',async()=>{
+ const f=await fixture({handler:()=>answer('## 整理后的笔记\n\n- 保留待验证状态。')});
+ try{
+  const response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload:{content:'待验证状态。',instruction:'整理格式'}});
+  assert.equal(response.statusCode,200,response.body);
+  assert.equal(response.json().text,'## 整理后的笔记\n\n- 保留待验证状态。');
+  assert.equal(f.captured.length,1);
+  assert.equal(f.captured[0].body.model,FLASH);
+  assert.equal(f.captured[0].body.tools,undefined);
+  assert.match(f.captured[0].body.messages[0].content,/不补造研究结论或文献/);
+  assert.equal(await fs.readFile(path.join(f.root,'papers/DEMO/manuscript/main.tex'),'utf8'),'ACTUAL_DISK_ONLY_CONTEXT');
+ }finally{await f.cleanup();}
+});
+
+test('note assistant sends the exact selected range and bounded surrounding context',async()=>{
+ const f=await fixture();
+ try{
+  const content='前文\n待润色\n后文';
+  const response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload:{content,instruction:'润色表达',selection:{from:3,to:6}}});
+  assert.equal(response.statusCode,200,response.body);
+  const material=JSON.parse(f.captured[0].body.messages[1].content);
+  assert.deepEqual(material,{request:'润色表达',range:'selection',text:'待润色',contextBefore:'前文\n',contextAfter:'\n后文'});
+ }finally{await f.cleanup();}
+});
+
+test('note assistant validates content, instruction, selection and assistant model before calling upstream',async()=>{
+ const f=await fixture();
+ try{
+  const input={content:'笔记正文',instruction:'整理格式'};
+  for(const payload of [{...input,content:''},{...input,content:'a'.repeat(200001)},{...input,instruction:''},{...input,model:'unknown'},{...input,selection:null},{...input,selection:{from:0,to:99}},{...input,selection:{from:2,to:1}},{...input,selection:{from:.5,to:2}}]){
+   const response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload});
+   assert.equal(response.statusCode,400,response.body);
+  }
+  assert.equal(f.captured.length,0);
+ }finally{await f.cleanup();}
+});
+
+test('note assistant rejects truncated output and redacts upstream errors',async()=>{
+ const f=await fixture({handler:()=>responseFor([{choices:[{delta:{content:'未完成的建议'},finish_reason:'length'}]},'[DONE]'])});
+ try{
+  const payload={content:'原始笔记',instruction:'整理格式'};
+  let response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload});
+  assert.equal(response.statusCode,502,response.body);
+  assert.match(response.json().error,/截断/);
+  assert.equal(response.json().text,undefined);
+  f.setHandler(()=>new Response(JSON.stringify({error:{message:'rejected '+FAKE_KEY}}),{status:401,headers:{'Content-Type':'application/json'}}));
+  response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload});
+  assert.equal(response.statusCode,502,response.body);
+  assert.ok(!response.body.includes(FAKE_KEY));
+  assert.match(response.body,/REDACTED/);
+ }finally{await f.cleanup();}
+});
+
+test('note assistant exposes actionable quota errors through the production error policy',async()=>{
+ const f=await fixture({handler:()=>new Response(JSON.stringify({error:{message:'当前已达到 Token Plan 用量上限。'}}),{status:402,headers:{'Content-Type':'application/json'}})});
+ try{
+  f.app.setErrorHandler((error,_request,reply)=>{
+   const failure=error as Error&{statusCode?:number;expose?:boolean};
+   const status=failure.statusCode||500;
+   reply.code(status).send({error:status>=500&&!failure.expose?'服务器操作失败，请查看运行日志。':failure.message});
+  });
+  const response=await f.app.inject({method:'POST',url:'/api/ai/edit-note',payload:{content:'原始笔记',instruction:'整理格式'}});
+  assert.equal(response.statusCode,429,response.body);
+  assert.match(response.json().error,/助手模型额度已用尽/);
+  assert.doesNotMatch(response.body,/服务器操作失败/);
+ }finally{await f.cleanup();}
+});

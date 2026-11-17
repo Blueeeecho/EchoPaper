@@ -1,5 +1,5 @@
 import type { AgentRun, AgentRunDetail, RunEvent } from '../shared/agent-types';
-import { conversationState, mergeChats, type PersistedChat, type PersistedConversation, type PersistedMessage } from '../shared/chat-merge';
+import { conversationState, mergeChats, mergeTaskMessages, type PersistedChat, type PersistedConversation, type PersistedMessage } from '../shared/chat-merge';
 
 export const runIsActive = (run?: AgentRun) => !!run && ['queued', 'running', 'waiting_confirmation', 'cancelling'].includes(run.status);
 
@@ -79,23 +79,23 @@ export function reconcileAgentConversation<T extends PersistedConversation>(conv
     }
     // Remote draft merging can retain a streamed prefix as a recovered copy.
     // A durable run has one user request and one authoritative assistant reply.
-    const seen = new Set<string>();
-    const unique = messages.filter(message => {
-      if (message.taskId !== run.id) return true;
-      if (seen.has(message.role)) return false;
-      seen.add(message.role); return true;
-    });
-    if (unique.length !== messages.length) messages = unique;
+    const unique=mergeTaskMessages(messages);
+    if(JSON.stringify(unique)!==JSON.stringify(messages))messages=unique;
     if (!messages.some(message => message.taskId === run.id && message.role === 'user')) append({ id: `agent-user-${run.id}`, role: 'user', taskId: run.id, content: run.input, status: 'complete', createdAt: run.createdAt, ...(run.attachments?.length?{attachments:run.attachments}:{}) });
     const index = messages.findIndex(message => message.taskId === run.id && message.role === 'assistant');
-    const status = runIsActive(run) ? 'streaming' : run.status === 'completed' ? 'complete' : run.status === 'failed' || run.status === 'budget_exceeded' ? 'error' : 'stopped';
+    const status = run.continuedBy ? 'complete' : runIsActive(run) ? 'streaming' : run.status === 'completed' ? 'complete' : run.status === 'failed' || run.status === 'budget_exceeded' ? 'error' : 'stopped';
     const existing = index < 0 ? undefined : messages[index];
+    if(existing&&Number(existing.taskVersion)>run.version)continue;
+    if(existing?.taskTerminal&&runIsActive(run)&&Number(existing.taskVersion)>=run.version)continue;
     const events = details[run.id]?.events || [], streamed = coordinatorReply(events);
     const typedTurn = events.some(event => event.data && typeof event.data === 'object' && (event.data as { purpose?: unknown }).purpose === 'turn');
     const fallback = run.reply !== undefined ? run.reply : run.summary || existing?.content || '';
-    const content = runIsActive(run) ? streamed !== undefined ? streamed : fallback : run.reply !== undefined ? run.reply : typedTurn ? streamed || '' : fallback;
-    const next: PersistedMessage = { ...existing, id: existing?.id || `agent-assistant-${run.id}`, role: 'assistant', taskId: run.id, content, status, createdAt: existing?.createdAt || run.createdAt, model: run.modelId, error: run.error };
-    if (index < 0) append(next); else replace(index, next);
+    const content = run.continuedBy ? '已按你的后续消息继续处理，已完成的修改保留。' : runIsActive(run) ? streamed !== undefined ? streamed : fallback : run.reply !== undefined ? run.reply : typedTurn ? streamed || '' : fallback;
+    const next: PersistedMessage = { ...existing, id: existing?.id || `agent-assistant-${run.id}`, role: 'assistant', taskId: run.id, content, status, createdAt: existing?.createdAt || run.createdAt, model: run.modelId, taskVersion:run.version,taskTerminal:!runIsActive(run), error: run.continuedBy ? undefined : run.error };
+    if (index < 0) append(next); else {
+      const alternatives=mergeTaskMessages([next,...(existing?.taskTerminal?[existing]:[])]);replace(index,alternatives.find(m=>m.taskId===run.id&&m.role==='assistant')||next);
+      for(const recovered of alternatives.filter(m=>!m.taskId))if(!messages.some(m=>m.id===recovered.id))append(recovered);
+    }
   }
   return messages === conversation.messages ? conversation : { ...conversation, messages, updatedAt: relevant.reduce((latest, run) => run.updatedAt > latest ? run.updatedAt : latest, conversation.updatedAt) };
 }

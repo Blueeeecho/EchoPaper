@@ -49,3 +49,20 @@ test('three-way draft comparison still preserves actual concurrent changes in bo
  const base=chat('answer','original draft'),remote=chat('answer','remote edit'),local=chat('answer','local edit');
  const merged=mergeChats(remote,local,base);assert.equal(merged.conversations.length,2);assert.equal(merged.conversations.find(c=>c.id==='c')?.input,'local edit');assert.ok(merged.conversations.some(c=>c.input==='remote edit'&&c.title.startsWith('草稿恢复')));
 });
+
+test('task identity suppresses stale placeholders but preserves different runs and independent messages',()=>{
+ const local=chat('unrelated'),remote=chat('unrelated');
+ local.conversations[0].messages.push({id:'local-user',taskId:'r1',role:'user',content:'same input',status:'complete',createdAt:'2026-03-01'},{id:'local-final',taskId:'r1',taskVersion:3,taskTerminal:true,role:'assistant',content:'final answer',status:'complete',createdAt:'2026-03-01'});
+ remote.conversations[0].messages.push({id:'remote-user',taskId:'r1',role:'user',content:'same input',status:'complete',createdAt:'2026-03-01'},{id:'remote-pending',taskId:'r1',role:'assistant',content:'',status:'streaming',createdAt:'2026-03-01'},{id:'distinct-user',taskId:'r2',role:'user',content:'same input',status:'complete',createdAt:'2026-03-02'},{id:'standalone',role:'user',content:'same input',status:'complete',createdAt:'2026-03-03'});
+ const merged=mergeChats(remote,local);assert.equal(merged.conversations[0].messages.length,5);assert.equal(merged.conversations[0].messages.filter(m=>m.taskId==='r1').length,2);assert.ok(merged.conversations[0].messages.some(m=>m.id==='standalone'));for(let i=0;i<5;i++)assert.deepEqual(mergeChats(remote,merged),merged);
+});
+test('genuine conflicting completed task messages survive as stable independent recovered text',()=>{
+ const left=chat('unrelated'),right=chat('unrelated');for(const [c,id,content]of [[left,'left','one final'],[right,'right','different final']]as const)c.conversations[0].messages.push({id,taskId:'same',role:'assistant',content,status:'complete',createdAt:'2026-03-01'});
+ const result=mergeChats(left,right);assert.deepEqual(new Set(result.conversations[0].messages.map(m=>m.content)),new Set(['unrelated','one final','different final']));assert.equal(result.conversations[0].messages.filter(m=>m.taskId==='same').length,1);assert.deepEqual(mergeChats(left,result),result);
+});
+
+test('normalizing a historical task alias does not consume a newly reused attachment or clear a same-text draft',()=>{
+ const base=chat('unrelated','same input'),local=chat('unrelated','same input'),remote=chat('unrelated','same input');const attachment={id:'image-again',name:'figure.png',kind:'image'} as any;
+ const old={id:'agent-user-old',role:'user' as const,taskId:'old',content:'same input',status:'complete' as const,createdAt:'2026-03-01',attachments:[attachment]};base.conversations[0].messages.push(old);remote.conversations[0].messages.push(old);local.conversations[0].messages.push({...old,id:'actual-request'});
+ for(const data of [base,remote,local])data.conversations[0].pendingAttachments=[attachment];const result=mergeChats(remote,local,base);assert.equal(result.conversations[0].input,'same input');assert.equal(result.conversations[0].pendingAttachments?.[0].id,attachment.id);
+});

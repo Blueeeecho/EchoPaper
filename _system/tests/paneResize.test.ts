@@ -7,3 +7,13 @@ for(const end of ['pointerup','pointercancel','blur','lostpointercapture','dispo
  if(end==='dispose')dispose();else if(end==='lostpointercapture')handle.dispatchEvent(pointer(end));else events.dispatchEvent(end==='blur'?new Event(end):pointer(end));
  const count=values.length;events.dispatchEvent(pointer('pointermove',700));assert.equal(values.length,count);assert.equal(handle.captured,false);dispose();
 });
+
+test('vertical reading dividers use height limits and finish once after cancellation',()=>{
+ const events=new EventTarget(),handle=Object.assign(new EventTarget(),{captured:false,setPointerCapture(){this.captured=true;},hasPointerCapture(){return this.captured;},releasePointerCapture(){this.captured=false;}});
+ const values:number[]=[];let committed=0;
+ const dispose=beginPaneResize(events,handle,7,50,600,value=>values.push(value),{axis:'y',minimum:20,maximum:85,onFinish(){committed++;}});
+ const move=(y:number,id=7)=>{const event=pointer('pointermove',999,id);Object.defineProperty(event,'clientY',{value:y});events.dispatchEvent(event);};
+ move(350);move(500,8);move(20);move(800);assert.deepEqual(values,[50,20,85]);
+ events.dispatchEvent(pointer('pointercancel'));dispose();handle.dispatchEvent(pointer('lostpointercapture'));
+ assert.equal(committed,1);assert.equal(handle.captured,false);
+});

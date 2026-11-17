@@ -17,7 +17,7 @@ const plainHistory=(value:unknown,label:string):AgentConversationMessage[]=>{
  return value.map(({role,content,attachments})=>({role,content,...(attachments?.length?{attachments:attachments.map(attachmentMetadata)}:{})}));
 };
 const sameHistory=(a:AgentConversationMessage[],b:AgentConversationMessage[])=>a.length===b.length&&a.every((message,index)=>message.role===b[index].role&&message.content===b[index].content&&JSON.stringify(message.attachments||[])===JSON.stringify(b[index].attachments||[]));
-function appendRun(history:AgentConversationMessage[],run:AgentRun){const reply=run.reply??run.summary;history.push({role:'user',content:run.input,...(run.attachments?.length?{attachments:run.attachments}:{})});if(run.status==='completed'&&reply?.trim())history.push({role:'assistant',content:reply});}
+function appendRun(history:AgentConversationMessage[],run:AgentRun,withState=false){const reply=run.reply??run.summary;history.push({role:'user',content:run.input+(!withState||run.status==='completed'?'':`\n[历史执行状态：${run.status}，已应用 ${run.changesets.filter(change=>change.status==='applied').length} 组修改。${run.error ? `最近失败原因：${run.error.slice(0, 2000)}。` : ''}此旧请求已经结束或中断，不作为本轮待执行指令。]`),...(run.attachments?.length?{attachments:run.attachments}:{})});if(run.status==='completed'&&reply?.trim())history.push({role:'assistant',content:reply});}
 async function importedChat(root:string,store:TaskStore,input:ConversationInput,firstOwnedRun?:AgentRun):Promise<AgentConversationMessage[]|undefined>{
  const filename=await assertNoSymlinks(root,'notes/ai-conversations.json',true);let data:any;
  try{const stat=await fs.stat(filename);if(!stat.isFile()||stat.size>128*1024*1024)throw new HttpError(413,'旧对话文件无效或超过迁移上限。');data=JSON.parse(await fs.readFile(filename,'utf8'));}
@@ -33,7 +33,7 @@ async function importedChat(root:string,store:TaskStore,input:ConversationInput,
 }
 
 /** Prepare only reads. The returned reservation is committed with the run by TaskStore.create. */
-export async function prepareConversation(root:string,store:TaskStore,input:ConversationInput):Promise<PreparedConversation>{
+export async function prepareConversation(root:string,store:TaskStore,input:ConversationInput,options:{allowActiveRunId?:string}={}):Promise<PreparedConversation>{
  if(path.resolve(store.filename)!==path.resolve(root,'.workbench/agent-state.sqlite'))throw new HttpError(409,'会话存储与当前项目不一致。');
  const supplied=plainHistory(input.history,'对话历史');
  if(input.conversationId===undefined){if(supplied.length>100||supplied.reduce((sum,message)=>sum+message.content.length,0)>200000)throw new HttpError(400,'旧版显式历史最多 100 条、合计 200000 字符。');return{history:supplied,lastRunId:null,source:'legacy'};}
@@ -51,8 +51,9 @@ export async function prepareConversation(root:string,store:TaskStore,input:Conv
  if(previous&&existingIndex<0)throw new HttpError(409,'请求归属记录与会话账本不一致。');
  const precedingRuns=existingIndex<0?runs:runs.slice(0,existingIndex),history=structuredClone(seed);for(const run of precedingRuns)appendRun(history,run);
  const projection=current?.contextProjection,covered=projection?precedingRuns.findIndex(run=>run.id===projection.throughRunId&&run.status==='completed'):-1;
- let contextMessages:ModelMessage[]|undefined;if(projection&&covered>=0){const tail:AgentConversationMessage[]=[];for(const run of precedingRuns.slice(covered+1))appendRun(tail,run);contextMessages=[...structuredClone(projection.messages),...tail];}
+ let contextMessages:ModelMessage[]|undefined;if(projection&&covered>=0){const tail:AgentConversationMessage[]=[];for(const run of precedingRuns.slice(covered+1))appendRun(tail,run,true);contextMessages=[...structuredClone(projection.messages),...tail];}
+ if(!contextMessages&&precedingRuns.some(run=>run.status!=='completed')){const annotated=structuredClone(seed);for(const run of precedingRuns)appendRun(annotated,run,true);contextMessages=annotated;}
  if(supplied.length&&!sameHistory(supplied,history))throw new HttpError(409,'此会话的历史由服务端保存；请求历史与本会话不一致，未接收外部历史。');
- if(!previous){if(input.expectedLastRunId!==undefined&&input.expectedLastRunId!==lastRunId)throw new HttpError(409,'会话已经收到新的请求，请重新读取并比较后发送。',{lastRunId});if(runs.some(run=>activeStatuses.has(run.status)))throw new HttpError(409,'此会话尚有运行或等待决定的请求，请先完成或停止它。',{lastRunId});}
+ if(!previous){if(input.expectedLastRunId!==undefined&&input.expectedLastRunId!==lastRunId)throw new HttpError(409,'会话已经收到新的请求，请重新读取并比较后发送。',{lastRunId});if(runs.some(run=>activeStatuses.has(run.status)&&run.id!==options.allowActiveRunId))throw new HttpError(409,'此会话尚有运行或等待决定的请求，请先完成或停止它。',{lastRunId});}
  return{history,...(contextMessages?{contextMessages}:{}),lastRunId,source,reservation:{conversationId:input.conversationId,expectedLastRunId:lastRunId,seedHistory:structuredClone(seed),source:seedSource},...(previous?{existingRun:previous}:{})};
 }

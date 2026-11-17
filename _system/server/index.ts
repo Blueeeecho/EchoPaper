@@ -1,3 +1,9 @@
+import {registerReadingRoutes} from './workspace/reading';
+import {registerReadingProcessingRoutes} from './workspace/reading-processing';
+import {registerBilingualRoutes} from './workspace/bilingual';
+import {registerDevSyncRoutes} from './dev-sync';
+import {registerTopicNotebookRoutes} from './workspace/topic-notebook';
+import {registerResearchInferenceRoutes} from './research-inference';
 import Fastify from 'fastify';
 import {registerProjectImportRoutes}from'./project-imports';
 import staticPlugin from '@fastify/static';
@@ -28,12 +34,13 @@ import { registerBackupRoutes, recoverPendingRestore } from './backups.ts';
 import { registerChatRoutes } from './chats.ts';
 import { registerSyncRoutes } from './synctex.ts';
 import { registerConferenceRoutes } from './conferences.ts';
+import {registerAnalysisRoutes} from './workspace/analysis-routes.ts';
 import { registerWorkspaceRoutes } from './workspace/index';
 import { registerPresentationRoutes } from './presentations/index';
 
 export interface AppOptions { workspaceRoot?: string; buildService?: BuildService; watch?: boolean; ai?: AiOptions }
 const defaultRoot = fileURLToPath(new URL('../../', import.meta.url));
-const mimeTypes: Record<string,string> = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.tex': 'text/plain; charset=utf-8', '.bib': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8' };
+const mimeTypes: Record<string,string> = { '.json': 'application/json; charset=utf-8', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.tex': 'text/plain; charset=utf-8', '.bib': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8' };
 export async function createApp(options: AppOptions = {}) {
   const workspaceRoot = path.resolve(options.workspaceRoot ?? process.env.WORKBENCH_ROOT ?? defaultRoot);
   await recoverPendingRestore(workspaceRoot);
@@ -50,10 +57,10 @@ export async function createApp(options: AppOptions = {}) {
     // Even legacy projects with autoCompile=true only compile on explicit requests.
   };
   app.setErrorHandler((error, _request, reply) => {
-    const failure = error as Error & { statusCode?: number; extra?: Record<string, unknown>; code?: string };
+    const failure = error as Error & { statusCode?: number; extra?: Record<string, unknown>; code?: string; expose?: boolean };
     const status = failure.statusCode ?? (failure.code === 'ENOENT' ? 404 : 500);
     if (status >= 500) console.error('[workbench]', error);
-    reply.code(status >= 400 && status <= 599 ? status : 500).send({ error: status >= 500 ? '服务器操作失败，请查看运行日志。' : failure.message, ...failure.extra });
+    reply.code(status >= 400 && status <= 599 ? status : 500).send({ error: status >= 500 && !failure.expose ? '服务器操作失败，请查看运行日志。' : failure.message, ...failure.extra });
   });
   app.addHook('onRequest', async (request,reply) => {
     let host: URL; try { host = new URL(`http://${request.headers.host ?? ''}`); } catch { return reply.code(403).send({error:'访问地址无效。'}); }
@@ -66,12 +73,22 @@ export async function createApp(options: AppOptions = {}) {
     if (request.url.startsWith('/api/')) reply.header('Cache-Control','no-store');
   });
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
-  app.get('/api/health', async () => ({ ok: true, workspaceRoot, pid: process.pid,capabilities:{agentTasks:true,agentConversations:true,agentEventPurposes:true,chatLifecycle:true,modelConfigVersion:2,isolatedTranslation:true,academicWorkspace:true,presentations:true} }));
+  app.get('/api/health', async () => ({ ok: true, workspaceRoot, pid: process.pid,capabilities:{agentTasks:true,agentConversations:true,agentEventPurposes:true,chatLifecycle:true,modelConfigVersion:2,isolatedTranslation:true,academicWorkspace:true,presentations:true,researchProgressAmendment:true,researchInference:true,researchCalendar:true} }));
+  registerDevSyncRoutes(app, workspaceRoot);
   app.get('/api/settings', async () => ({ compiler: process.env.TECTONIC_PATH ?? '/opt/homebrew/bin/tectonic', workspaceRoot }));
-  const registry=await registerAiRoutes(app, workspaceRoot, {...options.ai,onChanged:(purpose)=>{options.ai?.onChanged?.(purpose);emit({type:'ai.config.changed',projectId:'',purpose});}});
+  let readingResource:((id:string)=>Promise<unknown>)|undefined;
+  const registry=await registerAiRoutes(app, workspaceRoot, {...options.ai,validateResource:async id=>{if(!readingResource)throw new Error('资料服务尚未就绪');return readingResource(id);},onChanged:(purpose)=>{options.ai?.onChanged?.(purpose);emit({type:'ai.config.changed',projectId:'',purpose});}});
   registerEditorSessionRoutes(app,workspaceRoot,emit);
   const agents=await registerAgentRoutes(app,workspaceRoot,{registry,builds,emit,ai:options.ai});
   const workspace=await registerWorkspaceRoutes(app,workspaceRoot,{watch:options.watch});
+  readingResource=workspace.resourceFile;
+  registerReadingRoutes(app,workspaceRoot,workspace);
+  const bilingual=registerBilingualRoutes(app,workspaceRoot,workspace);
+  const readingProcessing=await registerReadingProcessingRoutes(app,workspaceRoot,workspace,registry,bilingual);
+  registerTopicNotebookRoutes(app,workspaceRoot,async id=>(await workspace.overview()).topics.some(t=>t.id===id));
+  registerResearchInferenceRoutes(app,workspaceRoot,registry,workspace,options.ai);
+  const literatureAnalysis=registerAnalysisRoutes(app,workspaceRoot,{workspace,registry,ai:options.ai});
+  app.addHook('onClose',async()=>{literatureAnalysis.close();});
   const presentations=await registerPresentationRoutes(app,workspaceRoot,{registry,ai:options.ai,resourceFile:workspace.resourceFile});
   app.post<{Params:{id:string}}>('/api/workspace/resources/:id/reveal',async request=>{
     const resource=await workspace.resourceFile(request.params.id);
@@ -82,7 +99,7 @@ export async function createApp(options: AppOptions = {}) {
   await registerReferenceRoutes(app, workspaceRoot);
   await registerCompareRoutes(app, workspaceRoot, builds);
   await registerChatRoutes(app, workspaceRoot, emit,{conversationBusy:(projectId,conversationId)=>agents.conversationBusy(projectId,conversationId)});
-  const backupState = await registerBackupRoutes(app, workspaceRoot, builds, emit,{agentsBusy:()=>agents.busy()||workspace.busy()||presentations.busy(),prepareAgentBackup:async()=>{await agents.checkpointForBackup();await workspace.checkpoint();await presentations.checkpoint();},afterWorkspaceRestore:async()=>{await workspace.close();await presentations.close();}});
+  const backupState = await registerBackupRoutes(app, workspaceRoot, builds, emit,{agentsBusy:()=>readingProcessing.busy()||agents.busy()||workspace.busy()||presentations.busy()||literatureAnalysis.busy(),prepareAgentBackup:async()=>{await readingProcessing.checkpoint();await literatureAnalysis.checkpoint();await agents.checkpointForBackup();await workspace.checkpoint();await presentations.checkpoint();},afterWorkspaceRestore:async()=>{await readingProcessing.close(false);await workspace.close();await presentations.close();}});
   workspaceLocked = backupState.isLocked;
   await registerProjectImportRoutes(app,workspaceRoot,emit);
   await registerSyncRoutes(app, workspaceRoot, builds);
@@ -99,6 +116,8 @@ export async function createApp(options: AppOptions = {}) {
   app.get<{Params:{id:string};Querystring:{path:string}}>('/api/projects/:id/raw', async (request,reply) => {
     const relative=relativePath(request.query.path); if (relative.split('/').some(part=>part.startsWith('.')) || relative==='project.json' || ['build','submissions'].includes(relative.split('/')[0])) throw new HttpError(403,'此文件不在预览区内。');
     const file = await assertNoSymlinks(await registeredRoot(workspaceRoot,request.params.id),relative); if (!(await fs.stat(file)).isFile()) throw new HttpError(400,'请选择文件。');
+    reply.header('X-Content-Type-Options','nosniff');
+    if (path.extname(file).toLowerCase()==='.json') reply.header('Content-Disposition',`inline; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`);
     if (path.extname(file).toLowerCase()==='.svg') reply.header('Content-Security-Policy',"sandbox; default-src 'none'; img-src data:");
     return reply.type(mimeTypes[path.extname(file).toLowerCase()] ?? 'application/octet-stream').send(createReadStream(file));
   });
@@ -115,7 +134,7 @@ export async function createApp(options: AppOptions = {}) {
     reply.raw.on('close',()=>{ clearInterval(heartbeat); clients.delete(reply.raw); });
   });
   app.get<{Params:{id:string}}>('/api/projects/:id/history', async request => ({history:await history(await registeredRoot(workspaceRoot,request.params.id))}));
-  app.post<{Params:{id:string};Body:{message?:string}}>('/api/projects/:id/checkpoints', async request => { if (request.body?.message !== undefined && typeof request.body.message !== 'string') throw new HttpError(400,'版本说明无效。'); const entry=await checkpoint(await registeredRoot(workspaceRoot,request.params.id),request.body?.message || '保存版本'); emit({type:'history.changed',projectId:request.params.id}); return entry; });
+  app.post<{Params:{id:string};Body:{message?:string;paths?:string[]}}>('/api/projects/:id/checkpoints', async request => { const body=request.body??{}; if (body.message !== undefined && typeof body.message !== 'string') throw new HttpError(400,'版本说明无效。'); if (body.paths !== undefined && (!Array.isArray(body.paths) || body.paths.length>100 || body.paths.some(path=>typeof path!=='string')) ) throw new HttpError(400,'版本文件列表无效。'); const entry=await checkpoint(await registeredRoot(workspaceRoot,request.params.id),body.message || '保存版本',body.paths); emit({type:'history.changed',projectId:request.params.id}); return entry; });
   app.get<{Params:{id:string};Querystring:{path:string;ref?:string}}>('/api/projects/:id/diff', async request => ({diff:await diff(await registeredRoot(workspaceRoot,request.params.id),request.query.path,request.query.ref)}));
   app.post<{Params:{id:string};Body:{path:string;ref:string}}>('/api/projects/:id/restore', async request => { await restore(await registeredRoot(workspaceRoot,request.params.id),request.body?.path,request.body?.ref); fileChanged(request.params.id,request.body.path); emit({type:'history.changed',projectId:request.params.id}); return document(await registeredRoot(workspaceRoot,request.params.id),request.body.path); });
   app.get<{Params:{id:string}}>('/api/projects/:id/reviews', async request => ({rounds:await listReviews(workspaceRoot,request.params.id)}));

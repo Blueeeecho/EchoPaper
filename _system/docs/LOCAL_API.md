@@ -313,7 +313,7 @@ node _system/scripts/echopaper.mjs task undo WWW <任务ID>
 | `GET /api/projects/:id/agent-runs/:runId/events?after=序号` | SSE 每条为 RunEvent，带递增 id，可用 Last-Event-ID 补读 |
 | `POST .../:runId/cancel` | 停止自身模型、子角色和自身构建；保留已提交修改 |
 | `POST .../:runId/resume` | 核对日志和文件基线后恢复，不盲目重放结果不明的工具 |
-| `POST .../:runId/decisions` | `{decisionId,approve:boolean}`，只确认当前具体删除清单 |
+| `POST .../:runId/decisions` | `{decisionId,approve:boolean}`，接受当前具体建议或删除清单；已变化的决定返回 409 |
 | `POST .../:runId/undo` | `{changesetId?}`，省略时逆序撤销任务已应用的修改 |
 
 `reply` 是主助手的自然回复，`summary` 是实际操作记录，零工具回复的 `summary` 为空；旧记录可回退读取 `summary`。`completed` 还须查看 `outcome:resolved|partial`。`verifiedBuildId/verifiedSourceHash/currentSourceVerified` 区分任务版本与当前主稿。编译成功和投稿合规是不同结论。失败、取消或运行中断时修改仍可审阅撤销；有后续人工修改时使用三方比较，重叠处报冲突，不整库回退。
@@ -322,10 +322,90 @@ node _system/scripts/echopaper.mjs task undo WWW <任务ID>
 
 自动构建验证只绑定实际源码/资源修改；单独请求编译时由模型发出原生 `compile` 工具。输入文字提到“编译”或“build”、附带旧构建/诊断线索本身不会触发后台构建。
 
-默认每项目一个修改任务、三个子角色并行、一层委派；不限制模型调用次数、工具迭代步数或累计 token，用量仅用于记录。旧配置的 `modelCalls/tokens/maxSteps/repairRounds` 在读取时归一化为 0，不再执行这些阈值。保留可编辑的运行时长（默认 60 分钟）、子角色并发（默认 3），以及手动停止；不按编译次数截停任务，相同问题无进展时保留检查结果。模型实际上下文窗口仍用于自动压缩历史，不是额度预算。完整角色和运行设置在助手设置中编辑，任务固定启动时的非密钥配置。仅原生 function tool_calls 经完整解析与结构校验后可执行，不把模型普通文本当命令。工具范围限定论文材料；官方类/样式、系统、其他项目、构建及投稿快照不可写，不提供任意 shell 或任意 HTTP 工具。
+写作请求可携带 `writingTask:{kind:'focused'|'project'|'repair',outputMode:'suggest'|'apply',verification:'none'|'compile'}`。`focused` 须给文件或选区范围；`suggest` 在具体建议生成后停止，接受后才应用。`verification:'none'` 禁止编译；普通写作最多编译一次，明确的 `repair` 最多三次。只有明确的修复任务可以根据构建失败继续最小修复，投稿占位符不会扩大修改授权。构建成败、本次任务问题和投稿待办分别报告；有匹配修改前源码的构建时，对比新增引用问题，无基线时不声称已完成诊断归因。
+
+`propose_changes` 仍返回普通可审阅 ChangeSet，增加以下模型操作输入；后端先在任务冻结快照上展开，再沿用哈希、范围、编辑器屏障、事务和撤销校验：
+
+```json
+{"description":"修正一句话","operations":[{"kind":"patch","path":"manuscript/main.tex","oldText":"The results is reliable.","newText":"The results are reliable."}]}
+{"description":"替换原图1","operations":[{"kind":"replace_figure","figure":1,"attachmentId":"当前会话提供的附件UUID"}]}
+{"description":"统一素材命名","operations":[{"kind":"move","from":"manuscript/old.jpg","to":"manuscript/fig_1.jpg"}]}
+```
+
+`patch` 的原文必须在快照里唯一匹配；`move.expectedHash` 可省略，由任务冻结版本绑定，不能使用提交时的新版本代替。素材重命名同步可确定的 TeX 引用；附带的文本修改须与程序生成的引用更新完全一致。JPEG/PNG/PDF 重命名不转换编码，真实格式与扩展名不匹配时拒绝。
+
+`replace_figure` 只用于当前请求明确替换的单一编号图，按当前目标的字面 `input/include` 顺序定位，保留图注、标签、环境及其他正文；附件以原格式导入。动态条件、计数器、多子图、非字面引用等不确定情况明确拒绝，不猜编号。替换任务的普通文件提案也须通过相同的目标校验，不能新增图再把原图顺延。素材任务连续三轮只读取后提示收敛，但保持工具集合稳定，允许核对尚未读取的必要依赖。list_files 对素材重命名额外返回字面引用顺序的 assetInventory/sourceOrder；该顺序不冒充编译后编号。进展以新增源码行证据计数，重复命中同一行或重叠读取不会因查询措辞改变而算新进展；连续三轮没有新增信息时停止并说明原因。实际应用后结束，不继续无关探索。原始工具与模型记录保留。
+
+上下文压缩的容量计算包含固定指令和工具结构；必要时可将完整工具轮次全部纳入摘要并再次附上当前请求，原始轮次继续保存在本机记录，不拆散工具调用和回复。网页恢复旧任务编号前先核对当前项目列表，不对缺失的历史任务反复加载。
+
+默认每项目一个修改任务、三个子角色并行、一层委派；不限制模型调用次数、工具迭代步数或累计 token，用量仅用于记录。旧配置的 `modelCalls/tokens/maxSteps/repairRounds` 在读取时归一化为 0，不再执行这些阈值。保留可编辑的运行时长（默认 60 分钟）、子角色并发（默认 3），以及手动停止；未携带 writingTask 的兼容任务不按编译次数截停；显式写作任务遵守上述一次/三次验证约定，相同问题无进展时保留检查结果。模型实际上下文窗口仍用于自动压缩历史，不是额度预算。完整角色和运行设置在助手设置中编辑，任务固定启动时的非密钥配置。仅原生 function tool_calls 经完整解析与结构校验后可执行，不把模型普通文本当命令。工具范围限定论文材料；官方类/样式、系统、其他项目、构建及投稿快照不可写，不提供任意 shell 或任意 HTTP 工具。
 
 网页通过 `/api/projects/:id/editor-sessions` 登记编辑器缓冲区；收到 `editor.barrier` 后短暂冻结相关编辑器、保存缓冲区并确认，`editor.release` 或过期后恢复。不能确认或基线变化时任务暂停写入，保留双方内容。多文件变更先完整预检、写 journal 再提交，启动时补偿中断事务。SQLite/日志保存于论文 `.workbench/` 并进入完整备份；备份维护屏障阻止活动任务写入。
 
 编辑会话使用每个页面独立的随机 ID。`pagehide` 即时 keepalive `DELETE .../editor-sessions/:sessionId`，正文为 `{path,dirty,bufferVersion}`；clean 注销立即退出等待集合，已关闭 ID 的迟到注册不能复活。dirty 记录保留，较旧状态不能把它降级为 clean。路径、dirty 和内容版本变化均提升协议 bufferVersion；BFCache 恢复重新同步，clean 文档使用新 ID。两个窗口必须分别确认，期间出现新窗口或 dirty 变化会撤销既有提交许可。
 
 真实模型 QA 需明确授权后使用：`node --import tsx _system/scripts/qa-agents-real.ts --confirm-real`。它只复用现有 MiniMax 连接，在系统临时目录创建独立论文并清理，凭据仅在后端内存中传给供应商，不输出到报告。
+
+### 待办关联工作对象
+
+待办沿用进展记录及 `dailyTaskStates[entryId:index]`，不建立重复任务表。`GET /api/workspace/topics/:id/daily-tasks/:entryId/:index/target-options` 返回当前 `revision`、任务原文、已保存 `target` 和当前课题可用的 `options`。选项包括 `paper-file {paperId,path}`、`review {paperId,reviewId}`、`resource {resourceId}`、`topic-note {field:experimentPlan|resultSummary}`；只能关联课题已有论文/资料和实际存在的记录。
+
+`PATCH /api/workspace/topics/:id/daily-tasks/:entryId/:index` 携带 `expectedRevision`，可更新 `done` 或 `target`；`target:null` 解除关联，省略则保留原关联。409 后重读与比较，不重试覆盖。更正进展会保留历史；任务重排按唯一文本匹配迁移状态及关联。
+
+`GET /api/workspace/topics/:id/daily-tasks/:entryId/:index/target` 在打开前重新校验存在性、课题关系及路径，返回工作台 `path`；文件/资料删除、课题关系解除、论文归档时返回错误并保留原关联。论文文件 URL 为 `#/papers/:id/writing?file=...`，审稿轮次为 `#/papers/:id/reviews?review=...`，资料为 `#/library?topic=...&resource=...`。显式缺失目标不回退打开其他对象。关联指向当前工作对象，不是证据冻结快照。
+
+### 独立实验与证据条目
+
+条目保存在既有课题的 `workEntries` 中；`experimentPlan`、`resultSummary` 原文不迁移、不改写。`POST /api/workspace/topics/:id/entries` 使用 `expectedRevision` 和 `kind:experiment|evidence`；字段包括 `title/state/question/protocol/observation/conclusion/limitations/sources`。实验默认 `planned`，证据默认 `unassessed`，不自动推断科研结论。`completed` 要求观察记录；证据判断要求观察、结论及来源。
+
+`PATCH /api/workspace/topics/:id/entries/:entryId` 同时携带课题 `expectedRevision` 和 `expectedEntryRevision`。每次修改追加完整只读历史，`archived` 归档/恢复，旧引用保留；不提供永久删除。每个课题最多500个条目，每个条目保留最多100个版本，不静默丢弃历史。409 后下载草稿、重读与比较，不自动覆盖。
+
+`GET /api/workspace/topics/:id/work-targets` 提供当前课题可用对象。`GET /api/workspace/topics/:id/entries/:entryId/edit-context` 在同一目录锁下读取最新条目、课题版本和来源选项。编辑中的表单不随后台刷新替换。
+
+`sources` 输入为工作对象引用数组，最多20项。新增来源由服务端记录 SHA256、标签、时间和条目版本；普通文字编辑保留已有来源指纹，只有显式 `refreshSources:true` 才记录当前来源版本。指纹不等于来源原件的备份。`GET .../entries/:entryId/source-status?revision=n` 比较该版本直接引用的对象，返回 current/changed/unavailable；`GET .../entries/:entryId/sources/:index/open?revision=n` 校验并打开当前来源。跨级来源变化的传播由后续证据链检查完成，不把直接内容一致当作科研有效性。
+
+研究对象引用新增 `research-entry {entryId,entryKind:experiment|evidence}`；待办可打开相应条目。URL为 `#/experiments?topic=...&entry=...` 或 `#/results?topic=...&entry=...`，附 `revision=n` 查看历史只读版本。
+
+### 论文使用位置与来源链
+
+证据条目增加 `usages`，区别于 `sources`。每项为 `{paperId,path,purpose:claim|figure|table,location}`；服务端保存文件 SHA256、标签与时间，修改纳入条目历史及课题/条目双CAS。只允许当前课题已关联论文中的安全、存在文件。既有使用位置保留原指纹，使用 `refreshUsageKeys:[usageKey(...)]` 显式重新记录文件版本。`usages:[]` 可解除关联，历史保留；未知文件/课题关系不自动重定向或重写稿件。
+
+`GET /api/projects/:id/research-evidence?path=...` 返回该文件在关联课题中的证据、使用位置、来源链核对摘要、研究依据/审稿/汇报入口。写作区“研究 → 当前文件证据”管理关联；保存关联前沿用编辑器的文件CAS保存与冲突/同步保护，不触发模型调用。证据页列出使用位置，`GET /api/workspace/topics/:id/entries/:entryId/usages/:index/open?revision=n` 校验并打开文件。
+
+`source-status` 现在递归检查原来引用的条目版本及其上游原始来源；新条目版本不能掩盖旧引用中的原始文件变化。返回 `children` 供展开来源链；循环、历史版本缺失、不可用节点及超出核对范围均明确标识。单次最多1000个来源节点、24级，超过范围不返回“全部一致”。这仍是内容版本核对，不是科研有效性审定。
+
+文件指纹在读取前后比较同一文件描述符及路径的inode、size、mtimeNs、ctimeNs，并重新校验路径；读取期间改写或替换时拒绝记录模糊指纹，要求稳定后重试。来源指纹与使用位置指纹分别维护；二者都不是原件备份。
+
+### 前轮未结束时发送后续消息（2026-11-09）
+
+2026-11-10更新后的普通写作消息支持即时跟进。前轮执行或等待审阅时发送补充要求，会携带`followUpOf`，在项目生命周期锁内完成旧生成停止、事务核对和新请求接纳。旧任务的`continuedBy`及新任务的`continuationOf`保存接续关系，已应用修改和原始记录保留。连续补充携带原目标及此前约束，最新要求处理冲突。发送控制尚在同步时，后续内容暂存在本窗口sessionStorage并显示“准备跟进”，接纳前一条后继续提交。单独的常见进度询问读取任务详情并回复，原执行继续。待审旧建议由新要求接续后，其旧批准入口失效。
+
+发送失败/结果未确认时显示“发送待核对”，核对后重试沿用同requestId；已接收的请求从任务列表恢复，不重复创建。重试替换同编号的本地占位，不追加重复消息ID。队列状态不等于服务端已经接单。
+
+聊天、任务控制、编辑器同步和模型配置请求包含响应正文在内的等待上限为30秒。超时只表示结果未确认，不能认定服务端没有执行。原有CAS、单写入者和编辑器屏障保持。发送前flush仅等待当前保存快照，后续输入独立保存；旧消息提交只消费自身输入/附件。
+
+较新服务端终态会解除旧accepted缓存忙碌判断。存在活动任务时，可见页面每5秒补读任务列表；窗口重新获得焦点或页面返回时也核对，恢复遗漏的完成通知。没有活动任务时不持续补读。
+
+### 文件树上下文与默认修改范围（2026-11-09）
+
+文件行右键或 Shift+F10 可选择“添加到 AI 对话”，不切换编辑文件，不自动发送或编译。文本按准确路径读取，当前打开文本使用当时编辑器缓冲区；超过50000字符只提供明确标记的预览，可继续按路径读取。支持的图片、PDF及Office文件复用附件接口加入实际副本，保留项目内来源路径；读取或上传失败时保留草稿并显示失败。
+
+网页普通写作请求通过 `editContext {path?,selection?}` 传入当前文件和源码选文。模型在同一次 `propose_changes` 中声明 `target {kind:files,paths}`、`{kind:selection,path,selectedText?}` 或 `{kind:project}`。服务端展开补丁与移动依赖后核对精确路径、选文、冻结哈希及受保护文件，将核验目标保存在 ChangeSet 中，应用前再次校验。作者选文允许内部子串收窄，正文其他部分变化时可唯一重定位选文，原文消失或出现歧义时返回冲突。
+
+`editContext` 是定位材料，网页文件和选区写入范围由模型显式声明。自然语言正则不再生成 `scope.paths/selection`。`scope.readOnly`、CLI/API 显式传入的写入范围、版本 CAS 与提案审阅继续执行。新协议任务的 `targeting` 为 `structured`，必须声明目标，旧任务和旧变更集沿用原协议恢复。结构化目标参数错误返回可纠正的工具反馈，突破显式权限上界仍拒绝执行。
+
+编辑器注册`POST /api/projects/:id/editor-sessions`返回`barriers`，客户端通过状态同步补接遗漏的写入前确认通知。确认等待为15秒，页面每5秒同步，成功确认后的提交租约仍按5秒续期。干净编辑器切换到无关文件时移出旧文件等待名单；未保存状态与无确认超时分别报告路径和原因，后者不冒充内容冲突。关闭页面的未保存内容仍受保护，不通过忽略dirty状态来放行写入。
+
+
+### 助手请求上下文读数（2026-11-10）
+
+任务的可选 `context` 字段记录最近一次主助手请求的 `tokens/estimated/contextWindow/modelId/invocationId/updatedAt`，与累计 `usage.tokens` 独立。请求发送前按包含系统、工具定义、工具结果及附件材料的结构估算；正常响应提供有效 `prompt_tokens` 时采用上游输入用量。子角色及摘要请求不会覆盖主助手读数；输入框草稿不属于最近请求。旧任务没有此字段时，界面明确使用聊天文字估算。
+
+`context.measured` 事件通过 `invocationId` 对应请求，并用 `source:request_estimate|provider_prompt_tokens` 标识口径。压缩阈值仍按模型窗口70%的结构估算判断；上游超窗拒绝会强制尝试压缩。`context.compacted` 的前后用量统一包含工具定义，附窗口及保留消息数；任务 `context.lastCompaction` 保存最近结果，`compactions` 仅计当前任务。`context.compaction.failed` 及 `context.compactionError` 保存真实失败，原始记录保留。未到阈值不表示压缩失败。
+
+
+### 跟进请求身份及接纳失败恢复（2026-11-10）
+
+客户端将发送前准备草稿与首次提交的 `submittedPayload` 分开保存。提交后相同requestId始终重用完整AgentCreateInput，包括targetId、expectedLastRunId及followUpOf；重试先按requestId核对任务列表，列表暂旧时原样重发。服务端在会话head校验之前返回已存在且输入一致的请求，不因后续head改变拒绝原请求的幂等核对。
+
+跟进请求的选区及当前材料在停止旧任务前预检；停止后文件基线仍须重新核对。停后接纳失败且新请求未保存时，旧任务变为 `interrupted`，记录具体原因和失败请求编号，使用原有恢复接口核对文件及工具记录；不自动重放旧写操作。有效writingTask可继承旧任务应用/验证要求，模型提示与工具使用同一有效合同，原始输入身份保持不变。

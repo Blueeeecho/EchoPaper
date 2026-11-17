@@ -1,0 +1,40 @@
+.research-text-editor{display:flex;flex-direction:column;min-width:0;width:100%}
+.research-text-editor>textarea{width:100%;min-width:0;flex:1}
+.research-text-editor>.note-assistant{order:-1}
+.note-assistant{font-size:12px;line-height:1.5;min-width:0;color:var(--ep-text,#27313a);text-align:left}
+.note-assistant-bar{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:28px}
+.note-assistant button{display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid var(--ep-border,#dce1e7);border-radius:5px;background:var(--ep-surface,#fff);color:var(--ep-text-2,#576270);padding:4px 8px;min-height:26px;font:inherit;line-height:1.4;cursor:pointer}
+.note-assistant button:disabled{opacity:.5;cursor:default}
+.note-assistant .note-assistant-trigger{border-color:transparent;background:transparent;color:var(--ep-accent,#2b5a8c)}
+.note-assistant .note-assistant-trigger:hover,.note-assistant .note-assistant-trigger[aria-expanded=true]{background:var(--ep-accent-soft,#edf3f9)}
+.note-assistant-panel{border:1px solid var(--ep-border,#dce1e7);border-radius:7px;background:var(--ep-surface,#fff);padding:12px;margin:3px 0 8px;min-width:0}
+.note-assistant-panel>header,.note-assistant-result-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.note-assistant-panel>header>button{margin-left:auto;padding:3px;border:0}
+.note-assistant-options{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.note-assistant-options>div{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1;font-size:11px;color:var(--ep-text-3,#7a8490)}
+.note-assistant-options select{width:100%;max-width:100%;min-width:0;padding:5px 7px;border:1px solid var(--ep-border,#dce1e7);border-radius:5px;background:var(--ep-surface,#fff);color:var(--ep-text,#27313a);font-size:12px;height:30px}
+.note-assistant-presets{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.note-assistant-presets button[aria-pressed=true]{color:var(--ep-accent,#2b5a8c);border-color:var(--ep-accent,#2b5a8c);background:var(--ep-accent-soft,#edf3f9)}
+/* Keep host editor rules from turning the assistant prompt into a full-height note. */
+#root .note-assistant-panel>textarea,.reader-shell .note-assistant-panel>textarea{display:block;width:100%;height:auto;min-height:62px;max-height:160px;resize:vertical;margin:0 0 8px;border:1px solid var(--ep-border,#dce1e7);border-radius:5px;padding:7px 9px;font:inherit;font-size:12px;line-height:1.6;color:var(--ep-text,#27313a);background:var(--ep-surface,#fff);box-shadow:none;flex:none}
+.note-assistant-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px}
+.note-assistant-controls>span{display:inline-flex;align-items:center;gap:5px;color:var(--ep-text-3,#7a8490)}
+.note-assistant .note-assistant-primary{background:var(--ep-accent,#2b5a8c);border-color:var(--ep-accent,#2b5a8c);color:#fff}
+.note-assistant-error{font-size:12px;line-height:1.6;color:var(--ep-warning,#99651c);margin:8px 0}
+.note-assistant-status{margin:8px 0;color:var(--ep-text-3,#7a8490)}
+.note-assistant-result{border-top:1px solid var(--ep-border,#dce1e7);margin-top:12px;padding-top:12px;min-width:0}
+.note-assistant-result-bar{flex-wrap:wrap;margin-bottom:8px}
+.note-assistant-result-bar small{color:var(--ep-text-3,#7a8490);font-size:11px}
+.note-assistant-result-bar button{margin-left:auto}
+.note-assistant-result details{font-size:12px;margin-bottom:8px}
+.note-assistant-result summary{cursor:pointer;color:var(--ep-text-2,#576270)}
+.note-assistant-result pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-family:var(--ep-mono,monospace);line-height:1.7;margin:8px 0}
+.note-assistant-preview{max-height:300px;overflow:auto;padding:10px;background:var(--ep-surface-2,#f7f8fa);border-radius:5px;font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+.note-assistant-preview>:first-child{margin-top:0}
+.note-assistant-preview>:last-child{margin-bottom:0}
+.note-assistant-preview :is(h1,h2,h3){font-size:15px;line-height:1.5}
+.reader-notes-area>.research-text-editor{flex:1;min-height:0;overflow-y:auto}
+.reader-notes-area>.research-text-editor>.note-assistant{padding:4px 12px}
+.topic-idea-composer>.research-text-editor{align-self:stretch}
+.day-field .research-text-editor>.note-assistant{order:2}
+.day-field .note-assistant-bar{min-height:24px}

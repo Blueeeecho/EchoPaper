@@ -82,8 +82,8 @@ test('project optimistic writes reject competing stale settings inside the proje
   try{
     const results=await Promise.all(['First editor','Second editor'].map(title=>app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{title,expectedUpdatedAt:project.updatedAt}})));
     assert.deepEqual(results.map(r=>r.statusCode).sort(),[200,409]);const success=results.find(r=>r.statusCode===200)!.json(),conflict=results.find(r=>r.statusCode===409)!.json();assert.equal(conflict.current.title,success.title);assert.equal(conflict.current.updatedAt,success.updatedAt);
-    let response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{stage:'polishing'}});assert.equal(response.statusCode,200,response.body);
-    response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{title:'Stale cannot win',expectedUpdatedAt:success.updatedAt}});assert.equal(response.statusCode,409,response.body);assert.equal(response.json().current.stage,'polishing');
+    let response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{stage:'rebuttal'}});assert.equal(response.statusCode,200,response.body);
+    response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{title:'Stale cannot win',expectedUpdatedAt:success.updatedAt}});assert.equal(response.statusCode,409,response.body);assert.equal(response.json().current.stage,'rebuttal');
     response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{title:'Resolved',expectedUpdatedAt:response.json().current.updatedAt}});assert.equal(response.statusCode,200,response.body);
     response=await app.inject({method:'PATCH',url:'/api/projects/Deadline',payload:{expectedUpdatedAt:13}});assert.equal(response.statusCode,400,response.body);
   }finally{await app.close();await fs.rm(root,{recursive:true,force:true});}

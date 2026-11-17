@@ -8,3 +8,13 @@ export function submissionSeverity(diagnostic:Diagnostic):Diagnostic['severity']
  if(diagnostic.category==='compile'&&diagnostic.severity==='warning'&&/not found|can(?:not|'t) find|does not exist|missing (?:file|character)|undefined control sequence|invalid|failed to (?:load|include)|font.*not (?:available|loadable)/i.test(diagnostic.message))return 'error';
  return diagnostic.severity;
 }
+
+/** Local editing is verified separately from submission readiness. */
+export function taskBuildErrors(diagnostics:Diagnostic[],baseline?:Diagnostic[]):Diagnostic[]{
+ const key=(value:Diagnostic)=>JSON.stringify([value.category,value.file,value.message]);
+ const existing=baseline&&new Set(baseline.map(key));
+ return diagnostics.filter(value=>value.category!=='placeholder' && (
+  value.severity==='error' || value.category==='compile'&&submissionSeverity(value)==='error' ||
+  value.category==='reference'&&submissionSeverity(value)==='error'&&!!existing&&!existing.has(key(value))
+ ));
+}

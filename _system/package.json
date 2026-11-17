@@ -9,7 +9,6 @@
     "dev": "vite --host 127.0.0.1",
     "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
     "doctor": "node scripts/check-workspace.mjs",
-    "qa:real": "node scripts/qa-real.mjs",
     "cli": "node scripts/echopaper.mjs"
   },
   "dependencies": {

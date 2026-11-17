@@ -7,10 +7,11 @@ import{HttpError,registeredRoot}from'./security';
 import{TRANSLATION_SERVICES,TRANSLATION_SERVICES_REVIEWED}from'../shared/translation-services';
 import{MAX_TRANSLATION_SELECTION,translationCharacterCount,translationLengthMessage}from'../shared/translation-limits';
 
-export interface ServiceTranslation{text:string;target:'zh-CN'|'en';source:'tex'|'pdf';sourceLanguage?:'auto'|'zh-CN'|'en'}
+export interface ServiceTranslation{text:string;context?:string;target:'zh-CN'|'en';source:'tex'|'pdf';sourceLanguage?:'auto'|'zh-CN'|'en'}
 const failure=(message:string)=>new HttpError(502,message,{error:message});
 export function validateServiceTranslation(input:any):asserts input is ServiceTranslation{
  if(!input||typeof input!=='object'||Array.isArray(input))throw new HttpError(400,'翻译请求格式无效，请刷新页面后重试。');
+ if(input.context!==undefined&&(typeof input.context!=='string'||input.context.length>9000))throw new HttpError(400,'翻译上下文格式无效或过长。');
  if(typeof input.text!=='string')throw new HttpError(400,'翻译原文格式无效，请重新选择文字。');
  if(!input.text.trim())throw new HttpError(400,'请先选择需要翻译的文字。');
  const count=translationCharacterCount(input.text);if(count>MAX_TRANSLATION_SELECTION)throw new HttpError(400,translationLengthMessage(count),{field:'text',actualCharacters:count,maxCharacters:MAX_TRANSLATION_SELECTION});
@@ -27,7 +28,7 @@ export function shieldTex(text:string){
 /** Baidu's standard account is conservative: split below 1000 characters/bytes, never within a protected token. */
 export function translationChunks(text:string,maxBytes:number){const pieces=text.match(/EPX[a-f0-9]{32}X\d+X|[^]/gu)||[],result:string[]=[];let chunk='';for(const piece of pieces){if(Buffer.byteLength(chunk+piece)>maxBytes&&chunk){const breaks=[...chunk.matchAll(/[\s.!?。！？；;]/gu)],boundary=breaks.at(-1),end=boundary?boundary.index!+boundary[0].length:0;if(end>chunk.length/2){result.push(chunk.slice(0,end));chunk=chunk.slice(end);}else{result.push(chunk);chunk='';}}chunk+=piece;}if(chunk)result.push(chunk);return result;}
 async function responseJson(response:Response){
- if(!response.ok){await response.body?.cancel();throw failure(response.status===429?'翻译服务限流或额度不足，请检查账户后重试。':[401,403].includes(response.status)?'翻译服务认证失败，请检查密钥、套餐和区域。':response.status===456?'DeepL 额度已耗尽，请检查 API 账户。':`翻译服务返回 HTTP ${response.status}，请检查服务控制台。`);}
+ if(!response.ok){await response.body?.cancel();const message=response.status===429?'翻译服务限流或额度不足，请检查账户后重试。':[401,403].includes(response.status)?'翻译服务认证失败，请检查密钥、套餐和区域。':response.status===456?'DeepL 额度已耗尽，请检查 API 账户。':`翻译服务返回 HTTP ${response.status}，请检查服务控制台。`;throw new HttpError(response.status===429?429:502,message,{error:message});}
  const reader=response.body?.getReader();if(!reader)throw failure('翻译服务没有返回内容。');const parts:Uint8Array[]=[];let size=0;
  try{while(true){const{done,value}=await reader.read();if(done)break;size+=value.length;if(size>1024*1024)throw failure('翻译服务返回内容过大。');parts.push(value);}return JSON.parse(Buffer.concat(parts).toString('utf8'));}catch(error){if(error instanceof HttpError)throw error;throw failure('翻译服务返回格式无效或连接中断，请重试。');}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
@@ -41,7 +42,7 @@ export async function translateWithService(provider:ModelProvider,model:Provider
  try{for(const[index,text]of parts.entries()){signal.throwIfAborted();let url=provider.baseUrl,body:unknown,headers:Record<string,string>={'Content-Type':'application/json'};
   const from=input.sourceLanguage||'auto',to=input.target;
   switch(provider.kind){
-   case'deepl':url+='/translate';headers.Authorization='DeepL-Auth-Key '+key;body={text:[text],target_lang:to==='zh-CN'?'ZH':'EN',...(from==='auto'?{}:{source_lang:from==='zh-CN'?'ZH':'EN'}),preserve_formatting:true};break;
+   case'deepl':url+='/translate';headers.Authorization='DeepL-Auth-Key '+key;body={...(input.context?{context:input.context}:{}),text:[text],target_lang:to==='zh-CN'?'ZH':'EN',...(from==='auto'?{}:{source_lang:from==='zh-CN'?'ZH':'EN'}),preserve_formatting:true};break;
    case'microsoft-translator':{const query=new URLSearchParams({'api-version':'3.0',to:to==='zh-CN'?'zh-Hans':'en',...(from==='auto'?{}:{from:from==='zh-CN'?'zh-Hans':'en'})});url+='/translate?'+query;headers['Ocp-Apim-Subscription-Key']=key;if(provider.region)headers['Ocp-Apim-Subscription-Region']=provider.region;body=[{Text:text}];break;}
    case'baidu-translate':{await baiduRateLimit(provider,signal);url+='/translate';const salt=randomUUID();headers['Content-Type']='application/x-www-form-urlencoded';body=new URLSearchParams({q:text,from:from==='zh-CN'?'zh':from,to:to==='zh-CN'?'zh':'en',appid:provider.appId!,salt,sign:baiduSignature(provider.appId!,text,salt,key)});break;}
    case'niutrans':url+='/translation';headers['Content-Type']='application/x-www-form-urlencoded';body=new URLSearchParams({from:from==='zh-CN'?'zh':from,to:to==='zh-CN'?'zh':'en',apikey:key,src_text:text});break;

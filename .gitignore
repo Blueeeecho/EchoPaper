@@ -1,3 +1,41 @@
+# Public source checkout: only reviewed top-level entries are eligible.
+/*
+!/.gitignore
+!/AGENTS.md
+!/README.md
+!/SHARING_NOTES.md
+!/VERIFICATION.md
+!/启动工作台.command
+!/停止工作台.command
+!/_system/
+!/shared/
+!/papers/
+!/workspace/
+!/archive/
+!/backups/
+
+/_system/*
+!/_system/.gitignore
+!/_system/package.json
+!/_system/package-lock.json
+!/_system/index.html
+!/_system/tsconfig.json
+!/_system/vite.config.ts
+!/_system/src/
+!/_system/server/
+!/_system/shared/
+!/_system/tests/
+!/_system/scripts/
+!/_system/docs/
+!/_system/native/
+/_system/src/qa/
+/_system/tests/fixtures/
+
+/shared/*
+!/shared/templates/
+!/shared/checklists/
+!/shared/presentation-styles/
+
 .DS_Store
 ._*
 **/.env
@@ -5,6 +43,17 @@
 !**/.env.example
 **/*.pem
 **/*.key
+**/*.p12
+**/*.pfx
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.db-*
+**/*.log
+**/*.zip
+**/*.pdf
+**/*.docx
+**/*.xlsx
 **/node_modules/
 **/__pycache__/
 **/*.pyc
@@ -36,7 +85,7 @@ papers/DEMO/notes/*
 **/test-results/
 **/playwright-report/
 
-# The checksum manifest belongs to the downloadable ZIP, which includes built assets.
+# Build and packaging manifests are local verification artifacts.
 SHA256SUMS.txt
 
 # Synthetic output produced by compiler regression fixtures.

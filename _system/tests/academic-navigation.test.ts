@@ -18,3 +18,15 @@ test('selected presentation template and version survive navigation and refresh 
  for(const path of ['/presentations?style=hzau-clean','/presentations?style=../outside&version=1.0.0'])assert.deepEqual(academicRoute(path),{section:'presentations'});
  assert.equal(academicRoute('/presentations/ppt-one?style=other&version=1.0.0').styleId,undefined);
 });
+test('research search and topic scope survive URL round trips together',()=>{
+ for(const section of ['library','topics','experiments','results','progress','home']){
+  const initial=academicRoute(`/${section}?q=multi%20agent%20%26%20evidence&topic=topic-b`);
+  const restored=academicRoute(academicPath(initial));
+  assert.deepEqual(restored,initial);
+  assert.equal(restored.topicId,'topic-b');
+  assert.equal(restored.search,'multi agent & evidence');
+ }
+ assert.equal(academicPath(academicRoute('/library?q=method&topic=topic-b')),'/library?q=method&topic=topic-b');
+ assert.equal(academicPath(academicRoute('/library?topic=topic-b')),'/library?topic=topic-b');
+ assert.equal(academicRoute(academicPath(academicRoute('/library?q=method&topic=..%2Foutside'))).topicId,undefined);
+});

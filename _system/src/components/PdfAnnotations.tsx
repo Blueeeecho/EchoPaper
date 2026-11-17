@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bold, Highlighter, Italic, MessageSquarePlus, X, Trash2, Check } from 'lucide-react';
+import { Bold, Highlighter, Italic, MessageSquarePlus, MessageSquareText, X, Trash2, Check } from 'lucide-react';
 import type { PdfAnnotation, PdfAnnotationKind, PdfAnnotationSource, PdfAnnotationStatus, WorkspaceEvent } from '../../shared/types';
 import { api, ApiError, json, prettyDate } from '../api';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { findMigrationCandidates, type MigrationCandidate } from '../annotationMigration';
 import '../annotations-workflow.css';
 import { capturePdfSelection, type PdfTextSelection } from '../pdfSelection';
+import type { WritingQuote } from '../selectionContext';
 
 type AnnotationSelection = Omit<PdfTextSelection, 'startOffset' | 'endOffset'> & Partial<Pick<PdfTextSelection, 'startOffset' | 'endOffset'>>;
 type AnnotationDraft = { buildId: string; targetId: string; selection?: AnnotationSelection; existing?: PdfAnnotation; comment: string };
@@ -32,7 +33,7 @@ export function PdfAnnotationMarks({ annotations, activeId, onOpen, pageHeight }
   return <div className="pdf-annotation-marks" aria-label="本页阅读标记">{annotations.map((a, index) => <div key={a.id}>{a.rects.map((rect, i) => <span key={i} className={`pdf-annotation-rect ${a.kind} ${activeId === a.id ? 'active' : ''}`} style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%` }}/>) }{a.kind === 'comment' && <button type="button" className={`pdf-inline-note ${activeId === a.id ? 'active' : ''}`} style={{ left: `${Math.min(.94, a.rects[0].x + a.rects[0].width) * 100}%`, top: `${a.rects[0].y * 100}%` }} onClick={() => onOpen(a)} aria-label={`打开文字备注 ${a.comment}`} title={a.comment}><MessageSquarePlus size={17}/></button>}<button type="button" className={`pdf-annotation-pin ${a.kind} ${activeId === a.id ? 'active' : ''}`} style={{ top: positions.get(a.id) }} onClick={() => onOpen(a)} aria-label={`${labels[a.kind]}：${a.comment || a.quote}`} title={`批注 ${index + 1} · ${labels[a.kind]}${a.comment ? `：${a.comment}` : ''}`}><small>{a.kind === 'bold' ? 'B' : a.kind === 'italic' ? 'I' : a.kind === 'comment' ? <MessageSquarePlus size={10}/> : <Highlighter size={10}/>}</small><span>{index + 1}</span></button></div>)}</div>;
 }
 
-export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage, pdf, onNavigateSource, onViewBuild }: { projectId: string; targetId: string; buildId?: string; root: React.RefObject<HTMLDivElement | null>; goToPage: (page: number, y?: number) => void; pdf?: PDFDocumentProxy; onNavigateSource?: (path: string, line: number) => void; onViewBuild?: (buildId: string) => void }) {
+export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage, pdf, onNavigateSource, onViewBuild, onAddToChat }: { projectId: string; targetId: string; buildId?: string; root: React.RefObject<HTMLDivElement | null>; goToPage: (page: number, y?: number) => void; pdf?: PDFDocumentProxy; onNavigateSource?: (path: string, line: number) => void; onViewBuild?: (buildId: string) => void; onAddToChat?: (quote: WritingQuote) => void }) {
   const draftKey = `echopaper:pdf-note-draft:${projectId}:${targetId}:v1`;
   const [draft, setDraft] = useState<AnnotationDraft | undefined>(() => restoreDraft(draftKey, targetId));
   const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
@@ -75,13 +76,15 @@ export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage
   useEffect(() => {
     if (!menu) return;
     const dismiss = (e: KeyboardEvent | PointerEvent) => { if (e instanceof KeyboardEvent && e.key !== 'Escape') return; if (e.target instanceof Element && e.target.closest('.pdf-selection-menu')) return; setMenu(undefined); };
+    const closeMenu = () => setMenu(undefined);
     window.addEventListener('pointerdown', dismiss); window.addEventListener('keydown', dismiss);
-    return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', dismiss); };
+    window.addEventListener('echopaper:selection-menu-open', closeMenu);
+    return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', dismiss); window.removeEventListener('echopaper:selection-menu-open', closeMenu); };
   }, [menu]);
   const current = useMemo(() => annotations.filter(a => a.buildId === buildId), [annotations, buildId]);
   const older = useMemo(() => annotations.filter(a => a.buildId !== buildId), [annotations, buildId]);
   const onContextMenu = (e: React.MouseEvent) => {
-    if (!root.current || !buildId) return;
+    if (e.defaultPrevented || e.ctrlKey || !root.current || !buildId) return;
     let selection: AnnotationSelection | null = capturePdfSelection(root.current, window.getSelection());
     if (!selection) {
       // A collapsed selection can anchor a free-position note on this page.
@@ -95,7 +98,8 @@ export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage
       selection = { page: Number(sheet.closest<HTMLElement>('[data-page]')?.dataset.page), quote: '', rects: [{ x, y, width: .015, height: .012 }] };
     }
     e.preventDefault(); setError('');
-    setMenu({ selection, x: Math.max(8, Math.min(e.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(e.clientY, window.innerHeight - 255)) });
+    window.dispatchEvent(new Event('echopaper:selection-menu-open'));
+    setMenu({ selection, x: Math.max(8, Math.min(e.clientX, window.innerWidth - 220)), y: Math.max(8, Math.min(e.clientY, window.innerHeight - (onAddToChat ? 300 : 255))) });
   };
   function discardDraft() {
     setDraft(undefined);
@@ -186,7 +190,7 @@ export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage
       </article>)}
     </div>
   </aside>;
-  const contextMenu = menu && createPortal(<div className="pdf-selection-menu" role="menu" aria-label="PDF 选区批注" style={{ left: menu.x, top: menu.y }} onMouseDown={e => e.preventDefault()}><div>PDF 阅读标记 · 不改正文</div>{migration?.manual && <button role="menuitem" onClick={() => { const candidate: MigrationCandidate = { ...menu.selection, startOffset: menu.selection.startOffset ?? 0, endOffset: menu.selection.endOffset ?? 1, match: 'normalized', context: menu.selection.quote || '手动位置备注' }; setMigration({ ...migration, candidates: [candidate], selected: 0 }); setMenu(undefined); setActiveId('migration-preview'); }}>关联此选区</button>}<button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('bold')}><Bold size={15}/>加粗标记</button><button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('italic')}><Italic size={15}/>斜体标记</button><button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('highlight')}><Highlighter size={15}/>标黄</button><button role="menuitem" disabled={busy} onClick={() => add('comment')}><MessageSquarePlus size={15}/>添加文字备注</button>{error && <p role="alert">{error}</p>}</div>, document.body);
+  const contextMenu = menu && createPortal(<div className="pdf-selection-menu" role="menu" aria-label="PDF 选区操作" style={{ left: menu.x, top: menu.y }} onMouseDown={e => e.preventDefault()}><div>选区操作</div>{onAddToChat && menu.selection.quote.trim() && <button role="menuitem" onClick={() => { const quote: WritingQuote = { id: Date.now(), projectId, source: 'pdf', text: menu.selection.quote, buildId, page: menu.selection.page }; setMenu(undefined); onAddToChat(quote); }}><MessageSquareText size={15}/>添加到 AI 对话</button>}{migration?.manual && <button role="menuitem" onClick={() => { const candidate: MigrationCandidate = { ...menu.selection, startOffset: menu.selection.startOffset ?? 0, endOffset: menu.selection.endOffset ?? 1, match: 'normalized', context: menu.selection.quote || '手动位置备注' }; setMigration({ ...migration, candidates: [candidate], selected: 0 }); setMenu(undefined); setActiveId('migration-preview'); }}>关联此选区</button>}<button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('bold')}><Bold size={15}/>加粗标记</button><button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('italic')}><Italic size={15}/>斜体标记</button><button role="menuitem" disabled={busy || !menu.selection.quote.trim()} onClick={() => add('highlight')}><Highlighter size={15}/>标黄</button><button role="menuitem" disabled={busy} onClick={() => add('comment')}><MessageSquarePlus size={15}/>添加文字备注</button>{error && <p role="alert">{error}</p>}</div>, document.body);
   return { current: displayCurrent, activeId, show, onContextMenu, panel, contextMenu, toggle: () => setOpen(value => !value), count: current.length, open };
 }
 

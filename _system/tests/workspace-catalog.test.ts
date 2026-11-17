@@ -54,6 +54,34 @@ test('resource index searches file names, text and tags, lists parents and valid
   }finally{await f.close();}
 });
 
+test('library categories return separate files and scoped counts before pagination',async()=>{
+ const f=await fixture();try{
+  await fs.mkdir(path.join(f.source,'cards'));
+  await fs.writeFile(path.join(f.source,'paper.pdf'),'%PDF-invalid fixture');
+  await fs.writeFile(path.join(f.source,'cards/B01.md'),'Shared keyword in a reading card');
+  await fs.writeFile(path.join(f.source,'整体分析报告.md'),'Shared keyword in a synthesis');
+  await fs.writeFile(path.join(f.source,'references.bib'),'@article{evidence,title={Shared keyword}}');
+  await fs.writeFile(path.join(f.source,'library.csv'),'title\nShared keyword');
+  const root=await f.connect();
+  const expected={paper:1,note:1,summary:1,other:2};
+  for(const group of ['paper','note','summary','other']){
+   const page=await f.call('GET',`/api/workspace/resources?rootId=${root.id}&group=${group}&limit=1`);
+   assert.equal(page.total,expected[group as keyof typeof expected]);
+   assert.deepEqual(page.groupCounts,expected);assert.equal(page.resources.length,1);
+   assert.ok(page.resources.every((item:any)=>item.kind==='file'));
+  }
+  const all=await f.call('GET','/api/workspace/resources');
+  assert.equal(all.total,6);assert.ok(all.resources.some((item:any)=>item.kind==='directory'));
+  const note=all.resources.find((item:any)=>item.name==='B01.md');
+  const summary=all.resources.find((item:any)=>item.name==='整体分析报告.md');
+  const topic=await f.call('POST','/api/workspace/topics',{title:'Categorized topic',resourceIds:[note.id,summary.id]},201);
+  const scoped=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&group=summary&q=Shared`);
+  assert.deepEqual(scoped.groupCounts,{paper:0,note:1,summary:1,other:0});
+  assert.deepEqual(scoped.resources.map((item:any)=>item.id),[summary.id]);
+  await f.call('GET','/api/workspace/resources?group=invalid',undefined,400);
+ }finally{await f.close();}
+});
+
 test('offline roots retain resource metadata and recover on explicit rescan',async()=>{
   const f=await fixture();try{
     await fs.writeFile(path.join(f.source,'keep.md'),'not deleted');const root=await f.connect();const before=(await f.call('GET','/api/workspace/resources')).resources[0];
@@ -120,6 +148,14 @@ test('relink protects an otherwise untagged resource already used by a presentat
   }finally{await f.close();}
 });
 
+test('relink protects an otherwise untagged resource with independent reading notes',async()=>{
+  const f=await fixture();try{
+    await fs.writeFile(path.join(f.source,'old.txt'),'original');const root=await f.connect(),original=(await f.call('GET','/api/workspace/resources')).resources[0];await fs.rename(path.join(f.source,'old.txt'),path.join(f.source,'new.txt'));await f.call('POST',`/api/workspace/roots/${root.id}/scan`,{},202);await f.settle(root.id);
+    const target=(await f.call('GET','/api/workspace/resources')).resources.find((r:any)=>r.path==='new.txt'),missing=await f.call('GET',`/api/workspace/resources/${original.id}`),folder=path.join(f.root,'workspace/reading');await fs.mkdir(folder,{recursive:true});await fs.writeFile(path.join(folder,target.id+'.json'),JSON.stringify({version:1,resourceId:target.id,content:'retain this note',notes:[]}));
+    await f.call('POST',`/api/workspace/resources/${original.id}/relink`,{rootId:root.id,path:'new.txt',expectedRevision:missing.revision},409);assert.equal((await f.call('GET',`/api/workspace/resources/${target.id}`)).id,target.id);
+  }finally{await f.close();}
+});
+
 test('PDF resources expose extracted text and an inline PDF stream',async()=>{
   const f=await fixture();try{
     const{PDFDocument,StandardFonts}=await import('pdf-lib'),document=await PDFDocument.create(),page=document.addPage(),font=await document.embedFont(StandardFonts.Helvetica);page.drawText('Verified probability tree',{font,size:16});await fs.writeFile(path.join(f.source,'evidence.pdf'),await document.save());await f.connect();
@@ -136,4 +172,38 @@ test('an explicitly connected root indexes later external edits through its watc
 
 test('overview recent resources are ordered by actual modification time',async()=>{
   const f=await fixture();try{await fs.writeFile(path.join(f.source,'a-old.txt'),'old');await fs.writeFile(path.join(f.source,'z-recent.txt'),'recent');await fs.utimes(path.join(f.source,'a-old.txt'),new Date('2020-01-01T00:00:00Z'),new Date('2020-01-01T00:00:00Z'));await fs.utimes(path.join(f.source,'z-recent.txt'),new Date('2026-01-01T00:00:00Z'),new Date('2026-01-01T00:00:00Z'));await f.connect();assert.equal((await f.service.overview()).resources[0].name,'z-recent.txt');}finally{await f.close();}
+});
+
+test('library priorities are applied before pagination and keep original file names',async()=>{
+ const f=await fixture();try{
+  for(const number of [1,2,10])await fs.writeFile(path.join(f.source,`${number}_Paper ${number}.pdf`),'fixture');
+  await f.connect();
+  const papers=(await f.call('GET','/api/workspace/resources?group=paper')).resources;
+  const last=papers.find((item:any)=>item.name==='10_Paper 10.pdf');
+  const topic=await f.call('POST','/api/workspace/topics',{title:'Priority list',resourceIds:papers.map((item:any)=>item.id)},201);
+  await fs.mkdir(path.join(f.root,'workspace/topic-notebooks'),{recursive:true});
+  await fs.writeFile(path.join(f.root,'workspace/topic-notebooks',topic.id+'.json'),JSON.stringify({version:1,topicId:topic.id,ideas:[],keyRefs:[{resourceId:last.id,note:'',addedAt:'2026-11-13T00:00:00Z'}]}));
+  const first=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&group=paper&starredFirst=true&limit=1`);
+  assert.equal(first.total,3);assert.equal(first.resources[0].name,'10_Paper 10.pdf');
+  const second=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&group=paper&starredFirst=true&limit=1&offset=1`);
+  assert.equal(second.resources[0].name,'1_Paper 1.pdf');
+  const natural=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&group=paper&limit=1`);
+  assert.equal(natural.resources[0].name,'1_Paper 1.pdf');
+  const searched=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&group=paper&q=Paper&starredFirst=true&limit=1`);
+  assert.equal(searched.resources[0].id,last.id);
+ }finally{await f.close();}
+});
+
+test('library notes can sort newest first across pages and reject invalid sorting options',async()=>{
+ const f=await fixture();try{
+  await fs.writeFile(path.join(f.source,'a-old.md'),'older note');
+  await fs.writeFile(path.join(f.source,'z-new.md'),'newer note');
+  await fs.utimes(path.join(f.source,'a-old.md'),new Date('2026-01-01'),new Date('2026-01-01'));
+  await fs.utimes(path.join(f.source,'z-new.md'),new Date('2026-11-13'),new Date('2026-11-13'));
+  await f.connect();
+  const page=await f.call('GET','/api/workspace/resources?group=note&sort=recent&limit=1');
+  assert.equal(page.resources[0].name,'z-new.md');assert.equal(page.total,2);
+  await f.call('GET','/api/workspace/resources?sort=unexpected',undefined,400);
+  await f.call('GET','/api/workspace/resources?starredFirst=unexpected',undefined,400);
+ }finally{await f.close();}
 });

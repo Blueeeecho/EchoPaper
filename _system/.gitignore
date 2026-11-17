@@ -1,0 +1,39 @@
+# Dependencies and build output
+node_modules/
+dist/
+
+# Runtime data, logs, databases
+runtime/
+*.log
+!tests/fixtures/*.log
+*.sqlite
+*.sqlite-*
+*.db
+instance.json
+
+# Generated / QA artifacts
+qa/
+output/
+test-results/
+playwright-report/
+.playwright-cli/
+coverage/
+.vite/
+.cache/
+*.tsbuildinfo
+--version/
+
+# Vendored copy of pdfjs-dist (copied from node_modules by vite.config.ts)
+public/pdfjs/
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+*secret*
+*credential*
+*token*
+
+# OS
+.DS_Store

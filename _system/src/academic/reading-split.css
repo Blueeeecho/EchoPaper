@@ -1,0 +1,9 @@
+.reading-split{display:grid;min-width:0;min-height:0}
+.reading-split>.reading-divider{position:relative;align-self:stretch;justify-self:stretch;min-width:0;min-height:0;background:var(--r-surface-2,var(--ep-surface-2,#f3f4f5));cursor:col-resize;touch-action:none;user-select:none;z-index:2;outline:0}
+.reading-split>.reading-divider[hidden]{display:none}
+.reading-split>.reading-divider>span{position:absolute;inset:0 3px;background:var(--r-border,var(--ep-border,#dce1e7));transition:background .12s}
+.reading-split>.reading-divider:before{content:"";position:absolute;left:2px;right:2px;top:calc(50% - 18px);height:36px;border-radius:3px;background:var(--r-border-strong,var(--ep-border-strong,#c4ccd5));z-index:1}
+.reading-split>.reading-divider:is(:hover,:focus-visible,:active)>span,.reading-split>.reading-divider:is(:hover,:focus-visible,:active):before{background:var(--r-accent,var(--ep-accent,#2b5a8c))}
+.reading-split>.reading-divider[aria-orientation=horizontal]{cursor:row-resize}
+.reading-split>.reading-divider[aria-orientation=horizontal]>span{inset:3px 0}
+.reading-split>.reading-divider[aria-orientation=horizontal]:before{top:2px;bottom:2px;left:calc(50% - 18px);width:36px;height:auto}

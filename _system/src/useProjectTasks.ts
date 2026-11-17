@@ -39,7 +39,9 @@ export function useProjectTasks(projectId: string): ProjectTasks {
   const [runs, setRuns] = useState<AgentRun[]>([]), [details, setDetails] = useState<Record<string, AgentRunDetail>>({});
   const [selectedId, setSelectedId] = useState(''), [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState('');
-  const current = useRef({ projectId, selectedId }); current.current = { projectId, selectedId };
+  const [listedProject,setListedProject]=useState('');
+  const restoredSelection=useRef({projectId:'',id:''});
+  const current = useRef({ projectId, selectedId,hasActive:false }); current.current = { projectId, selectedId,hasActive:runs.some(run=>['queued','running','cancelling','waiting_confirmation'].includes(run.status)) };
   const pendingDetails = useRef(new Map<string, Promise<void>>());
   const base = '/api/projects/' + encodeURIComponent(projectId) + '/agent-runs';
   const selectionKey = 'echopaper:agent-selection:' + projectId;
@@ -53,8 +55,14 @@ export function useProjectTasks(projectId: string): ProjectTasks {
     const result = await api<{ runs: AgentRun[] }>(base);
     if (current.current.projectId !== projectId) return;
     setRuns(previous => mergeTaskRuns(previous, result.runs));
-    setSelectedId(previous => result.runs.some(run => run.id === previous) ? previous : result.runs[0]?.id || '');
-  }, [projectId, base]);
+    setListedProject(projectId);
+    setSelectedId(previous => {
+      const restored=restoredSelection.current.projectId===projectId?restoredSelection.current.id:'';
+      const id=result.runs.some(run=>run.id===previous)?previous:result.runs.some(run=>run.id===restored)?restored:result.runs[0]?.id||'';
+      try{localStorage.setItem(selectionKey,id);}catch{}
+      return id;
+    });
+  }, [projectId, base,selectionKey]);
   const refreshDetail = useCallback(async (id: string) => {
     if (!id || !projectId) return;
     const key = projectId + ':' + id, pending = pendingDetails.current.get(key);
@@ -71,7 +79,9 @@ export function useProjectTasks(projectId: string): ProjectTasks {
   useEffect(() => {
     setRuns([]); setDetails({}); setError(''); setBusy(''); setConnected(false);
     let restored = ''; try { restored = localStorage.getItem(selectionKey) || ''; } catch {}
-    setSelectedId(restored); setLoading(!!projectId);
+    // A cached ID is only a preference. Validate it against this project's
+    // current list before opening its detail stream or requesting its body.
+    restoredSelection.current={projectId,id:restored};setSelectedId('');setListedProject('');setLoading(!!projectId);
     let active = true;
     void refresh().catch(e => { if (active) setError(e.message); }).finally(() => { if (active) setLoading(false); });
     if (!projectId) return () => { active = false; };
@@ -79,10 +89,14 @@ export function useProjectTasks(projectId: string): ProjectTasks {
     events.onopen = () => { if (active) { setConnected(true); void refresh().catch(() => {}); } };
     events.onerror = () => { if (active) setConnected(false); };
     events.onmessage = event => { try { const value = JSON.parse(event.data); if (value.type === 'agent.updated' && value.projectId === projectId) { void refresh().catch(() => {}); if (value.runId) void refreshDetail(value.runId).catch(() => {}); } } catch {} };
-    return () => { active = false; events.close(); };
+    const recover=(force=false)=>{if(active&&document.visibilityState!=='hidden'&&(force||current.current.hasActive))void refresh().catch(()=>{});};
+    const recoveryTimer=setInterval(()=>recover(),5000),onReturn=()=>recover(true);
+    window.addEventListener('focus',onReturn);document.addEventListener('visibilitychange',onReturn);
+    return () => { active = false; events.close();clearInterval(recoveryTimer);window.removeEventListener('focus',onReturn);document.removeEventListener('visibilitychange',onReturn); };
   }, [projectId, selectionKey, refresh, refreshDetail]);
+  const selectedExists=listedProject===projectId&&runs.some(run=>run.id===selectedId);
   useEffect(() => {
-    if (!selectedId || !projectId) return;
+    if (!selectedId || !projectId || !selectedExists) return;
     let active = true, timer: ReturnType<typeof setTimeout> | undefined;
     const load = () => refreshDetail(selectedId).catch(e => { if (active) setError(e.message); });
     void load();
@@ -98,13 +112,13 @@ export function useProjectTasks(projectId: string): ProjectTasks {
       } catch { /* A malformed live event must not erase the authoritative snapshot. */ }
     };
     return () => { active = false; events.close(); clearTimeout(timer); };
-  }, [projectId, selectedId, base, refreshDetail]);
+  }, [projectId, selectedId, selectedExists,base, refreshDetail]);
   const create = useCallback(async (input: AgentCreateInput) => {
     setBusy('create'); setError('');
-    try { const run = unpackRun(await api<AgentRun | { run: AgentRun }>(base, json('POST', input))); if (current.current.projectId === projectId) { receive(run); select(run.id); } return run; }
+    try { const run = unpackRun(await api<AgentRun | { run: AgentRun }>(base, json('POST', input))); if (current.current.projectId === projectId) { receive(run); select(run.id); if(run.continuationOf)void refreshDetail(run.continuationOf).catch(()=>{}); } return run; }
     catch (e: any) { if (current.current.projectId === projectId) setError(e.message); throw e; }
     finally { if (current.current.projectId === projectId) setBusy(''); }
-  }, [base, projectId, receive, select]);
+  }, [base, projectId, receive, select,refreshDetail]);
   const action = useCallback(async (name: 'cancel' | 'resume' | 'decisions' | 'undo', body: unknown = {}, runId?: string) => {
     const id = runId || current.current.selectedId; if (!id) return;
     setBusy(name); setError('');

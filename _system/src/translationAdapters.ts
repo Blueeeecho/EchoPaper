@@ -1,9 +1,11 @@
 import {api,json} from './api';
 import type{TranslationLanguage} from './selectionTranslation';
-import type{PublicRegistry}from'../shared/model-providers';
-export interface TranslationContext{projectId:string;text:string;target:TranslationLanguage;source:'tex'|'pdf';sourceLanguage?:'auto'|TranslationLanguage}
+import {isTranslationService,type PublicRegistry} from '../shared/model-providers';
+export interface TranslationContext{projectId?:string;resourceId?:string;text:string;context?:string;target:TranslationLanguage;source:'tex'|'pdf';sourceLanguage?:'auto'|TranslationLanguage}
 export interface TranslationAdapter{
  id:string;label:string;model:string;color?:string;cacheVersion?:string;
+ /** 专用翻译服务（DeepL 除外）不接受上下文；通用模型可借助上下文统一术语。 */
+ supportsContext?:boolean;
  /** Adapters sharing a backend concurrency limit use the same queue key. */
  queueKey:string;
  translate:(context:TranslationContext,signal:AbortSignal,onText:(text:string)=>void)=>Promise<string>;
@@ -16,7 +18,21 @@ export async function streamTranslation(body:TranslationContext&{sourceId:string
  const line=(value:string)=>{if(!value.trim())return;const event=JSON.parse(value);if(event.type==='error')throw Error(event.error||'翻译失败。');if(event.type==='delta'){if(typeof event.text!=='string')throw Error('译文格式无效。');text+=event.text;onText(text);}if(event.type==='done'){if(event.finishReason!=='stop'||!text.trim())throw Error('译文未完整返回，请重试。');done=true;}};
  try{while(!done){const chunk=await reader.read();buffer+=decoder.decode(chunk.value,{stream:!chunk.done});let index:number;while((index=buffer.indexOf('\n'))>=0){line(buffer.slice(0,index));buffer=buffer.slice(index+1);if(done)break;}if(chunk.done){if(buffer.trim()&&!done)line(buffer);break;}}if(!done)throw Error('译文连接提前结束，请重试。');return text;}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
-export function configuredTranslationAdapters(config:PublicRegistry):TranslationAdapter[]{return config.translations.filter(source=>source.enabled).map(source=>{const model=config.models.find(m=>m.id===source.modelId),provider=config.providers.find(p=>p.id===model?.providerId);return{id:source.id,label:source.label,model:model?.label||'模型未配置',color:source.color,cacheVersion:model?.cacheVersion,queueKey:provider?.rateLimitGroup||provider?.id||source.id,translate:async(context,signal,onText)=>{if(!model||!provider||!model.configured)throw Error('此来源尚未启用或未配置密钥，请打开划词翻译设置。');return streamTranslation({...context,sourceId:source.id},signal,onText);}};});}
+export function configuredTranslationAdapters(config:PublicRegistry):TranslationAdapter[]{
+ return config.translations.filter(source=>source.enabled).map(source=>{
+  const model=config.models.find(item=>item.id===source.modelId);
+  const provider=config.providers.find(item=>item.id===model?.providerId);
+  const supportsContext=!!provider&&(!isTranslationService(provider)||provider.kind==='deepl');
+  return {
+   id:source.id,label:source.label,model:model?.label||'模型未配置',color:source.color,cacheVersion:model?.cacheVersion,
+   supportsContext,queueKey:provider?.rateLimitGroup||provider?.id||source.id,
+   translate:async(context,signal,onText)=>{
+    if(!model||!provider||!model.configured)throw Error('此来源尚未启用或未配置密钥，请打开划词翻译设置。');
+    return streamTranslation({...context,context:supportsContext?context.context:undefined,sourceId:source.id},signal,onText);
+   },
+  };
+ });
+}
 export async function loadTranslationAdapters(signal:AbortSignal):Promise<TranslationAdapter[]>{
  return configuredTranslationAdapters(await api<PublicRegistry>('/api/ai/providers',{signal}));
 }
@@ -28,12 +44,13 @@ export async function runTranslationAdapters(adapters:readonly TranslationAdapte
  await Promise.all(adapters.map(adapter=>{
   const task=(queues.get(adapter.queueKey)||Promise.resolve()).then(()=>slot(async()=>{
    if(signal.aborted)return;
-   const base={id:adapter.id,label:adapter.label,model:adapter.model,color:adapter.color},key=JSON.stringify([adapter.id,adapter.model,adapter.cacheVersion||'',context]);let text='';
+   const request=adapter.supportsContext===false?{...context,context:undefined}:context;
+   const base={id:adapter.id,label:adapter.label,model:adapter.model,color:adapter.color},key=JSON.stringify([adapter.id,adapter.model,adapter.cacheVersion||'',request]);let text='';
    const cached=bypassCache?undefined:cache.get(key);
    if(cached!==undefined){onCard({...base,text:cached,status:'done'});return;}
    onCard({...base,text,status:'loading'});
    try{
-    text=await adapter.translate(context,signal,value=>{text=value;if(!signal.aborted)onCard({...base,text,status:'loading'});});
+    text=await adapter.translate(request,signal,value=>{text=value;if(!signal.aborted)onCard({...base,text,status:'loading'});});
     if(signal.aborted)return;
     if(!text.trim())throw Error('译文为空，请重试。');
     cache.set(key,text);if(cache.size>60)cache.delete(cache.keys().next().value!);

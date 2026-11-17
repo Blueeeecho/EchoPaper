@@ -1,0 +1,249 @@
+/* 全文对照：原文一段、译文一段，图表公式按原样展示。配色沿用阅读器的变量。 */
+.bi-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--r-bg);container-type:inline-size}
+.bi-toolbar{flex:none;padding:4px 10px;background:var(--r-surface);border-bottom:1px solid var(--r-border);position:relative;z-index:4}
+.bi-main-controls{gap:8px;min-height:32px}
+.bi-zoom{display:inline-flex;align-items:center;gap:2px;flex:none;font-size:12px;color:var(--r-text-2)}
+.bi-zoom>span{margin-right:3px}
+.bi-zoom[data-active=true]>span{color:var(--r-accent)}
+.bi-zoom button{width:25px;height:28px;display:grid;place-items:center;border-radius:5px;color:var(--r-text-2)}
+.bi-zoom button:hover:not(:disabled){background:var(--r-surface-2);color:var(--r-accent)}
+.bi-zoom label{display:inline-flex;align-items:center;gap:1px}
+.bi-zoom input{width:35px;min-width:0;height:27px;min-height:27px;border:0;border-radius:4px;padding:2px 0;background:var(--r-surface-2);color:var(--r-text);text-align:center;font-size:12px;appearance:textfield}
+.bi-zoom input::-webkit-inner-spin-button,.bi-zoom input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.bi-cache-status{font-size:11px;color:var(--r-text-3);white-space:nowrap}
+.bi-settings{position:relative;flex:none}
+.bi-settings>summary{display:grid;place-items:center;width:30px;height:30px;border:1px solid var(--r-border);border-radius:6px;color:var(--r-text-2);cursor:pointer;list-style:none}
+.bi-settings>summary::-webkit-details-marker{display:none}
+.bi-settings[open]>summary{background:var(--r-accent-soft);color:var(--r-accent)}
+.bi-settings-panel{position:absolute;right:0;top:36px;width:min(540px,calc(100cqw - 20px));max-height:min(70dvh,520px);overflow:auto;display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:14px;background:var(--r-surface);border:1px solid var(--r-border-strong);border-radius:8px;box-shadow:0 8px 28px #14181f24}
+.bi-settings-panel .bi-stats{margin:0;line-height:1.6}
+.bi-settings-panel .bi-engines{flex-wrap:wrap}
+.bi-settings-panel input[type=range]{width:150px;accent-color:var(--r-accent)}
+.bi-settings-actions{display:flex;align-items:center;gap:10px;width:100%;justify-content:space-between}
+.bi-toolbar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:30px}
+.bi-toolbar-row.second{padding-top:5px;border-top:1px solid var(--r-border)}
+.bi-spacer{flex:1}
+.bi-modes{display:inline-flex;flex:none;background:var(--r-surface-2);border-radius:8px;padding:2px}
+.bi-modes button{padding:3px 8px;min-height:26px;border-radius:6px;font-size:12px;color:var(--r-text-2)}
+.bi-modes button[aria-pressed="true"]{background:var(--r-surface);color:var(--r-text);box-shadow:0 1px 2px rgba(0,0,0,.07)}
+.bi-check{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--r-text-2);cursor:pointer}
+.bi-stats{font-size:12px;color:var(--r-text-3)}
+.bi-primary{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 14px;border-radius:7px;background:var(--r-accent);color:#fff;font-size:13px}
+.bi-primary:hover:not(:disabled){background:var(--r-accent-hover)}
+.bi-primary.small{height:28px;padding:0 12px}
+.bi-stop{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:7px;border:1px solid var(--r-border-strong);font-size:13px;color:var(--r-text-2)}
+.bi-icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;border-radius:7px;color:var(--r-text-2)}
+.bi-icon:hover:not(:disabled){background:var(--r-surface-2);color:var(--r-text)}
+.bi-warn,.bi-notice,.bi-error{display:flex;align-items:center;gap:8px;margin:0;padding:8px 16px;font-size:13px}
+.bi-warn{background:var(--r-warn-soft);color:var(--r-warn)}
+.bi-notice{background:var(--r-accent-soft);color:var(--r-accent)}
+.bi-error{background:#fcefec;color:var(--r-danger)}
+.bi-warn button,.bi-notice button,.bi-error button{margin-left:auto;font-size:15px;line-height:1;opacity:.7}
+
+/* ---- 空状态与密钥配置 ---- */
+.bi-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;height:100%;padding:40px 24px;text-align:center;color:var(--r-text-2)}
+.bi-state p{margin:0;max-width:46ch;line-height:1.7}
+.bi-intro h2{margin:2px 0 0;font-size:17px;color:var(--r-text)}
+.bi-hint{font-size:12.5px;color:var(--r-text-3);max-width:46ch}
+.bi-key{display:flex;flex-direction:column;gap:8px;align-items:stretch;width:min(420px,100%);text-align:left;margin-top:4px}
+.bi-key label{font-size:12.5px;color:var(--r-text-2)}
+.bi-key input{height:34px;padding:0 10px;border:1px solid var(--r-border-strong);border-radius:7px;background:var(--r-surface);font:inherit;color:var(--r-text)}
+.bi-key .bi-primary{justify-content:center}
+
+/* ---- 正文 ---- */
+.bi-doc{--bi-content-width:1000px;--bi-gutter:24px;flex:1;min-height:0;overflow:auto;padding:22px 0 64px;scrollbar-gutter:stable;user-select:text}
+.bi-doc>*,.bi-title,.bi-skipped{max-width:var(--bi-content-width);margin-left:auto;margin-right:auto;padding-left:var(--bi-gutter);padding-right:var(--bi-gutter)}
+.bi-title{text-align:left;margin-bottom:20px}
+.bi-title h1{margin:0 0 8px;font-size:var(--bi-source-title,21px);line-height:1.4;font-weight:650;color:var(--r-text)}
+.bi-title>p{margin:0 0 12px;font-size:var(--bi-target-title,16px);line-height:1.5;font-weight:600;color:var(--r-text)}
+.bi-title .bi-meta{padding:0;margin:3px 0;font-size:12px;line-height:1.6;font-weight:400;color:var(--r-text-2);text-align:left}
+.bi-pair{margin:0 auto 14px}
+/* 正文两端对齐，段落末行自然收尾。 */
+.bi-orig,.bi-zh,.bi-ref,.bi-spread-p,.bi-spread-raw{text-align:justify;text-align-last:start;text-justify:auto;overflow-wrap:anywhere;hyphens:auto}
+.bi-pair.heading .bi-orig,.bi-pair.heading .bi-zh,.bi-spread-h,.bi-spread-raw.heading,.bi-meta,.bi-skip-note,.bi-waiting{text-align:start;text-align-last:auto;hyphens:manual}
+.bi-orig{margin:0;font-size:var(--bi-source-size,14px);line-height:1.7;color:var(--r-text)}
+.bi-zh{margin:6px 0 0;padding:6px 12px;font-size:var(--bi-target-size,14px);line-height:1.75;color:var(--r-text-2);background:var(--r-surface);border-left:2px solid var(--r-border-strong);border-radius:0 4px 4px 0}
+.bi-doc.view-stacked .bi-zh{color:var(--r-accent)}
+.bi-doc.view-stacked .bi-pair:not(.heading) .bi-zh{background:var(--r-accent-soft);border-left:3px solid var(--r-accent)}
+.bi-pair.heading{margin-top:22px}
+.bi-pair.heading .bi-orig{font-size:var(--bi-source-heading,17px);font-weight:650;line-height:1.4}
+.bi-pair.heading h3.bi-orig{font-size:var(--bi-source-size,14px)}
+.bi-pair.heading .bi-zh{background:none;border-left:0;padding:0;margin-top:.2em;font-size:var(--bi-target-heading,17px);font-weight:600}
+.bi-pair.caption .bi-orig{font-size:var(--bi-source-small,13px)}
+.bi-pair.caption .bi-zh{font-size:var(--bi-target-small,13px)}
+.bi-pair.caption .bi-orig{color:var(--r-text-2)}
+.bi-pair.footnote .bi-orig{font-size:var(--bi-source-small,13px)}
+.bi-pair.footnote .bi-zh{font-size:var(--bi-target-small,13px)}
+.bi-waiting{color:var(--r-text-3);background:none;border-left:3px dashed var(--r-border-strong);font-size:12.5px}
+.bi-skip-note{margin:.25em 0 0;font-size:11.5px;color:var(--r-text-3)}
+.bi-meta{margin:0 auto .5em;text-align:center;font-size:13.5px;color:var(--r-text-2)}
+.bi-ref{margin:.45em auto;font-size:var(--bi-source-small,13px);line-height:1.6;color:var(--r-text-2);padding-left:1.5em;text-indent:-1.5em}
+.bi-figure{margin:1.5em auto .5em;text-align:center}
+.bi-figure img{max-width:100%;height:auto;border-radius:3px;background:#fff}
+.bi-figure-row{display:grid;gap:24px;align-items:start;margin:18px auto}
+.bi-figure-row>div{min-width:0}
+.bi-figure-row-caption{grid-column:1/-1}
+.bi-figure-row .bi-figure{margin:0 0 8px;padding:0}
+.bi-figure-row .bi-pair{margin:0;padding:0}
+.bi-figure-row .bi-region img{width:100%}
+.bi-figure-row .bi-pair.caption :is(.bi-orig,.bi-zh){font-size:12px;line-height:1.6}
+.bi-placeholder{padding:26px;border:1px dashed var(--r-border-strong);border-radius:8px;color:var(--r-text-3);font-size:12.5px}
+.bi-equation{margin:1em auto;overflow-x:auto;text-align:center}
+.bi-equation code{font-size:13px;color:var(--r-text-2)}
+.bi-table{margin:1.2em auto}
+/* 表格用原版截图，按栏宽缩放即可 */
+.bi-region{text-align:center}
+.bi-region img{max-width:100%;height:auto;border-radius:3px;background:#fff}
+.bi-region-wait{padding:18px;border:1px dashed var(--r-border);border-radius:8px;color:var(--r-text-3);font-size:12.5px}
+/* 取不到原版时才退回重排的 HTML 表格 */
+.bi-table-html{overflow-x:auto;font-size:12.5px}
+.bi-table-html table{border-collapse:collapse;margin:0 auto;max-width:100%}
+.bi-table-html :is(td,th){border:1px solid var(--r-border-strong);padding:3px 7px;line-height:1.45}
+.bi-code{margin:1em auto;padding:12px 14px;background:var(--r-surface-2);border-radius:7px;overflow-x:auto;font-size:var(--bi-source-small,13px);line-height:1.55}
+.bi-page{display:flex;align-items:center;gap:10px;margin:2em auto 1em;color:var(--r-text-3);font-size:11px;letter-spacing:.06em}
+.bi-page::before,.bi-page::after{content:"";flex:1;border-top:1px dashed var(--r-border)}
+.bi-page button{color:inherit;font-size:inherit}
+.bi-page button:hover{color:var(--r-accent);text-decoration:underline}
+.bi-skipped{margin:2.2em auto 1em;border:1px solid var(--r-border);border-radius:9px;background:var(--r-surface);padding:0 18px}
+.bi-skipped summary{display:flex;align-items:center;gap:9px;padding:13px 0;font-size:14px;font-weight:600;cursor:pointer;list-style:none;color:var(--r-text)}
+.bi-skipped summary::-webkit-details-marker{display:none}
+.bi-skipped summary svg{transition:transform .15s;color:var(--r-text-3)}
+.bi-skipped[open] summary svg{transform:rotate(90deg)}
+.bi-skipped summary em{font-style:normal;font-weight:400;font-size:12.5px;color:var(--r-text-3)}
+.bi-skipped>div{padding-bottom:12px}
+.bi-skipped .bi-pair,.bi-skipped .bi-ref,.bi-skipped .bi-figure,.bi-skipped .bi-equation{padding-left:0;padding-right:0}
+
+/* ---- 五种阅读方式 ---- */
+
+/* 仅译文：译文就是正文，去掉对照用的底色和边线，按正常段落节奏排 */
+.bi-doc.view-zh .bi-pair .bi-orig,
+.bi-doc.view-zh .bi-skip-note,
+.bi-doc.view-zh .bi-waiting{display:none}
+.bi-doc.view-zh .bi-pair .bi-zh{margin:0;padding:0;background:none;border-left:0;border-radius:0;color:var(--r-text);font-size:var(--bi-target-size,14px);line-height:1.8}
+.bi-doc.view-zh .bi-pair{margin-bottom:1.05em}
+.bi-doc.view-zh .bi-pair.heading .bi-zh{font-size:var(--bi-target-heading,17px);font-weight:650;color:var(--r-text)}
+.bi-doc.view-zh .bi-pair.caption .bi-zh,.bi-doc.view-zh .bi-pair.footnote .bi-zh{font-size:var(--bi-target-small,13px);color:var(--r-text-2)}
+/* 没有译文的段落（作者信息、引文等）保留原文，但压低存在感 */
+.bi-doc.view-zh .bi-pair:not(.has-zh) .bi-orig{display:block;color:var(--r-text-3);font-size:var(--bi-target-size,14px)}
+.bi-doc.view-zh .bi-meta{display:none}
+.bi-doc.view-zh .bi-title:has(>p) h1{display:none}
+
+/* 仅原文 */
+.bi-doc.view-en .bi-zh,.bi-doc.view-en .bi-title p,.bi-doc.view-en .bi-skip-note{display:none}
+
+/* 左右段落与原版对照共用可拖动的分栏比例。 */
+.bi-doc.view-columns{--bi-content-width:100%;--bi-gutter:16px}
+.bi-doc.view-columns .bi-pair{display:grid;grid-template-columns:minmax(0,var(--bi-left-track,calc(50% - 4px))) 8px minmax(0,1fr);align-items:start;position:relative}
+.bi-doc.view-columns .bi-pair .bi-orig{padding-right:12px;min-width:0}
+.bi-doc.view-columns .bi-pair .bi-zh{margin:0;padding:0 0 0 12px;background:none;border-left:0;border-radius:0;line-height:1.85;min-width:0}
+.bi-doc.view-columns .bi-pair.heading{margin-top:2em}
+.bi-doc.view-columns .bi-pair:not(.is-translatable) .bi-orig,.bi-doc.view-columns .bi-skip-note{grid-column:1/-1}
+.bi-doc.view-columns .bi-figure-row .bi-pair{display:block}
+.bi-doc.view-columns .bi-figure-row .bi-divider{display:none}
+.bi-doc.view-columns .bi-figure-row .bi-zh{margin-top:5px}
+
+.bi-doc.view-page{--bi-content-width:100%;--bi-gutter:12px;padding-top:12px}
+.bi-doc.view-page>*{max-width:none}
+.bi-spread{display:grid;grid-template-columns:minmax(0,var(--bi-left-track,calc(50% - 4px))) 8px minmax(0,1fr);align-items:start;max-width:none;width:100%;margin:0 auto 2px;padding:0 var(--bi-gutter)}
+.bi-spread-left{position:relative;min-width:0;overflow-x:auto;overflow-y:hidden}
+.bi-spread-no{position:absolute;right:6px;bottom:4px;padding:0 4px;border-radius:3px;background:#ffffffd9;font-size:10px;color:var(--r-text-3);pointer-events:none}
+.bi-pageshot{margin:0 auto;min-width:0}
+.bi-pageshot img{display:block;width:100%;height:auto;border:1px solid var(--r-border);border-radius:0;background:#fff}
+.bi-spread-right{padding:2px 0 0 16px;min-width:0}
+.bi-spread-h{margin:1.3em 0 .5em;font-size:var(--bi-target-heading,17px);font-weight:650;color:var(--r-text)}
+.bi-spread-h:first-child{margin-top:0}
+.bi-spread-p{margin:0 0 .95em;font-size:var(--bi-target-size,14px);line-height:1.75;color:var(--r-text)}
+.bi-spread-p.small{font-size:var(--bi-target-small,13px);color:var(--r-text-2)}
+.bi-spread-raw{margin:0 0 .9em;font-size:var(--bi-target-size,14px);line-height:1.7;color:var(--r-text-3)}
+.bi-spread-raw.heading{font-weight:600;color:var(--r-text-2)}
+.bi-spread-note{margin:0;font-size:13px;color:var(--r-text-3)}
+.bi-divider{align-self:stretch;position:relative;min-height:28px;cursor:col-resize;touch-action:none;user-select:none;outline:0}
+.bi-divider>span{position:absolute;inset:0 3px;background:var(--r-border)}
+.bi-divider::after{content:"";position:absolute;top:clamp(2px,calc(50% - 12px),180px);height:24px;left:2px;right:2px;border-radius:4px;background:var(--r-border-strong)}
+.bi-divider:is(:hover,:focus-visible,:active)>span,.bi-divider:is(:hover,:focus-visible,:active)::after{background:var(--r-accent)}
+.bi-spread>.bi-divider{position:relative;align-self:stretch}
+
+@container(max-width:600px){
+ .bi-doc.view-columns .bi-pair,.bi-spread{display:block}
+ .bi-doc.view-columns .bi-divider,.bi-spread>.bi-divider{display:none}
+ .bi-doc.view-columns .bi-pair .bi-zh{margin-top:8px;padding-left:12px}
+ .bi-spread-right{padding:16px 0 0}
+}
+@media(max-width:640px){.bi-figure-row{grid-template-columns:minmax(0,1fr)!important;gap:16px}}
+
+/* Size each visual group against the same text column used by the current reading mode. */
+.bi-doc>:is(.bi-figure,.bi-table,.bi-figure-row){width:calc((min(100%,var(--bi-content-width)) - 2 * var(--bi-gutter)) * .8);max-width:none;padding-inline:0}
+.bi-skipped>div>:is(.bi-figure,.bi-table){width:80%;padding-inline:0}
+
+/* 行内公式：跟随正文字号，不撑高行距 */
+.bi-math .katex{font-size:1em}
+.bi-math{white-space:nowrap}
+
+/* 解析用量与额度 */
+.bi-usage{position:relative}
+.bi-usage-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px;border:1px solid var(--r-border);border-radius:7px;font-size:12.5px;color:var(--r-text-2)}
+.bi-usage-chip:hover{background:var(--r-surface-2);color:var(--r-text)}
+.bi-usage-chip.low{border-color:var(--r-warn);color:var(--r-warn);background:var(--r-warn-soft)}
+.bi-usage-panel{position:absolute;right:0;top:34px;z-index:6;width:min(460px,80vw);padding:14px 16px;background:var(--r-surface);border:1px solid var(--r-border-strong);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);text-align:left}
+.bi-usage-panel .bi-hint{margin:0 0 10px}
+.bi-usage-row{display:grid;grid-template-columns:1fr auto 86px auto;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--r-border);font-size:13px}
+.bi-usage-name{display:flex;flex-direction:column;min-width:0}
+.bi-usage-name small{color:var(--r-text-3);font-size:11.5px;line-height:1.4}
+.bi-usage-used,.bi-usage-left{font-size:12px;color:var(--r-text-3);white-space:nowrap}
+.bi-usage-quota{height:28px;padding:0 8px;border:1px solid var(--r-border-strong);border-radius:6px;background:var(--r-surface);font:inherit;font-size:12.5px;color:var(--r-text);width:86px}
+.bi-usage-foot{display:flex;align-items:center;gap:8px;padding:10px 0 2px;border-top:1px solid var(--r-border);font-size:12.5px;color:var(--r-text-2);flex-wrap:wrap}
+.bi-usage-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.bi-usage-actions>button:first-child{padding:0 10px;height:28px;border-radius:7px;font-size:13px;color:var(--r-text-2)}
+
+/* 解析引擎：工具栏上直接可切，标出本月剩余 */
+.bi-engines{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px;min-width:0;max-width:100%}
+.bi-engines-label{font-size:12px;color:var(--r-text-3);margin-right:2px;white-space:nowrap}
+.bi-engines button{display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px;line-height:1.25;height:auto;min-height:40px;max-width:100%;padding:4px 10px;border:1px solid var(--r-border);border-radius:7px;font-size:12.5px;color:var(--r-text-2);background:var(--r-surface);text-align:left;white-space:normal}
+.bi-engines button .bi-engine-name{line-height:1.25;overflow-wrap:anywhere}
+.bi-engines button small{font-size:10.5px;line-height:1.2;color:var(--r-text-3);white-space:nowrap}
+.bi-engines button:hover:not(:disabled){border-color:var(--r-border-strong);color:var(--r-text)}
+.bi-engines button[aria-pressed="true"]{border-color:var(--r-accent);background:var(--r-accent-soft);color:var(--r-accent)}
+.bi-engines button[aria-pressed="true"] small{color:var(--r-accent)}
+.bi-engines button.low{border-color:var(--r-warn)}
+.bi-engines button.low small{color:var(--r-warn)}
+.bi-usage-panel a{color:var(--r-accent);text-decoration:underline}
+
+.bi-settings-panel .bi-usage{display:flex;flex:1;min-width:0;flex-direction:column;align-items:flex-start;gap:8px}
+.bi-settings-panel .bi-usage-panel{position:static;width:100%;box-shadow:none}
+.bi-settings-actions{align-items:flex-start}
+@container(max-width:600px){
+ .bi-settings-panel .bi-usage-row{grid-template-columns:minmax(0,1fr) auto;gap:6px}
+ .bi-settings-panel .bi-usage-name{grid-column:1/-1}
+ .bi-settings-panel .bi-usage-left{grid-column:2}
+}
+
+/* One compact zoom control at each reading column's upper corner. */
+.bi-doc>.bi-pane-tools{position:sticky;top:6px;z-index:3;display:grid;grid-template-columns:minmax(0,var(--bi-left-track,calc(50% - 4px))) 8px minmax(0,1fr);height:0;max-width:none;margin:0;padding:0 var(--bi-gutter);pointer-events:none}
+.bi-tools-source,.bi-tools-target{position:relative;min-width:0;height:0;display:flex;align-items:flex-start;justify-content:flex-end}
+.bi-tools-source{grid-column:1}
+.bi-tools-target{grid-column:3}
+.bi-pane-tools .bi-zoom{pointer-events:auto;gap:0;padding:1px 3px;border:1px solid var(--r-border);border-radius:6px;background:#fffffff0;box-shadow:0 1px 3px #14181f12;opacity:.8}
+.bi-pane-tools .bi-zoom:is(:hover,:focus-within){opacity:1}
+.bi-pane-tools .bi-zoom>span{display:none}
+.bi-pane-tools .bi-zoom button{width:20px;height:22px}
+.bi-pane-tools .bi-zoom input{width:28px;height:21px;min-height:21px;font-size:11px;background:transparent}
+.bi-pane-tools .bi-zoom label>span{font-size:10px}
+.bi-doc.view-en .bi-tools-source,.bi-doc.view-zh .bi-tools-target{grid-column:1/-1}
+.bi-doc.view-stacked>.bi-pane-tools{display:flex;justify-content:flex-end;gap:5px}
+.bi-doc.view-stacked .bi-pane-tools .bi-zoom>span{display:inline;font-size:10px}
+.bi-doc .bi-title{padding-right:120px}
+.bi-doc.view-stacked .bi-title{padding-right:240px}
+.bi-spread:first-of-type .bi-spread-right>:first-child{padding-right:94px}
+@container(max-width:600px){
+ .bi-doc.view-page>.bi-pane-tools,.bi-doc.view-columns>.bi-pane-tools{display:flex;justify-content:flex-end;gap:5px}
+ .bi-doc.view-page .bi-pane-tools .bi-zoom>span,.bi-doc.view-columns .bi-pane-tools .bi-zoom>span{display:inline;font-size:10px}
+}
+
+.bi-doc.view-columns .bi-title{display:grid;grid-template-columns:minmax(0,var(--bi-left-track,calc(50% - 4px))) 8px minmax(0,1fr);padding:0 var(--bi-gutter)}
+.bi-doc.view-columns .bi-title h1{grid-column:1;padding-right:94px}
+.bi-doc.view-columns .bi-title>p:not(.bi-meta){grid-column:3;padding-right:94px}
+.bi-doc.view-columns .bi-title .bi-meta{grid-column:1/-1}
+@container(max-width:600px){
+ .bi-doc .bi-title,.bi-doc.view-columns .bi-title{display:block;padding-top:32px;padding-right:var(--bi-gutter)}
+ .bi-doc.view-columns .bi-title h1,.bi-doc.view-columns .bi-title>p:not(.bi-meta){padding-right:0}
+}

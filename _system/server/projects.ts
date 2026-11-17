@@ -1,13 +1,14 @@
+import {RESEARCH_BASIS_TEMPLATE} from '../shared/research-basis.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CompileTarget, DeadlineSource, Project, Stage } from '../shared/types.ts';
-import { STAGES } from '../shared/types.ts';
+import { STAGES, LEGACY_STAGES, normalizeStage } from '../shared/types.ts';
 import { validateDeadlineConfiguration, validLegacyDeadline } from '../shared/deadline.ts';
 import { HttpError, assertNoSymlinks, projectId, relativePath, registeredRoot } from './security.ts';
 import { readJson, withLock, writeJson, withProjectMutation } from './storage.ts';
 import { checkpoint, history, initializeGit } from './history.ts';
 
-export async function getProject(workspaceRoot: string, id: string): Promise<Project> { return readJson<Project>(path.join(await registeredRoot(workspaceRoot, id), 'project.json')); }
+export async function getProject(workspaceRoot: string, id: string): Promise<Project> { const project=await readJson<Project>(path.join(await registeredRoot(workspaceRoot, id), 'project.json')); return {...project,stage:normalizeStage(project.stage)}; }
 async function latestSourceChange(root:string,baseline:string):Promise<string>{
  let latest=Date.parse(baseline)||0;
  async function walk(directory:string){for(const entry of await fs.readdir(directory,{withFileTypes:true}).catch(()=>[])){if(entry.name.startsWith('.')||['build','submissions','node_modules'].includes(entry.name))continue;const file=path.join(directory,entry.name);if(entry.isDirectory())await walk(file);else if(entry.isFile())latest=Math.max(latest,(await fs.stat(file)).mtimeMs);}}
@@ -97,7 +98,7 @@ export async function patchProject(workspaceRoot: string, id: string, patch: Par
       }
     } else if (previousDeadlineAt !== current.deadlineAt || previousTimezone !== current.deadlineTimezone || previousVenue !== current.venue) delete current.deadlineSource;
 
-    if (patch.stage !== undefined) { if (!STAGES.includes(patch.stage as Stage)) throw new HttpError(400, '文章阶段无效。'); current.stage = patch.stage; }
+    if (patch.stage !== undefined) { if (!STAGES.includes(patch.stage as Stage) && !Object.hasOwn(LEGACY_STAGES,patch.stage)) throw new HttpError(400, '文章阶段无效。'); current.stage = normalizeStage(patch.stage); }
     for(const key of ['archived','trashed'] as const)if(patch[key]!==undefined){if(typeof patch[key]!=='boolean')throw new HttpError(400,'项目管理状态无效。');current[key]=patch[key];}
     if (patch.autoCompile !== undefined) { if (typeof patch.autoCompile !== 'boolean') throw new HttpError(400, '自动编译设置无效。'); current.autoCompile = patch.autoCompile; }
     if (patch.targets !== undefined) { current.targets = validateTargets(patch.targets); for (const target of current.targets) await assertNoSymlinks(root, target.main, true); }
@@ -150,6 +151,7 @@ export async function createProject(workspaceRoot: string, body: { id?: string; 
       const now = new Date().toISOString(); const result: Project = { schemaVersion: 1, id, title, stage: 'writing', venue: '', deadline: '', targets: [{ id: 'main', label: '主论文', main: `manuscript/${main}` }], autoCompile: false, createdAt: now, updatedAt: now };
       await writeJson(path.join(root, 'project.json'), result);
       await fs.writeFile(path.join(root, 'notes', 'writing.md'), '# 写作记录\n\n在这里记录目标、待办、证据和本轮修改。\n');
+      await fs.writeFile(path.join(root, 'notes', 'research-basis.md'), RESEARCH_BASIS_TEMPLATE, {flag:'wx'});
       await imported?.beforePublish?.(root);
       await checkpoint(root, imported?'导入 ZIP 源码（原始包已备份）':body.importPath ? '导入本地源码（原目录保留）' : '从模板创建论文');if(await fs.lstat(finalRoot).then(()=>true).catch(()=>false))throw new HttpError(409,'项目编号已存在。');await fs.rename(root,finalRoot);created=false;return result;
     } catch (error) { if (created) await fs.rm(root, { recursive: true, force: true }); throw error; }

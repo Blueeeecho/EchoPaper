@@ -1,6 +1,10 @@
-export const STAGES = ['writing', 'polishing', 'submitted', 'rebuttal', 'revision', 'accepted'] as const;
+export const STAGES = ['writing', 'rebuttal', 'accepted', 'published'] as const;
 export type Stage = typeof STAGES[number];
-export const STAGE_LABELS: Record<Stage, string> = { writing: '写作中', polishing: '润色中', submitted: '已投稿', rebuttal: 'Rebuttal', revision: '修回中', accepted: '已录用' };
+export const STAGE_LABELS: Record<Stage, string> = { writing: '写作中', rebuttal: 'Rebuttal', accepted: '已录用', published: '已发表' };
+export const LEGACY_STAGES: Record<string, Stage> = {polishing:'writing', submitted:'writing', revision:'rebuttal'};
+export function normalizeStage(value: unknown): Stage {
+  return STAGES.includes(value as Stage) ? value as Stage : Object.hasOwn(LEGACY_STAGES,String(value)) ? LEGACY_STAGES[String(value)] : 'writing';
+}
 export interface CompileTarget { id: string; label: string; main: string }
 export interface DeadlineSource { sourceUrl: string; conferenceId: string; year: number; roundId: string; fetchedAt: string; officialUrl?: string; notes?: string }
 export interface Project { schemaVersion: 1; id: string; title: string; stage: Stage; venue: string; deadline: string; deadlineAt?: string; deadlineTimezone?: string; deadlineSource?: DeadlineSource; targets: CompileTarget[]; createdAt: string; updatedAt: string; autoCompile: boolean; archived?:boolean; trashed?:boolean; lastEditedAt?:string }

@@ -41,3 +41,13 @@ test('same-backend adapters are serialized and only complete translations enter 
  order.length=0;await runTranslationAdapters(adapters,context,new AbortController().signal,()=>{});assert.equal(order.length,0);
  const abort=new AbortController();abort.abort();await runTranslationAdapters(adapters,{...context,text:'cancelled'},abort.signal,()=>{});assert.equal(order.length,0);
 });
+
+test('dedicated engines reuse selections across surrounding context while contextual engines retranslate',async()=>{
+ let dedicatedCalls=0,contextualCalls=0;
+ const adapters:TranslationAdapter[]=[
+  {id:'context-free-cache',queueKey:'dedicated',label:'Dedicated',model:'dedicated',supportsContext:false,translate:async request=>{dedicatedCalls++;assert.equal(request.context,undefined);return '专用译文';}},
+  {id:'contextual-cache',queueKey:'contextual',label:'Contextual',model:'contextual',supportsContext:true,translate:async request=>{contextualCalls++;assert.ok(request.context);return '上下文译文';}},
+ ];
+ for(const surrounding of ['first paragraph','second paragraph'])await runTranslationAdapters(adapters,{...context,context:surrounding},new AbortController().signal,()=>{});
+ assert.equal(dedicatedCalls,1);assert.equal(contextualCalls,2);
+});

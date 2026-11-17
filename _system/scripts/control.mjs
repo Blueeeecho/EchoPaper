@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import net from 'node:net';
+import { portReleased, requestGracefulStop, waitForPortRelease } from './graceful-stop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const system = path.join(root, '_system');
@@ -20,17 +20,14 @@ async function health(port) {
 async function state() {
   try { return JSON.parse(await fs.readFile(stateFile, 'utf8')); } catch { return null; }
 }
-async function freePort() {
+async function freePort(savedPort) {
   // Recover an already running instance even if its runtime state file was lost.
   for (let port = 4173; port < 4204; port++) {
     if (await health(port)) return { port, running: true };
   }
+  if (savedPort) await waitForPortRelease(savedPort);
   for (let port = 4173; port < 4204; port++) {
-    const free = await new Promise(resolve => {
-      const server = net.createServer();
-      server.once('error', () => resolve(false));
-      server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
-    });
+    const free = await portReleased(port);
     if (free) return { port, running: false };
   }
   throw new Error('4173–4203 端口均被占用，请关闭一个无关服务后重试。');
@@ -61,7 +58,7 @@ async function start() {
     const built = spawnSync('npm', ['run', 'build'], { cwd: system, stdio: 'inherit' });
     if (built.status !== 0) throw new Error('网页构建失败，请查看构建输出。');
   }
-  const slot = await freePort();
+  const slot = await freePort(saved?.port);
   if (slot.running) {
     const info = await health(slot.port);
     await fs.writeFile(stateFile, JSON.stringify({ pid: info.pid, port: slot.port, root }, null, 2));
@@ -89,12 +86,11 @@ async function stop() {
   if (!saved) { console.log('EchoPaper 当前未运行。'); return; }
   const info = await health(saved.port);
   if (info) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${saved.port}/api/shutdown`, { method: 'POST' });
-      if (!response.ok) process.kill(info.pid, 'SIGTERM');
-    } catch { try { process.kill(info.pid, 'SIGTERM'); } catch {} }
+    await requestGracefulStop(saved.port);
     for (let count = 0; count < 50 && await health(saved.port); count++) await pause(100);
+    if (await health(saved.port)) throw new Error('后台尚未完成正常退出；保留运行记录，未强制终止，也未启动新后台。');
   }
+  await waitForPortRelease(saved.port);
   await fs.rm(stateFile, { force: true });
   console.log('EchoPaper 后台已停止，稿件和历史记录保存在本地。');
 }

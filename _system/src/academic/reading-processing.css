@@ -1,0 +1,32 @@
+.reading-processing{border-bottom:1px solid var(--border,#e5e4df);padding:8px 14px;color:var(--text-muted,#777f89);font-size:11px}
+.reading-processing-bar{display:flex;align-items:center;gap:10px;min-height:24px;flex-wrap:wrap}
+.reading-processing label{display:inline-flex;align-items:center;gap:6px;color:var(--text,#30363d);font-size:11px;white-space:nowrap}
+.reading-processing input{accent-color:#2b6095;width:13px;height:13px;margin:0}
+.reading-processing-summary{display:flex;align-items:center;gap:4px;margin-left:auto;font-variant-numeric:tabular-nums}
+.reading-processing button{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:1px solid var(--border,#deded8);border-radius:5px;background:var(--surface,#fff);padding:4px 7px;font-size:11px;color:inherit;cursor:pointer}
+.reading-processing button:disabled{opacity:.5;cursor:default}
+.reading-processing .processing-settings{padding:4px;border:0;background:transparent}
+.reading-processing-options{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap;padding:8px 0 2px}
+.reading-processing-options small{font-size:11px;line-height:1.6;width:100%}
+.reading-processing-options>button{margin-top:2px}
+.processing-source-selectors{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%}
+.reading-processing .processing-source-field{display:flex;flex-direction:column;align-items:stretch;gap:4px;min-width:0;white-space:normal}
+.processing-source-field select{width:100%;min-width:0;height:29px;padding:3px 7px;background:var(--ep-surface,#fff);border:1px solid var(--ep-border,#deded8);border-radius:5px;font:inherit;font-size:12px;color:var(--ep-text,#30363d);text-overflow:ellipsis}
+.processing-source-field select:focus-visible{outline:2px solid #2b6095;outline-offset:2px}
+@media(max-width:620px){.processing-source-selectors{grid-template-columns:minmax(0,1fr)}}
+.processing-error{font-size:11px;color:#a54132;margin:5px 0}
+.processing-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;line-height:1.5;color:#818791;white-space:nowrap;font-variant-numeric:tabular-nums}
+.processing-badge.is-complete{color:#2b6095}
+.processing-badge:is(.is-ocr,.is-translating){color:#2b6095}
+.processing-badge.is-failed{color:#ac583d}
+.processing-badge>button{display:inline-flex;background:transparent;border:0;padding:2px;color:inherit;cursor:pointer}
+#root .academic-app .reference-number.is-cached{background:#2b6095;color:#fff}
+#root .academic-app .reference-number:is(.is-ocr,.is-translating){background:#e7f0fa;color:#2b6095;position:relative;overflow:hidden}
+.reference-number.is-translating:after{content:'';position:absolute;left:0;bottom:0;height:3px;width:var(--cache-progress,0%);background:#2b6095}
+.reference-number.is-failed{background:#faeee8;color:#ac583d}
+.reference-rows .reference-title>.processing-badge{display:flex;font-size:10px;line-height:1.5;font-weight:400}
+.reference-rows .reference-title>.processing-badge.is-complete{display:none}
+.bi-background-status{display:flex;align-items:center;gap:8px;padding:7px 16px;background:#edf4fc;color:#2b6095;font-size:12px}
+.bi-background-status .processing-badge{font-size:12px}
+
+.reference-rows>li>.reference-retry{flex:0 0 auto;width:auto;padding:3px 7px;font-size:11px;color:#a44d35;border:1px solid #ecd7cc;border-radius:4px;margin:0 8px}

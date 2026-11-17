@@ -17,18 +17,33 @@ async function initializeGitUnlocked(root: string): Promise<void> {
   for (const [key, value] of [['user.name', 'Paper Workbench'], ['user.email', 'workbench@localhost']]) {
     try { await git(root, ['config', '--get', key]); } catch { await git(root, ['config', '--local', key, value]); }
   }
-  await git(root, ['config', '--local', 'core.quotepath', 'false']);
+  // Read first and write only when different: `git config` rewrites .git/config even for an
+  // unchanged value, and this runs on every GET /api/projects.
+  let quotepath = ''; try { quotepath = (await git(root, ['config', '--local', '--get', 'core.quotepath'])).trim(); } catch {}
+  if (quotepath !== 'false') await git(root, ['config', '--local', 'core.quotepath', 'false']);
 }
-async function checkpointUnlocked(root: string, message: string): Promise<HistoryEntry> {
+async function checkpointUnlocked(root: string, message: string, files?: string[]): Promise<HistoryEntry & { committed: boolean }> {
   await initializeGit(root);
-  await git(root, ['add', '--all', '--', '.']);
-  const changes = await git(root, ['diff', '--cached', '--name-only']);
   let hasHead = true; try { await git(root, ['rev-parse', '--verify', 'HEAD']); } catch { hasHead = false; }
-  if (changes.trim() || !hasHead) await git(root, ['commit', '--no-verify', '-m', message.slice(0, 500) || '保存版本']);
+  if (files) {
+    if (hasHead) await git(root, ['reset', '-q', 'HEAD']);
+    for (const file of [...new Set(files.map(editablePath))]) {
+      try { await git(root, ['add', '--', file]); }
+      catch (error: any) { const text = String(error?.stderr || error?.message || error); if (!/did not match|pathspec|ignored/i.test(text)) throw error; }
+    }
+  } else {
+    await git(root, ['add', '--all', '--', '.']);
+  }
+  const changes = await git(root, ['diff', '--cached', '--name-only']);
+  let committed = false;
+  if (changes.trim() || (!hasHead && !files)) {
+    await git(root, ['commit', '--no-verify', '-m', message.slice(0, 500) || '保存版本']);
+    committed = true;
+  }
   const row = (await git(root, ['log', '-1', '--format=%H%x1f%aI%x1f%s'])).trim().split('\x1f');
-  return { hash: row[0], date: row[1], message: row.slice(2).join('\x1f') };
+  return { hash: row[0], date: row[1], message: row.slice(2).join('\x1f'), committed };
 }
-export async function checkpoint(root: string, message: string): Promise<HistoryEntry> { return withLock(`git:${root}`, () => checkpointUnlocked(root, message)); }
+export async function checkpoint(root: string, message: string, files?: string[]): Promise<HistoryEntry & { committed: boolean }> { return withLock(`git:${root}`, () => checkpointUnlocked(root, message, files)); }
 export async function history(root: string): Promise<HistoryEntry[]> {
   await initializeGit(root);
   try { return (await git(root, ['log', '-100', '--format=%H%x1f%aI%x1f%s'])).trim().split('\n').filter(Boolean).map(line => { const [hash, date, ...message] = line.split('\x1f'); return { hash, date, message: message.join('\x1f') }; }); }
