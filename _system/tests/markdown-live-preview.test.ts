@@ -4,10 +4,10 @@ import {EditorState} from '@codemirror/state';
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import AiMarkdown from '../src/components/AiMarkdown';
-import {markdown,markdownLanguage} from '@codemirror/lang-markdown';
 import {markdownDecorations,liveMarkdown,liveMarkdownExtensions,markdownFocus} from '../src/academic/markdownLivePreview';
+import {researchMarkdownLanguage} from '../src/academic/researchMarkdownLanguage';
 
-const stateFor=(doc:string,anchor=0)=>EditorState.create({doc,selection:{anchor},extensions:[markdown({base:markdownLanguage}),...liveMarkdownExtensions]});
+const stateFor=(doc:string,anchor=0)=>EditorState.create({doc,selection:{anchor},extensions:[researchMarkdownLanguage,...liveMarkdownExtensions]});
 function decorations(state:EditorState,focused=false){
  const result:{from:number;to:number;spec:any}[]=[];
  markdownDecorations(state,focused).between(0,state.doc.length,(from,to,value)=>{result.push({from,to,spec:value.spec});});
@@ -32,6 +32,27 @@ test('the active paragraph exposes its own Markdown syntax in the same editable 
  assert.ok(rendered.some(item=>item.from===0&&item.to===2));
  assert.ok(!rendered.some(item=>item.from===content.indexOf('**')&&item.to===content.indexOf('**')+2));
  assert.equal(state.doc.toString(),content);
+});
+
+test('Chinese headings with no space render while typing and keep the first title character',()=>{
+ const content='正文\n##主要**创新**是\n\n下一段。';
+ const start=content.indexOf('##');
+ const state=stateFor(content,content.indexOf('是')+1);
+ const live=decorations(state,true);
+ assert.ok(live.some(item=>item.from===start&&item.spec.class==='markdown-live-heading h2'));
+ assert.ok(live.some(item=>item.from===start&&item.to===start+2&&!item.spec.class));
+ assert.ok(live.some(item=>item.spec.class==='markdown-live-strong'));
+ assert.ok(!live.some(item=>item.from===start&&item.to>start+2&&!item.spec.class));
+ assert.ok(!decorations(stateFor(content,start+1),true).some(item=>item.from===start&&item.to===start+2));
+ assert.equal(state.doc.toString(),content);
+});
+
+test('compact heading compatibility stays outside fenced and indented code and leaves hash tags legible',()=>{
+ const content='##issue42\n\n```md\n##代码示例\n```\n\n    ##缩进代码\n\n## 标题 ##';
+ const rendered=decorations(stateFor(content));
+ assert.equal(rendered.filter(item=>item.spec.class==='markdown-live-heading h2').length,1);
+ assert.ok(!rendered.some(item=>item.from===0));
+ assert.ok(rendered.some(item=>item.to===content.length&&item.from===content.lastIndexOf(' ##')));
 });
 
 test('tables and formulas render as blocks and become editable in place when selected',()=>{

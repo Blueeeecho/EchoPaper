@@ -65,7 +65,6 @@ function decide(block:BilingualBlock,options:BilingualOptions):{translate:boolea
  if(block.section==='appendix'&&!options.translateAppendix)return{translate:false,skipReason:'附录'};
  if(block.role==='meta')return{translate:false,skipReason:'作者信息'};
  if(block.role==='footnote'&&options.translateFootnotes===false)return{translate:false,skipReason:'脚注'};
- if(block.role==='table')return{translate:false,skipReason:'表格'};
  if(!worthTranslating(block.text,block.role==='heading'||block.role==='doc_title'))return{translate:false,skipReason:'无需翻译'};
  return{translate:true,skipReason:''};
 }

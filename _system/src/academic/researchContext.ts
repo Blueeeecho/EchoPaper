@@ -5,6 +5,15 @@ import type {AcademicRoute} from './navigation';
 export const researchContextKey='echopaper:research-context:v1';
 export const hasResearchScope=(route:AcademicRoute)=>['topics','experiments','results','progress','library'].includes(route.section);
 
+export function hubDataSources(route:AcademicRoute){
+ const section=route.section;
+ return {
+  overview:section==='home'||hasResearchScope(route),
+  papers:section==='home'||section==='topics'||(section==='papers'&&!!route.paperId),
+  presentations:section==='topics',
+ };
+}
+
 /** An invalid explicit deep link must not silently open a different project. */
 export function currentResearchTopic(route:AcademicRoute,rememberedId:string|undefined,topics:readonly ResearchTopic[]){
  const id=route.topicId||rememberedId;

@@ -5,10 +5,10 @@
 本地学术工作台：研究课题与证据记录、资料库、PDF 连续阅读与双语翻译、Markdown 阅读笔记、LaTeX 写作与 PDF 预览、AI 助手、审稿管理和可编辑 PPT 导出。
 网页与本机文件共用同一工作区。这个分享包包含程序源码、锁定的依赖清单、通用模板、自动测试和一个全新合成示例。
 
-## macOS 启动
+## 启动（macOS / Windows）
 
-1. 将整个 `EchoPaper` 文件夹解压到自己的可写目录；不要只复制 `_system`。
-2. 安装 Node.js 22、Python 3 和 Tectonic。LaTeX 编译使用 Tectonic，不会自动安装或切换到 TeX Live。
+1. 将整个 `EchoPaper` 文件夹解压或克隆到自己的可写目录；不要只复制 `_system`。
+2. 安装 Node.js 22+、Python 3、Git 和 Tectonic（LaTeX 编译使用 Tectonic，不会自动安装或切换到 TeX Live）。
 3. 在该文件夹执行：
 
 ```sh
@@ -17,18 +17,20 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-也可以双击 `启动工作台.command`，首次运行会安装依赖和构建前端。后台默认从 `http://127.0.0.1:4173` 启动，端口占用时会另选端口，以命令输出为准。
-关闭后台使用 `停止工作台.command` 或 `node _system/scripts/control.mjs stop`。
-本包是源码分享包，没有携带 Node.js、Tectonic、npm 依赖或 macOS 已安装应用；首次安装和宏包下载需要联网。当前主要验证环境为 macOS，不承诺 Windows 开箱运行。
+- **macOS**：也可直接双击 `启动工作台.command` / `停止工作台.command`。
+- **Windows**：也可直接双击 `启动工作台.bat` / `停止工作台.bat`（首次运行或跨系统迁移时会自动安装当前平台原生依赖并构建前端）。
 
-Tectonic 默认路径为 `/opt/homebrew/bin/tectonic`。若安装位置不同，从终端设置后启动：
+后台默认从 `http://127.0.0.1:4173` 启动，端口占用时会另选端口，以命令输出为准。
+本包是源码分享包，没有携带 Node.js、Tectonic、npm 依赖或已打包应用；首次安装和宏包下载需要联网。
+
+若 Tectonic 不在默认 `PATH` 中，可设置环境变量 `TECTONIC_PATH` 后启动：
 
 ```sh
 export TECTONIC_PATH="$(command -v tectonic)"
 node _system/scripts/control.mjs start
 ```
 
-AI 与翻译功能需要在“设置”中配置自己的服务地址、模型和 API Key。未配置时可使用普通编辑、资料管理等本地功能。本包没有原作者的模型连接或凭据。凭据机制使用 macOS 钥匙串。
+AI 与翻译功能需要在“设置”中配置自己的服务地址、模型和 API Key。未配置时可使用普通编辑、资料管理等本地功能。本包没有原作者的模型连接或凭据。凭据分别存入 macOS Keychain 或 Windows Credential Manager。
 
 ## 使用与目录
 

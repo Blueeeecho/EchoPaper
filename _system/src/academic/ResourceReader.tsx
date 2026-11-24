@@ -1,10 +1,11 @@
 import {useCallback,useEffect,useLayoutEffect,useId,useRef,useState,type ReactNode,type RefObject} from 'react';
-import {getDocument,GlobalWorkerOptions,type PDFDocumentProxy} from 'pdfjs-dist';
-import worker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import {AlignLeft,ArrowLeft,CornerDownLeft,ChevronLeft,ChevronRight,ExternalLink,Languages,LoaderCircle,Maximize2,Minimize2,Minus,NotebookPen,PanelRightClose,PanelRightOpen,Plus,Quote,Trash2,X} from 'lucide-react';
+import type {PDFDocumentProxy} from 'pdfjs-dist';
+import {openPdfDocument} from '../pdfDocument';
+import {AlignLeft,ArrowLeft,BookmarkPlus,CornerDownLeft,ChevronLeft,ChevronRight,ExternalLink,Languages,LoaderCircle,Maximize2,Minimize2,Minus,NotebookPen,PanelRightClose,PanelRightOpen,Plus,Quote,Trash2,X} from 'lucide-react';
 import type {Resource} from '../../shared/workspace-types';
 import {readingPage,type ReadingDocument,type ReadingNote} from '../../shared/reading';
 import {api,json} from '../api';
+import {MODEL_CONFIG_EVENT} from '../modelSettings';
 import {loadTranslationAdapters,runTranslationAdapters,type TranslationAdapter,type TranslationCard} from '../translationAdapters';
 import {readReadingDraft,writeReadingDraft,clearReadingDraft,validateReadingDraft} from './readingDraft';
 import {readingSelectionText} from './readingSelection';
@@ -18,10 +19,10 @@ import AiMarkdown from '../components/AiMarkdown';
 import 'katex/dist/katex.min.css';
 import {wheelZoomSteps,zoomShortcutStep} from './readingZoom';
 import './resource-reader.css';
-GlobalWorkerOptions.workerSrc=worker;
 
 type Saved={document:ReadingDocument;hash:string|null};
 type PanelTab='excerpts'|'notes';
+type ReaderSelection={quote:string;page:number|null;sourceHash:string;context:string};
 const ZOOMS=[.5,.75,1,1.25,1.5,1.75,2,2.5,3];
 const PREFS='echopaper-reader:prefs';
 const AUTOSAVE_MS=1500;
@@ -66,14 +67,16 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  const prefsRef=useRef(prefs);prefsRef.current=prefs;
  const setPrefs=(update:Partial<Prefs>)=>setPrefsState(p=>{const next={...p,...update};writePrefs(next);return next;});
  const [saved,setSaved]=useState<Saved>(),[doc,setDoc]=useState<ReadingDocument>(),[error,setError]=useState(''),[status,setStatus]=useState('加载中'),[conflict,setConflict]=useState<Saved>();
- const [quote,setQuote]=useState(''),[translationCards,setTranslationCards]=useState<TranslationCard[]>([]),[translationError,setTranslationError]=useState('');
- const [adapters,setAdapters]=useState<TranslationAdapter[]>([]),[translating,setTranslating]=useState(false);
- const [pdf,setPdf]=useState<PDFDocumentProxy>(),[text,setText]=useState(''),[page,setPage]=useState(1),[pageDraft,setPageDraft]=useState('1'),[zoom,setZoom]=useState(1),[fitZoom,setFitZoom]=useState(1),[busy,setBusy]=useState(false);
+ const [selected,setSelected]=useState<ReaderSelection>(),[translationCards,setTranslationCards]=useState<TranslationCard[]>([]),[translationError,setTranslationError]=useState('');
+ const [adapters,setAdapters]=useState<TranslationAdapter[]>([]),[adapterError,setAdapterError]=useState(''),[translating,setTranslating]=useState(false);
+ const [pdf,setPdf]=useState<PDFDocumentProxy>(),[text,setText]=useState<string>(),[page,setPage]=useState(1),[pageDraft,setPageDraft]=useState('1'),[zoom,setZoom]=useState(1),[fitZoom,setFitZoom]=useState(1),[busy,setBusy]=useState(false);
+ const [sourceError,setSourceError]=useState(''),[sourceAttempt,setSourceAttempt]=useState(0);
  const [pop,setPop]=useState<{x:number;y:number;above:boolean}>();
  const [confirmExit,setConfirmExit]=useState(false),[readingError,setReadingError]=useState(''),[readingLoading,setReadingLoading]=useState(true),[dirtyView,setDirtyView]=useState(false);
- const quoteRef=useRef(''),contextRef=useRef(''),quotePage=useRef(1),positionChanged=useRef(false);
- const shell=useRef<HTMLDivElement>(null),reading=useRef<HTMLDivElement>(null),alive=useRef(true),abort=useRef(new AbortController()),dirty=useRef(false),selectionEpoch=useRef(0),translationAbort=useRef<AbortController|undefined>(undefined),autosave=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+ const selectionRef=useRef<ReaderSelection>(undefined),sourceVersion=useRef<string>(undefined),positionChanged=useRef(false);
+ const shell=useRef<HTMLDivElement>(null),reading=useRef<HTMLDivElement>(null),alive=useRef(true),dirty=useRef(false),selectionEpoch=useRef(0),translationAbort=useRef<AbortController|undefined>(undefined),autosave=useRef<ReturnType<typeof setTimeout>|undefined>(undefined),draftTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined),scrollTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined),dragCleanup=useRef<(()=>void)|undefined>(undefined);
  const translationAttempt=useRef('');
+ const onKeyRef=useRef<(e:KeyboardEvent)=>void>(()=>{});
  const effectiveZoom=isPdf&&prefs.fit?fitZoom:zoom;
  const source=adapters.find(a=>a.id===prefs.source)||adapters[0];
  const markDirty=(value:boolean)=>{dirty.current=value;setDirtyView(value);};
@@ -95,9 +98,57 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  }
 
  // ---------- loading ----------
- useEffect(()=>{alive.current=true;try{const p=readingPosition(localStorage.getItem(posKey),r.hash);const start=initialPage&&initialPage>0?initialPage:p.page;setPage(start);setPageDraft(String(start));setZoom(p.zoom);}catch{}void loadReading();void loadTranslationAdapters(abort.current.signal).then(a=>{if(alive.current)setAdapters(a);}).catch(e=>{if(alive.current)setTranslationError(e.message);});let task:ReturnType<typeof getDocument>|undefined;if(r.missing){/* Existing notes remain available without the source file. */}else if(isPdf){task=getDocument(raw);void task.promise.then(v=>{if(alive.current){setPdf(v);setPage(p=>Math.min(p,v.numPages));}}).catch(e=>{if(alive.current)setError(e.message);});}else void api<{content:string}>(`/api/workspace/resources/${r.id}/text`).then(v=>{if(alive.current)setText(v.content);}).catch(e=>{if(alive.current)setError(e.message);});return()=>{alive.current=false;abort.current.abort();translationAbort.current?.abort();clearTimeout(autosave.current);void task?.destroy();};},[]);
- useEffect(()=>{if(!text||isPdf)return;try{const p=readingPosition(localStorage.getItem(posKey+':text'),r.hash);if(reading.current)reading.current.scrollTop=p.top;}catch{}},[text]);
- useEffect(()=>{const h=(e:BeforeUnloadEvent)=>{if(dirty.current)e.preventDefault();};window.addEventListener('beforeunload',h);return()=>window.removeEventListener('beforeunload',h);},[]);
+ useEffect(()=>{
+  alive.current=true;
+  let savedPosition=readingPosition(null,r.hash);
+  try{savedPosition=readingPosition(localStorage.getItem(posKey),r.hash);}catch{/* Use the default position when storage is unavailable. */}
+  const start=initialPage&&initialPage>0?initialPage:savedPosition.page;
+  setPage(start);setPageDraft(String(start));setZoom(savedPosition.zoom);
+  void loadReading();
+  return()=>{alive.current=false;translationAbort.current?.abort();clearTimeout(autosave.current);clearTimeout(draftTimer.current);clearTimeout(scrollTimer.current);dragCleanup.current?.();};
+ },[]);
+ useEffect(()=>{
+  setSourceError('');setPdf(undefined);setText(undefined);sourceVersion.current=undefined;
+  if(r.missing)return;
+  const controller=new AbortController();
+  let task:ReturnType<typeof openPdfDocument>|undefined;
+  async function loadSource(){
+   try{
+    if(isPdf){
+     task=openPdfDocument(r.hash?`${raw}?sourceHash=${encodeURIComponent(r.hash)}`:raw);
+     const document=await task.promise;
+     if(!controller.signal.aborted){sourceVersion.current=r.hash;setPdf(document);}
+    }else{
+     const result=await api<{content:string;hash:string}>(`/api/workspace/resources/${r.id}/text`,{signal:controller.signal});
+     if(!controller.signal.aborted){sourceVersion.current=result.hash;setText(result.content);}
+    }
+   }catch(error){
+    if(controller.signal.aborted)return;
+    setSourceError((error as {status?:number})?.status===409?'原文件已更新，请返回资料列表刷新后重新打开。':error instanceof Error?error.message:'请重试加载原文。');
+   }
+  }
+  void loadSource();
+  return()=>{controller.abort();void task?.destroy().catch(()=>{});};
+ },[isPdf,r.id,r.hash,r.missing,raw,sourceAttempt]);
+ useEffect(()=>{
+  let request:AbortController|undefined;
+  const reload=()=>{
+   request?.abort();
+   const controller=request=new AbortController();
+   void loadTranslationAdapters(controller.signal).then(items=>{
+    if(controller.signal.aborted)return;
+    setAdapters(items);setAdapterError('');
+    setTranslationCards(cards=>cards.filter(card=>items.some(item=>item.id===card.id)));
+   }).catch(error=>{
+    if(!controller.signal.aborted)setAdapterError(error.message);
+   });
+  };
+  reload();
+  window.addEventListener(MODEL_CONFIG_EVENT,reload);
+  return()=>{request?.abort();window.removeEventListener(MODEL_CONFIG_EVENT,reload);};
+ },[]);
+ useEffect(()=>{if(!text||isPdf)return;try{const p=readingPosition(localStorage.getItem(posKey+':text'),sourceVersion.current);if(reading.current)reading.current.scrollTop=p.top;}catch{}},[text,isPdf,posKey]);
+ useEffect(()=>{const flush=()=>{if(draftTimer.current&&docRef.current){clearTimeout(draftTimer.current);draftTimer.current=undefined;try{writeReadingDraft(sessionStorage,key,{document:docRef.current,hash:savedRef.current?.hash??null});}catch{}}};const h=(e:BeforeUnloadEvent)=>{flush();if(dirty.current)e.preventDefault();};window.addEventListener('beforeunload',h);window.addEventListener('pagehide',flush);return()=>{flush();window.removeEventListener('beforeunload',h);window.removeEventListener('pagehide',flush);};},[key]);
  useEffect(()=>{document.addEventListener('selectionchange',select);return()=>document.removeEventListener('selectionchange',select);},[]);
  // The reader covers the whole window; keep the page behind it from scrolling.
  useEffect(()=>{if(embedded)return;const previous=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{document.body.style.overflow=previous;};},[embedded]);
@@ -152,27 +203,37 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   onGuardChange(guard);
   return()=>onGuardChange(undefined);
  },[onGuardChange,save,embedded]);
+ function flushDraftNow(d=docRef.current){clearTimeout(draftTimer.current);draftTimer.current=undefined;if(!d)return;try{writeReadingDraft(sessionStorage,key,{document:d,hash:savedRef.current?.hash??null});}catch{setError('本机草稿保存失败，请保持页面并保存服务器笔记');}}
  function scheduleSave(){clearTimeout(autosave.current);autosave.current=setTimeout(()=>{if(dirty.current)void save();},AUTOSAVE_MS);}
- function edit(d:ReadingDocument){setDoc(d);docRef.current=d;markDirty(true);setStatus('编辑中');try{writeReadingDraft(sessionStorage,key,{document:d,hash:savedRef.current?.hash??null});}catch{setError('本机草稿保存失败，请保持页面并保存服务器笔记');}if(!conflictRef.current)scheduleSave();}
- function requestClose(){if(busy||dirty.current){if(!conflict&&!busy&&saved){void save().then(ok=>{if(ok)void finishClose();else setConfirmExit(true);});return;}setConfirmExit(true);return;}void finishClose();}
+ function edit(d:ReadingDocument){setDoc(d);docRef.current=d;markDirty(true);setStatus('编辑中');clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>flushDraftNow(d),300);if(!conflictRef.current)scheduleSave();}
+ function requestClose(){flushDraftNow();if(busy||dirty.current){if(!conflict&&!busy&&saved){void save().then(ok=>{if(ok)void finishClose();else setConfirmExit(true);});return;}setConfirmExit(true);return;}void finishClose();}
 
  // ---------- selection & translation ----------
- function clearSelection(){invalidateTranslation();quoteRef.current='';setQuote('');setTranslationCards([]);setTranslationError('');if(!prefsRef.current.pin)setPop(undefined);}
+ function clearSelection(){invalidateTranslation();selectionRef.current=undefined;setSelected(undefined);setTranslationCards([]);setTranslationError('');if(!prefsRef.current.auto||!prefsRef.current.pin)setPop(undefined);}
  function invalidateTranslation(){selectionEpoch.current++;translationAbort.current?.abort();translationAbort.current=undefined;setTranslating(false);}
- function select(){const q=readingSelectionText(window.getSelection(),reading.current);if(q===undefined||q===quoteRef.current)return;if(!q){clearSelection();return;}quoteRef.current=q;
-  const selection=window.getSelection(),node=selection?.anchorNode;
-  const element=node instanceof Element?node:node?.parentElement;
-  const pageElement=element?.closest('[data-pdf-page]');quotePage.current=Number(pageElement?.getAttribute('data-pdf-page'))||page;
+ function select(){
+  const selection=window.getSelection(),quote=readingSelectionText(selection,reading.current);
+  if(quote===undefined)return;
+  if(!quote){if(selectionRef.current)clearSelection();return;}
+  const range=selection!.getRangeAt(0),node=range.startContainer;
+  const element=node instanceof Element?node:node.parentElement;
+  const pageElement=element?.closest('[data-pdf-page]'),pageNumber=Number(pageElement?.getAttribute('data-pdf-page'));
+  const page=isPdf&&Number.isSafeInteger(pageNumber)&&pageNumber>0?pageNumber:null;
+  const sourceHash=element?.closest('[data-source-hash]')?.getAttribute('data-source-hash')||sourceVersion.current||r.hash||'';
+  if(quote===selectionRef.current?.quote&&page===selectionRef.current.page&&sourceHash===selectionRef.current.sourceHash)return;
   const container=pageElement?.querySelector('.textLayer')||reading.current;
-  let offset=0;try{const range=document.createRange();range.selectNodeContents(container!);range.setEnd(selection!.getRangeAt(0).startContainer,selection!.getRangeAt(0).startOffset);offset=range.toString().length;}catch{}
-  const full=container?.textContent||'';contextRef.current=full.slice(Math.max(0,offset-1500),offset+q.length+1500).slice(0,9000);
-  invalidateTranslation();setQuote(q);setTranslationCards([]);setTranslationError('');}
+  let offset=0;try{const preceding=document.createRange();preceding.selectNodeContents(container!);preceding.setEnd(node,range.startOffset);offset=preceding.toString().length;}catch{}
+  const full=container?.textContent||'',context=full.slice(Math.max(0,offset-1500),offset+quote.length+1500).slice(0,9000);
+  const next={quote,page,sourceHash,context};
+  selectionRef.current=next;
+  invalidateTranslation();setSelected(next);setTranslationCards([]);setTranslationError('');
+ }
  function popoverBounds(){return embedded&&shell.current?shell.current.getBoundingClientRect():{left:0,top:0,right:window.innerWidth,bottom:window.innerHeight,width:window.innerWidth};}
  function clampPin(p:{x:number;y:number}){const bounds=popoverBounds(),width=Math.min(440,Math.max(0,bounds.width-24));return {x:Math.max(bounds.left+8,Math.min(bounds.right-width-8,p.x)),y:Math.max(bounds.top+56,Math.min(bounds.bottom-80,p.y))};}
- function placePopover(){if(prefsRef.current.pin){setPop({...clampPin(prefsRef.current.pin),above:false});return;}const selection=window.getSelection();if(!selection?.rangeCount||!quoteRef.current){return;}const rect=selection.getRangeAt(0).getBoundingClientRect();if(!rect.width&&!rect.height)return;const bounds=popoverBounds(),width=Math.min(440,Math.max(0,bounds.width-24)),x=Math.max(bounds.left+12,Math.min(bounds.right-width-12,rect.left+rect.width/2-width/2)),below=bounds.bottom-rect.bottom;const above=below<260&&rect.top-bounds.top>below;setPop({x,y:above?rect.top-10:rect.bottom+10,above});}
+ function placePopover(){if(prefsRef.current.auto&&prefsRef.current.pin){setPop({...clampPin(prefsRef.current.pin),above:false});return;}const selection=window.getSelection();if(!selection?.rangeCount||!selectionRef.current){return;}const rect=selection.getRangeAt(0).getBoundingClientRect();if(!rect.width&&!rect.height)return;const bounds=popoverBounds(),width=Math.min(440,Math.max(0,bounds.width-24)),x=Math.max(bounds.left+12,Math.min(bounds.right-width-12,rect.left+rect.width/2-width/2)),below=bounds.bottom-rect.bottom;const above=below<260&&rect.top-bounds.top>below;setPop({x,y:above?rect.top-10:rect.bottom+10,above});}
  const translate=useCallback(async(textToTranslate:string,onlyId?:string)=>{
   const services=onlyId?adapters.filter(adapter=>adapter.id===onlyId):adapters;
-  if(!services.length||!textToTranslate)return;
+  if(!prefsRef.current.auto||!services.length||!textToTranslate)return;
   const epoch=selectionEpoch.current,controller=new AbortController();
   const attempt=JSON.stringify([epoch,textToTranslate,prefs.target,adapters.map(adapter=>[adapter.id,adapter.model,adapter.cacheVersion])]);
   if(!onlyId&&translationAbort.current&&translationAttempt.current===attempt)return;
@@ -182,9 +243,10 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   const loading=services.map(adapter=>({id:adapter.id,label:adapter.label,model:adapter.model,color:adapter.color,text:'',status:'loading' as const}));
   setTranslationCards(previous=>onlyId?previous.map(card=>loading.find(next=>next.id===card.id)||card):loading);
   try{
-   let context=services.some(adapter=>adapter.supportsContext)?contextRef.current:undefined;
-   if(pdf&&context){
-    const at=quotePage.current;
+   const selection=selectionRef.current;
+   let context=services.some(adapter=>adapter.supportsContext)?selection?.context:undefined;
+   const at=selection?.page;
+   if(pdf&&context&&at!=null&&selection?.sourceHash===sourceVersion.current){
     const surrounding=await Promise.allSettled([at-1,at+1].map(async number=>{
      if(number<1||number>pdf.numPages)return '';
      const content=await (await pdf.getPage(number)).getTextContent();
@@ -205,21 +267,22 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  },[adapters,pdf,prefs.target,r.id]);
  // Translate automatically once the selection settles.
  useEffect(()=>{
-  if(!quote||!prefs.auto||!adapters.length)return;
-  const attempt=JSON.stringify([selectionEpoch.current,quote,prefs.target,adapters.map(adapter=>[adapter.id,adapter.model,adapter.cacheVersion])]);
-  const timer=setTimeout(()=>{if(translationAttempt.current!==attempt)void translate(quote);},350);
+  if(!selected||!prefs.auto||!adapters.length)return;
+  const attempt=JSON.stringify([selectionEpoch.current,selected.quote,prefs.target,adapters.map(adapter=>[adapter.id,adapter.model,adapter.cacheVersion])]);
+  const timer=setTimeout(()=>{if(prefsRef.current.auto&&translationAttempt.current!==attempt)void translate(selected.quote);},350);
   return()=>clearTimeout(timer);
- },[quote,prefs.auto,prefs.target,adapters,translate]);
+ },[selected,prefs.auto,prefs.target,adapters,translate]);
  function closeTranslation(){window.getSelection()?.removeAllRanges();clearSelection();setPop(undefined);}
- function translateSelection(){
-  select();
-  if(quoteRef.current){placePopover();void translate(quoteRef.current);}
-  else{const bounds=popoverBounds();setPop({...clampPin({x:bounds.left+20,y:bounds.top+56}),above:false});}
+ function toggleTranslation(){
+  const auto=!prefsRef.current.auto;
+  prefsRef.current={...prefsRef.current,auto};setPrefs({auto});
+  if(!auto){clearSelection();setPop(undefined);return;}
+  select();requestAnimationFrame(placePopover);
  }
 
  // Dragging the box pins it where it is dropped; later selections update it in place.
- function startDrag(e:React.PointerEvent){if(!pop)return;e.preventDefault();const box=(e.currentTarget as HTMLElement).closest('.reader-pop') as HTMLElement|null;const rect=box?.getBoundingClientRect();if(!rect)return;const dx=e.clientX-rect.left,dy=e.clientY-rect.top;let last={x:rect.left,y:rect.top};const move=(ev:PointerEvent)=>{last=clampPin({x:ev.clientX-dx,y:ev.clientY-dy});setPop({...last,above:false});};const up=()=>{document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);setPrefs({pin:last});};document.addEventListener('pointermove',move);document.addEventListener('pointerup',up);}
- function togglePin(){if(prefs.pin){setPrefs({pin:null});if(!quoteRef.current)setPop(undefined);else requestAnimationFrame(placePopover);return;}const box=document.querySelector('.reader-pop')?.getBoundingClientRect();if(box)setPrefs({pin:clampPin({x:box.left,y:box.top})});}
+ function startDrag(e:React.PointerEvent){if(!pop)return;e.preventDefault();dragCleanup.current?.();const box=(e.currentTarget as HTMLElement).closest('.reader-pop') as HTMLElement|null;const rect=box?.getBoundingClientRect();if(!rect)return;const dx=e.clientX-rect.left,dy=e.clientY-rect.top;let last={x:rect.left,y:rect.top};const move=(ev:PointerEvent)=>{last=clampPin({x:ev.clientX-dx,y:ev.clientY-dy});setPop({...last,above:false});};const up=()=>{document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',up);document.removeEventListener('pointercancel',up);if(dragCleanup.current===up)dragCleanup.current=undefined;if(alive.current)setPrefs({pin:last});};dragCleanup.current=up;document.addEventListener('pointermove',move);document.addEventListener('pointerup',up);document.addEventListener('pointercancel',up);}
+ function togglePin(){if(prefs.pin){setPrefs({pin:null});if(!selectionRef.current)setPop(undefined);else requestAnimationFrame(placePopover);return;}const box=shell.current?.querySelector('.reader-pop')?.getBoundingClientRect();if(box)setPrefs({pin:clampPin({x:box.left,y:box.top})});}
  useEffect(()=>{
   if(!pop)return;
   const node=shell.current?.querySelector<HTMLElement>('.reader-pop');if(!node)return;
@@ -233,11 +296,34 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   return()=>{observer.disconnect();window.removeEventListener('resize',place);};
  },[!!pop]);
  // A pinned box is shown from the start as a fixed translation panel.
- useEffect(()=>{if(prefs.pin)setPop({...clampPin(prefs.pin),above:false});},[]);
+ useEffect(()=>{if(prefs.auto&&prefs.pin)setPop({...clampPin(prefs.pin),above:false});},[]);
+ function addExcerpt(){
+  const current=docRef.current,selection=selectionRef.current;
+  if(!current||!selection)return;
+  const completed=translationCards.filter(card=>card.status==='done');
+  const preferred=completed.find(card=>card.id===source?.id)??completed[0];
+  const note:ReadingNote={
+   id:crypto.randomUUID(),quote:selection.quote,sourceHash:selection.sourceHash,page:selection.page,
+   translation:preferred?.text||'',translationSource:preferred?.label||'',comment:'',
+   locationKind:selection.page===null?'unlocated':'pdf-page',sourcePath:r.path,createdAt:new Date().toISOString(),
+  };
+  const next={...current,notes:[...current.notes,note]};
+  edit(next);
+  flushDraftNow(next);
+  closeTranslation();
+  if(embedded)setEmbeddedPanel(true);
+  else setPrefs({panel:true,tab:'excerpts'});
+ }
  // Excerpts become Markdown in the document notes so they can be reorganised freely.
  function insertIntoNotes(n:ReadingNote){if(!doc)return;const at=isPdf?readingPage(n):null;const block=[n.quote.split('\n').map(line=>'> '+line).join('\n'),n.translation?`\n${n.translation}`:'',`\n*— ${at!==null?`p.${at}`:'未定位'}*`,n.comment?`\n\n${n.comment}`:''].join('');const content=doc.content.trimEnd();edit({...doc,content:(content?content+'\n\n':'')+block+'\n'});setPrefs({tab:'notes'});}
  function appendExcerpt(note:ReadingNote){onAppendToNote?.(readingExcerptMarkdown(r,{...note,page:isPdf?readingPage(note):null}));}
- function changePage(value:number){clearSelection();positionChanged.current=true;const next=readingPageInput(value,pdf?.numPages||1);setPage(next);setPageDraft(String(next));reading.current?.querySelector(`[data-pdf-page="${next}"]`)?.scrollIntoView({block:'start'});}
+ function changePage(value:number){
+  clearSelection();positionChanged.current=true;
+  const next=readingPageInput(value,pdf?.numPages??Number.MAX_SAFE_INTEGER);
+  setPage(next);setPageDraft(String(next));
+  if(prefsRef.current.view==='bilingual')setPrefs({view:'original'});
+  else reading.current?.querySelector(`[data-pdf-page="${next}"]`)?.scrollIntoView({block:'start'});
+ }
  function stepZoom(direction:1|-1){positionChanged.current=true;const current=effectiveZoom;const next=direction>0?ZOOMS.find(z=>z>current+.01)??ZOOMS.at(-1)!:[...ZOOMS].reverse().find(z=>z<current-.01)??ZOOMS[0];setPrefs({fit:false});setZoom(next);}
 
  function shortcutZoom(steps:number,reset=false){
@@ -257,7 +343,8 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  },[isPdf,prefs.view,effectiveZoom]);
 
  // ---------- keyboard ----------
- useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(embedded&&(!(e.target instanceof Node)||!shell.current?.contains(e.target)))return;const step=zoomShortcutStep(e);if(isPdf&&prefsRef.current.view==='original'&&step!==undefined&&e.target instanceof Node&&(reading.current?.contains(e.target)||reading.current?.matches(':hover'))&&!(e.target instanceof Element&&e.target.closest('input:not([type="number"]),textarea,[contenteditable="true"]'))){e.preventDefault();shortcutZoom(step,step===0);return;}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();void save();return;}if(e.key==='Escape'){if(document.fullscreenElement){e.preventDefault();void document.exitFullscreen();return;}if(confirmExit){setConfirmExit(false);return;}if(pop){closeTranslation();return;}if(quoteRef.current){window.getSelection()?.removeAllRanges();clearSelection();return;}requestClose();}};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey);});
+ onKeyRef.current=(e:KeyboardEvent)=>{if(embedded&&(!(e.target instanceof Node)||!shell.current?.contains(e.target)))return;const step=zoomShortcutStep(e);if(isPdf&&prefsRef.current.view==='original'&&step!==undefined&&e.target instanceof Node&&(reading.current?.contains(e.target)||reading.current?.matches(':hover'))&&!(e.target instanceof Element&&e.target.closest('input:not([type="number"]),textarea,[contenteditable="true"]'))){e.preventDefault();shortcutZoom(step,step===0);return;}if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='s'){e.preventDefault();if(embedded)e.stopPropagation?.();void save();return;}if(e.key==='Escape'){if(document.fullscreenElement){e.preventDefault();void document.exitFullscreen();return;}if(confirmExit){setConfirmExit(false);return;}if(pop){closeTranslation();return;}if(selectionRef.current){window.getSelection()?.removeAllRanges();clearSelection();return;}requestClose();}};
+ useEffect(()=>{const onKey=(e:KeyboardEvent)=>onKeyRef.current(e);document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey);},[]);
 
  const excerpts=doc?[...doc.notes].reverse():[];
  const statusTone=conflict||readingError?'warn':dirtyView||busy?'busy':'ok';
@@ -265,7 +352,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  return <div ref={shell} className={`reader-shell ${embedded?'embedded':''} is-immersive`} role={embedded?'region':'dialog'} aria-modal={embedded?undefined:true} aria-label={`阅读 · ${r.title||r.name}`}>
   <header className="reader-bar">
    <div className="reader-bar-start">
-    <button className="reader-back" onClick={requestClose} title={embedded?'关闭当前文献':'返回上一页（Esc）'}><ArrowLeft size={17}/><span>{embeddedToolbar?'返回课题':embedded?'文献列表':'返回'}</span></button>
+    <button className="reader-back" onClick={requestClose} aria-label={embeddedToolbar?'返回课题':embedded?'返回文献列表':'返回上一页'} title={embedded?'关闭当前文献':'返回上一页（Esc）'}><ArrowLeft size={17}/><span>{embeddedToolbar?'返回课题':embedded?'文献列表':'返回'}</span></button>
     {embeddedToolbar?<div className="reader-paper-title">{embeddedToolbar.title}</div>:<h1 title={r.path}>{r.title||r.name.replace(/\.pdf$/i,'')}</h1>}
    </div>
    {isPdf&&<div className="reader-bar-center">
@@ -274,8 +361,8 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
      <button aria-pressed={prefs.view==='bilingual'} onClick={()=>setPrefs({view:'bilingual'})} title="全文对照：只翻正文，图表公式与参考文献保留原文"><AlignLeft size={13}/>对照</button>
     </div>
     {prefs.view==='original'&&<><div className="reader-pager">
-     <button aria-label="上一页" disabled={page<=1} onClick={()=>changePage(page-1)}><ChevronLeft size={16}/></button>
-     <input aria-label="页码" inputMode="numeric" value={pageDraft} onChange={e=>setPageDraft(e.target.value.replace(/\D/g,''))} onBlur={()=>changePage(Number(pageDraft))} onKeyDown={e=>{if(e.key==='Enter')changePage(Number(pageDraft));}}/>
+     <button aria-label="上一页" disabled={!pdf||page<=1} onClick={()=>changePage(page-1)}><ChevronLeft size={16}/></button>
+     <input aria-label="页码" inputMode="numeric" disabled={!pdf} value={pageDraft} onChange={e=>setPageDraft(e.target.value.replace(/\D/g,''))} onBlur={()=>changePage(Number(pageDraft))} onKeyDown={e=>{if(e.key==='Enter')changePage(Number(pageDraft));}}/>
      <span>/ {pdf?.numPages||'…'}</span>
      <button aria-label="下一页" disabled={!pdf||page>=pdf.numPages} onClick={()=>changePage(page+1)}><ChevronRight size={16}/></button>
     </div>
@@ -286,7 +373,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
     {embeddedToolbar&&<div className="reader-study-actions">{embeddedToolbar.actions}</div>}
     <span className={`reader-status ${statusTone}`} role="status">{status}</span>
     <button className="reader-icon" aria-label={fullscreen?'退出全屏':'全屏阅读'} title={fullscreen?'退出全屏':'全屏阅读'} onClick={()=>void toggleFullscreen()}>{fullscreen?<Minimize2 size={16}/>:<Maximize2 size={16}/>}</button>
-    <button className="reader-toggle on" onPointerDown={event=>event.preventDefault()} onClick={translateSelection} title="翻译选中文字" aria-label="翻译选中文字"><Languages size={16}/><span>翻译</span></button>
+    <button className={`reader-toggle ${prefs.auto?'on':''}`} onPointerDown={event=>event.preventDefault()} onClick={toggleTranslation} title={prefs.auto?'关闭划词翻译':'开启划词翻译'} aria-label="划词翻译" aria-pressed={prefs.auto}><Languages size={16}/><span>翻译</span></button>
     {!r.missing&&<a className="reader-icon" href={raw} target="_blank" rel="noreferrer" title="用系统程序打开原文件"><ExternalLink size={16}/></a>}
     <button className={`reader-panel-toggle ${embedded?'reader-icon':'reader-toggle'}`} aria-label={embedded?(showPanel?'收起单篇摘录':'查看单篇摘录'):(showPanel?'隐藏笔记':'展开笔记')} aria-expanded={showPanel} aria-controls={panelId} onClick={()=>embedded?setEmbeddedPanel(value=>!value):setPrefs({panel:!prefs.panel})} title={embedded?(showPanel?'收起单篇摘录':'查看单篇摘录'):(showPanel?'隐藏笔记':'展开笔记')}>{showPanel?<PanelRightClose size={17}/>:<PanelRightOpen size={17}/>}<span>{embedded?'摘录':showPanel?'隐藏笔记':'展开笔记'}</span></button>
    </div>
@@ -294,7 +381,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   {error&&<div className="reader-alert" role="alert">{error}<button onClick={()=>setError('')} aria-label="关闭提示"><X size={14}/></button></div>}
   <ReadingSplit className={`reader-body ${showPanel?'with-panel':''}`} enabled={showPanel} label={embedded?'调整阅读与摘录比例':'调整阅读与笔记比例'} storageKey={embedded?'echopaper:reading-excerpt-split':'echopaper:reading-note-split'} alwaysStacked={embedded} defaultHeight={embedded?65:60}>
    <div ref={reading} className="reader-source" tabIndex={0} aria-label="资料原文阅读区"
-    onScroll={e=>{if(pop&&!prefs.pin)setPop(undefined);if(!isPdf)try{localStorage.setItem(posKey+':text',JSON.stringify({hash:r.hash,top:e.currentTarget.scrollTop}));}catch{}}}
+    onScroll={e=>{if(pop&&!(prefs.auto&&prefs.pin))setPop(undefined);if(!isPdf){const top=e.currentTarget.scrollTop;clearTimeout(scrollTimer.current);scrollTimer.current=setTimeout(()=>{try{localStorage.setItem(posKey+':text',JSON.stringify({hash:sourceVersion.current,top}));}catch{}},250);}}}
     onMouseUp={()=>{select();requestAnimationFrame(placePopover);}} onKeyUp={()=>{select();requestAnimationFrame(placePopover);}}>
     {isPdf&&prefs.view==='original'&&<div className="reader-source-tools"><div className="reader-zoom" title="Ctrl + 滚轮，Ctrl/⌘ + 加减号缩放，Ctrl/⌘ + 0 恢复 100%">
      <button aria-label="缩小" onClick={()=>stepZoom(-1)}><Minus size={13}/></button>
@@ -303,8 +390,10 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
      <button className={prefs.fit?'on':''} onClick={()=>{positionChanged.current=true;setPrefs({fit:!prefs.fit});}} title="适应宽度">适宽</button>
     </div></div>}
     {r.missing?<div className="reader-empty"><p>原文件已失联；已有笔记仍可查看、编辑和保存。</p><p>请在资料详情中重新定位原文件后继续阅读和摘录。</p></div>
-     :isPdf&&prefs.view==='bilingual'?<BilingualReading toolbarTarget={bilingualToolbar} resourceId={r.id} pdf={pdf} adapter={source} adapters={adapters} onSelectSource={id=>setPrefs({source:id})} target={prefs.target} translateAppendix={prefs.appendix} onToggleAppendix={value=>setPrefs({appendix:value})} onJumpToPage={value=>{setPrefs({view:'original'});requestAnimationFrame(()=>changePage(value));}}/>
-     :isPdf?(pdf?<ContinuousPdf pdf={pdf} zoom={effectiveZoom} container={reading} initialPage={page} onPage={value=>{positionChanged.current=true;setPage(value);setPageDraft(String(value));try{localStorage.setItem(posKey,JSON.stringify({hash:r.hash,page:value,zoom}));}catch{}}}/>:<div className="reader-empty"><LoaderCircle className="spin" size={20}/><p>正在加载 PDF…</p></div>)
+     :isPdf&&prefs.view==='bilingual'?<BilingualReading toolbarTarget={bilingualToolbar} resourceId={r.id} pdf={pdf} adapter={source} adapters={adapters} onSelectSource={id=>setPrefs({source:id})} target={prefs.target} translateAppendix={prefs.appendix} onToggleAppendix={value=>setPrefs({appendix:value})} onJumpToPage={changePage}/>
+     :sourceError?<div className="reader-empty" role="alert"><p>{isPdf?'PDF 无法打开':'原文无法读取'}</p><p>{sourceError}</p><button type="button" className="reader-retry" onClick={()=>setSourceAttempt(attempt=>attempt+1)}>重试加载原文</button></div>
+     :isPdf?(pdf?<ContinuousPdf pdf={pdf} zoom={effectiveZoom} container={reading} initialPage={readingPageInput(page,pdf.numPages)} onPage={value=>{positionChanged.current=true;setPage(value);setPageDraft(String(value));try{localStorage.setItem(posKey,JSON.stringify({hash:r.hash,page:value,zoom}));}catch{}}}/>:<div className="reader-empty" role="status"><LoaderCircle className="spin" size={20}/><p>正在加载 PDF…</p></div>)
+     :text===undefined?<div className="reader-empty" role="status"><LoaderCircle className="spin" size={20}/><p>正在加载原文…</p></div>
      :/\.(md|markdown)$/i.test(r.name)&&text?<article className="reader-text reader-md reader-md-doc" style={{fontSize:15*zoom}}><AiMarkdown text={text}/></article>:<article className="reader-text" style={{fontSize:16*zoom}}>{text||'没有可读取的文本；可打开原文件并记录笔记。'}</article>}
    </div>
    <aside id={panelId} className="reader-panel" aria-label="摘录与笔记" hidden={!showPanel}>
@@ -315,7 +404,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
     {readingError&&<div className="reader-alert inline" role="alert"><p>笔记未能载入：{readingError}</p><p>原文阅读不受影响。</p><button disabled={readingLoading} onClick={()=>void loadReading()}>重试加载笔记</button></div>}
     {conflict&&doc&&<div className="reader-alert inline" role="alert"><p><strong>与服务器版本冲突</strong>，双方内容均已保留，未自动覆盖。</p><details><summary>查看服务器内容</summary><pre>{JSON.stringify(conflict.document,null,2)}</pre></details><button onClick={()=>{const merged={...doc,content:doc.content+'\n\n【服务器笔记，待合并】\n'+conflict.document.content,notes:[...doc.notes,...conflict.document.notes.filter(n=>!doc.notes.some(x=>JSON.stringify(x)===JSON.stringify(n))).map(n=>({...n,id:crypto.randomUUID()}))]};setSaved(conflict);savedRef.current=conflict;setConflict(undefined);conflictRef.current=undefined;edit(merged);}}>保留双方后继续编辑</button></div>}
     {doc&&activeTab==='excerpts'&&<div className="reader-excerpts">
-     {!excerpts.length&&<div className="reader-hint"><Quote size={20}/><p>这篇文献还没有摘录。</p></div>}
+     {!excerpts.length&&<div className="reader-hint"><Quote size={20}/><p>{r.missing?'这篇文献还没有摘录。':'选中文字后，点击“存为摘录”。'}</p></div>}
      {excerpts.map(n=>{const at=isPdf?readingPage(n):null;return <article key={n.id} className="reader-excerpt">
       <header>{at!==null?<button className="reader-page-chip" disabled={n.sourceHash!==r.hash} onClick={()=>changePage(Math.min(pdf?.numPages||at,at))} title="跳转到该页">p.{at}</button>:<span className="reader-page-chip muted">未定位{n.locationKind===undefined?' · 待核对':''}</span>}{n.sourceHash!==r.hash&&<span className="reader-flag">原文件已变</span>}<time>{n.createdAt.slice(0,10)}</time><button className="reader-mini insert" aria-label="插入到笔记" title="以 Markdown 引用插入到笔记" onClick={()=>insertIntoNotes(n)}><CornerDownLeft size={13}/></button>{onAppendToNote&&<button className="reader-mini insert" aria-label="写入课题笔记" title="将此摘录和来源写入课题笔记" onClick={()=>appendExcerpt(n)}><NotebookPen size={13}/></button>}<button className="reader-mini" aria-label="删除摘录" title="删除摘录" onClick={()=>{if(confirm('删除这条摘录？保存后不可在此恢复。'))edit({...doc,notes:doc.notes.filter(v=>v.id!==n.id)});}}><Trash2 size={13}/></button></header>
       <blockquote>{n.quote}</blockquote>
@@ -336,8 +425,13 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
     </footer>
    </aside>
   </ReadingSplit>
-  {pop&&<div className={`reader-pop ${pop.above?'above':''} ${prefs.pin?'pinned':''}`} style={{left:pop.x-(popupOrigin?.left??0),top:pop.y-(popupOrigin?.top??0)}} onMouseDown={event=>{if(event.target instanceof Element&&event.target.closest('button'))event.preventDefault();}} role="dialog" aria-label="选区翻译">
-   <ReadingTranslation cards={translationCards} error={translationError} selected={!!quote} hasSources={adapters.length>0} busy={translating} pinned={!!prefs.pin} onDrag={startDrag} onPin={togglePin} onClose={closeTranslation} onTranslate={()=>void translate(quote)} onRetry={id=>void translate(quote,id)}/>
+  {pop&&(selected||prefs.auto&&prefs.pin)&&<div className={`reader-pop ${pop.above?'above':''} ${prefs.auto&&prefs.pin?'pinned':''}`} style={{left:pop.x-(popupOrigin?.left??0),top:pop.y-(popupOrigin?.top??0)}} onMouseDown={event=>{if(event.target instanceof Element&&event.target.closest('button'))event.preventDefault();}} role="dialog" aria-label={prefs.auto?'选区翻译与摘录':'选区摘录'}>
+   {prefs.auto&&<ReadingTranslation cards={translationCards} error={translationError||adapterError} selected={!!selected} hasSources={adapters.length>0} busy={translating} pinned={!!prefs.pin} onDrag={startDrag} onPin={togglePin} onClose={closeTranslation} onRetry={id=>{if(selected)void translate(selected.quote,id);}}/>}
+   {selected&&<footer>
+    <span className="reader-muted">{selected.page!==null?`第 ${selected.page} 页 · `:''}{selected.quote.length} 字</span>
+    <button type="button" className="primary" disabled={!doc} onClick={addExcerpt}><BookmarkPlus size={14}/>存为摘录</button>
+    {!prefs.auto&&<button type="button" onClick={closeTranslation} aria-label="关闭摘录工具"><X size={14}/></button>}
+   </footer>}
   </div>}
   {confirmExit&&<div className="reader-exit" role="alertdialog" aria-label="笔记尚未保存"><div>
    <h2>{busy?'笔记正在保存':'笔记尚未保存'}</h2>

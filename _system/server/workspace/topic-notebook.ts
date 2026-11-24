@@ -8,8 +8,13 @@ import {emptyTopicNotebook,validTopicNotebook,type TopicNotebook} from '../../sh
 export async function readTopicNotebook(root:string,id:string){
  if(!/^[a-zA-Z0-9_-]{1,100}$/.test(id))throw new HttpError(400,'课题ID无效');
  const file=await assertNoSymlinks(root,`workspace/topic-notebooks/${id}.json`,true);
- try{const raw=await fs.readFile(file,'utf8');return {notebook:JSON.parse(raw) as TopicNotebook,hash:hash(raw)};}
- catch(error:any){if(error.code!=='ENOENT')throw error;return {notebook:emptyTopicNotebook(id),hash:null as string|null};}
+ let bytes:Buffer;
+ try{bytes=await fs.readFile(file);}
+ catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;return {notebook:emptyTopicNotebook(id),hash:null};}
+ let notebook:unknown;
+ try{notebook=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{/* Format validation below also covers invalid JSON and UTF-8. */}
+ if(!validTopicNotebook(notebook,id))throw new HttpError(409,'课题重点文献记录无法读取，原文件已保留。');
+ return {notebook,hash:hash(bytes)};
 }
 
 /** Ideas and key references live beside the topic catalog, one hash-checked JSON file per topic. */

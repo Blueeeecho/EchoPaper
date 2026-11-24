@@ -96,11 +96,16 @@ test('new backups restore catalog and PPT data and styles, exclude external orig
   try{
     const original=Buffer.from('External binary original\0 stays outside workspace'),trashed=Buffer.from('External recoverable bytes');await fs.writeFile(path.join(external,'external-original.bin'),original);await fs.mkdir(path.join(external,'.echopaper-trash/retained'),{recursive:true});await fs.writeFile(path.join(external,'.echopaper-trash/retained/content'),trashed);
     const connected=await f.app.inject({method:'POST',url:'/api/workspace/roots',payload:{path:external,permission:'read',label:'External fixture'}});assert.equal(connected.statusCode,201,connected.body);for(let i=0;i<200;i++){const list=(await f.app.inject('/api/workspace/roots')).json().roots;if(list[0].status!=='scanning')break;await new Promise(resolve=>setTimeout(resolve,10));}
+    const originalMaterial=Buffer.from([0x25,0x50,0x44,0x46,0xff]);
+    const material=path.join(f.root,'materials/topic/paper.pdf');
+    await fs.mkdir(path.dirname(material),{recursive:true});
+    await fs.writeFile(material,originalMaterial);
     const topic=await f.app.inject({method:'POST',url:'/api/workspace/topics',payload:{title:'Original topic'}});assert.equal(topic.statusCode,201,topic.body);await fixtureStyle(f.root,'1.0.0','Original style');const created=await f.app.inject({method:'POST',url:'/api/presentations',payload:{title:'Original PPT',styleId:'fixture-style',styleVersion:'1.0.0'}});assert.equal(created.statusCode,201,created.body);const file=created.json(),source=await f.app.inject({method:'POST',url:`/api/presentations/${file.document.id}/sources`,payload:{text:'Frozen author evidence',expectedHash:file.hash}});assert.equal(source.statusCode,200,source.body);const originalPresentation=source.json(),backup=await f.backup(),zip=path.join(f.root,'backups',backup.id+'.zip'),verified=await run('/usr/bin/python3',[path.resolve('scripts/backup-archive.py'),'verify',zip]),manifest=JSON.parse(verified.stdout),names=manifest.files.map((entry:{path:string})=>entry.path);
-    assert.ok(manifest.directories.includes('workspace'));assert.ok(names.includes('workspace/catalog.sqlite'));assert.ok(names.includes(`workspace/presentations/${file.document.id}/presentation.json`));assert.ok(names.includes('shared/presentation-styles/fixture-style/1.0.0/template.pptx'));assert.equal(names.some((name:string)=>name.includes('external-original.bin')||name.includes('.echopaper-trash')),false);
+    assert.ok(manifest.directories.includes('workspace'));assert.ok(names.includes('materials/topic/paper.pdf'));assert.ok(names.includes('workspace/catalog.sqlite'));assert.ok(names.includes(`workspace/presentations/${file.document.id}/presentation.json`));assert.ok(names.includes('shared/presentation-styles/fixture-style/1.0.0/template.pptx'));assert.equal(names.some((name:string)=>name.includes('external-original.bin')||name.includes('.echopaper-trash')),false);
     const saved=await f.app.inject({method:'PUT',url:`/api/presentations/${file.document.id}`,payload:{document:{...originalPresentation.document,title:'Changed after backup'},expectedHash:originalPresentation.hash}});assert.equal(saved.statusCode,200,saved.body);await f.app.inject({method:'POST',url:'/api/workspace/topics',payload:{title:'New topic after backup'}});await fixtureStyle(f.root,'1.0.0','New style after backup');
-    const first=await preview(f.app,backup.id);await f.backup();const second=await preview(f.app,backup.id);assert.equal(second.expectedFingerprint,first.expectedFingerprint,'creating another backup must not mutate the catalog checkpoint');assert.ok(second.changed.includes('workspace/catalog.sqlite'));assert.ok(second.changed.includes(`workspace/presentations/${file.document.id}/presentation.json`));assert.ok(second.changed.includes('shared/presentation-styles/fixture-style/1.0.0/template.pptx'));
-    const restored=await f.app.inject({method:'POST',url:`/api/backups/${backup.id}/restore`,payload:{expectedFingerprint:second.expectedFingerprint,confirmed:true}});assert.equal(restored.statusCode,200,restored.body);assert.equal(await fs.readFile(path.join(f.root,'shared/presentation-styles/fixture-style/1.0.0/template.pptx'),'utf8'),'Fixture template Original style');assert.deepEqual(await fs.readFile(path.join(external,'external-original.bin')),original);assert.deepEqual(await fs.readFile(path.join(external,'.echopaper-trash/retained/content')),trashed);
+    await fs.writeFile(material,'new material revision');
+    const first=await preview(f.app,backup.id);await f.backup();const second=await preview(f.app,backup.id);assert.equal(second.expectedFingerprint,first.expectedFingerprint,'creating another backup must not mutate the catalog checkpoint');assert.ok(second.changed.includes('workspace/catalog.sqlite'));assert.ok(second.changed.includes('materials/topic/paper.pdf'));assert.ok(second.changed.includes(`workspace/presentations/${file.document.id}/presentation.json`));assert.ok(second.changed.includes('shared/presentation-styles/fixture-style/1.0.0/template.pptx'));
+    const restored=await f.app.inject({method:'POST',url:`/api/backups/${backup.id}/restore`,payload:{expectedFingerprint:second.expectedFingerprint,confirmed:true}});assert.equal(restored.statusCode,200,restored.body);assert.deepEqual(await fs.readFile(material),originalMaterial);assert.equal(await fs.readFile(path.join(f.root,'shared/presentation-styles/fixture-style/1.0.0/template.pptx'),'utf8'),'Fixture template Original style');assert.deepEqual(await fs.readFile(path.join(external,'external-original.bin')),original);assert.deepEqual(await fs.readFile(path.join(external,'.echopaper-trash/retained/content')),trashed);
     await f.app.close();reopened=await createApp({workspaceRoot:f.root,buildService:fake,watch:false});const topics=(await reopened.inject('/api/workspace/topics')).json().topics;assert.deepEqual(topics.map((item:{title:string})=>item.title),['Original topic']);const presentation=(await reopened.inject(`/api/presentations/${file.document.id}`)).json();assert.equal(presentation.document.title,'Original PPT');assert.equal(presentation.document.sources[0].text,'Frozen author evidence');assert.equal((await reopened.inject('/api/workspace/roots')).json().roots[0].path,external);
   }finally{await reopened?.close();await f.cleanup();await fs.rm(external,{recursive:true,force:true});}
 });
@@ -118,4 +123,45 @@ test('legacy style-copy checksum mismatch aborts before installing any restored 
     fs.cp=async(source,destination,options)=>{await copy(source,destination,options);if(String(source)===path.join(f.root,'shared/presentation-styles')&&String(destination).includes('/.restore-')){injected=true;await fs.writeFile(path.join(String(destination),'fixture-style/1.0.0/template.pptx'),'Injected copied-file corruption');}};
     const result=await f.app.inject({method:'POST',url:`/api/backups/${backup.id}/restore`,payload:{expectedFingerprint:plan.expectedFingerprint,confirmed:true}});assert.equal(injected,true);assert.equal(result.statusCode,400,result.body);assert.equal(await fs.readFile(path.join(styles,'template.pptx'),'utf8'),'Fixture template Current style');assert.equal(await fs.readFile(path.join(f.root,'papers/Alpha/manuscript/main.tex'),'utf8'),'Current draft must survive');assert.equal((await f.app.inject('/api/backups')).json().maintenance,false);
   }finally{fs.cp=copy;await f.cleanup();}
+});
+
+test('a backup without materials keeps the current managed originals',async()=>{
+  const f=await fixture();
+  try {
+    const backup=await f.backup();
+    const material=path.join(f.root,'materials/retained.pdf');
+    await fs.mkdir(path.dirname(material),{recursive:true});
+    await fs.writeFile(material,Buffer.from([0x25,0x50,0x44,0x46,0xff]));
+    const plan=await preview(f.app,backup.id);
+    assert.ok(!plan.removed.includes('materials/retained.pdf'));
+    const restored=await f.app.inject({method:'POST',url:`/api/backups/${backup.id}/restore`,payload:{expectedFingerprint:plan.expectedFingerprint,confirmed:true}});
+    assert.equal(restored.statusCode,200,restored.body);
+    assert.deepEqual(await fs.readFile(material),Buffer.from([0x25,0x50,0x44,0x46,0xff]));
+  }finally{await f.cleanup();}
+});
+
+test('aborted POST request releases activeMutations so backups do not lock with 409',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'echopaper-backup-abort-'));
+  await fs.mkdir(path.join(root,'shared/templates/english'),{recursive:true});
+  await fs.writeFile(path.join(root,'shared/templates/english/main.tex'),'Draft\n');
+  const app=await createApp({workspaceRoot:root,buildService:fake,watch:false});
+  let markEntered!:()=>void, markClosed!:()=>void;
+  const entered=new Promise<void>(r=>{markEntered=r;});
+  const closed=new Promise<void>(r=>{markClosed=r;});
+  app.post('/api/test-aborted-mutation',async(_req,reply)=>{
+    markEntered();
+    await new Promise<void>(resolve=>{reply.raw.once('close',()=>{markClosed();resolve();});});
+    return reply;
+  });
+  try{
+    const address=await app.listen({host:'127.0.0.1',port:0});
+    const controller=new AbortController();
+    const pending=fetch(`${address}/api/test-aborted-mutation`,{method:'POST',signal:controller.signal}).catch(()=>{});
+    await entered;
+    controller.abort();
+    await Promise.all([closed,pending]);
+    await new Promise(r=>setTimeout(r,20));
+    const created=await app.inject({method:'POST',url:'/api/backups',payload:{label:'After abort'}});
+    assert.equal(created.statusCode,201,created.body);
+  }finally{await app.close();await fs.rm(root,{recursive:true,force:true});}
 });

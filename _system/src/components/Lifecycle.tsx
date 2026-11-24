@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, ArrowDownToLine, ArrowRight, Check, CheckCircle2, FileCheck2, FileText, GitCommitHorizontal, History, LoaderCircle, MessageSquareText, Plus, Save, Trash2 } from 'lucide-react';
-import { STAGES, STAGE_LABELS, type CompileTarget, type DeadlineSource, type HistoryEntry, type Project, type ReviewItem, type ReviewRound, type Submission } from '../../shared/types';
-import { api, json, prettyDate, queryPath } from '../api';
+import { Archive, ArrowDownToLine, ArrowRight, Check, CheckCircle2, FileCheck2, FileText, GitCommitHorizontal, LoaderCircle, MessageSquareText, Plus, Save, Trash2 } from 'lucide-react';
+import { STAGES, STAGE_LABELS, type CompileTarget, type DeadlineSource, type HistoryEntry, type Project, type ReviewItem, type ReviewRoundDocument, type Submission } from '../../shared/types';
+import { ApiError, api, json, prettyDate, queryPath } from '../api';
 import { formatDeadlineLocal, localDeadlineToUtc, validateDeadlineConfiguration } from '../../shared/deadline';
 import ConferencePicker from './ConferencePicker';
 import type { ConferenceSelection } from '../../shared/conference-types';
@@ -10,25 +10,115 @@ import {reviewLocations} from '../reviewLocations';
 type Notify = (message: string, error?: boolean) => void;
 const endpoint = (id: string) => `/api/projects/${encodeURIComponent(id)}`;
 export function Reviews({ project, notify, onOpen, onRefresh, initialRoundId }: { project: Project; initialRoundId?:string; notify: Notify; onOpen: (path: string,line?:number) => void; onRefresh: () => void }) {
-  const [rounds, setRounds] = useState<ReviewRound[]>([]); const [selected, setSelected] = useState(''); const [items, setItems] = useState<ReviewItem[]>([]); const [busy, setBusy] = useState(false); const [dirty, setDirty] = useState(false);
+  const [rounds, setRounds] = useState<ReviewRoundDocument[]>([]); const [selected, setSelected] = useState(''); const [items, setItems] = useState<ReviewItem[]>([]); const [busy, setBusy] = useState(false); const [dirty, setDirty] = useState(false);
   const round = rounds.find(r => r.id === selected);
+  const [conflict, setConflict] = useState<ReviewRoundDocument>();
+  const [choices, setChoices] = useState<Record<string, 'draft' | 'saved'>>({});
   const [statusFilter,setStatusFilter]=useState<'all'|'open'|'addressed'>('all');
   const [reviewQuery,setReviewQuery]=useState('');
   const visible=(item:ReviewItem)=>(statusFilter==='all'||item.status===statusFilter)&&(!reviewQuery.trim()||[item.reviewer,item.comment,item.response,item.location].some(t=>t.toLowerCase().includes(reviewQuery.trim().toLowerCase())));
   const itemsRef = useRef(items); itemsRef.current = items;
   const draftKey = (id: string) => `motai:review-draft:${project.id}:${id}`;
-  function restoreRound(id: string, saved: ReviewItem[]) { let next = saved; try { const draft = JSON.parse(localStorage.getItem(draftKey(id)) || 'null'); if (Array.isArray(draft)) next = draft; } catch {} setSelected(id); setItems(next); setDirty(JSON.stringify(next) !== JSON.stringify(saved)); }
-  function changeItems(next: ReviewItem[]) { setItems(next); itemsRef.current = next; setDirty(true); try { localStorage.setItem(draftKey(selected), JSON.stringify(next)); } catch { notify('浏览器草稿空间不足，请及时保存审稿回复', true); } }
-  const load = () => api<{ rounds: ReviewRound[] }>(`${endpoint(project.id)}/reviews`).then(({ rounds: data }) => { setRounds(data); const id = initialRoundId ? (data.some(r=>r.id===initialRoundId)?initialRoundId:'') : data.some(r => r.id === selected) ? selected : data[0]?.id || '';if(initialRoundId&&!id)notify('指定审稿轮次已不可用，请重新选择。',true); restoreRound(id, data.find(r => r.id === id)?.items || []); }).catch(e => notify(e.message, true));
+  const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  function storeDraft(record: ReviewRoundDocument, next: ReviewItem[]) {
+    try {
+      if (equal(next, record.items)) localStorage.removeItem(draftKey(record.id));
+      else localStorage.setItem(draftKey(record.id), JSON.stringify({hash: record.hash, items: next}));
+    } catch { notify('浏览器草稿空间不可用，当前回复保留在本页。', true); }
+  }
+  function restoreRound(record?: ReviewRoundDocument) {
+    let next = record?.items ?? [], draftHash;
+    if (record) {
+      try {
+        const draft = JSON.parse(localStorage.getItem(draftKey(record.id)) || 'null');
+        if (Array.isArray(draft)) next = draft;
+        else if (Array.isArray(draft?.items)) { next = draft.items; draftHash = draft.hash; }
+      } catch {}
+    }
+    const changed = !!record && !equal(next, record.items);
+    setSelected(record?.id ?? ''); setItems(next); itemsRef.current = next; setDirty(changed);
+    setConflict(changed && draftHash !== record?.hash ? record : undefined);
+    setChoices({});
+  }
+  function changeItems(next: ReviewItem[]) {
+    if (!round || conflict) return;
+    setItems(next); itemsRef.current = next; setDirty(!equal(next, round.items));
+    storeDraft(round, next);
+  }
+  const load = () => api<{ rounds: ReviewRoundDocument[] }>(`${endpoint(project.id)}/reviews`).then(({ rounds: data }) => {
+    setRounds(data);
+    const id = initialRoundId || selected;
+    const record = data.find(value => value.id === id) ?? (initialRoundId ? undefined : data[0]);
+    if (initialRoundId && !record) notify('指定审稿轮次已不可用，请重新选择。', true);
+    restoreRound(record);
+  }).catch(e => notify(e.message, true));
   useEffect(() => { void load(); }, [project.id]);
   function update(index: number, patch: Partial<ReviewItem>) { changeItems(items.map((item, i) => i === index ? { ...item, ...patch } : item)); }
-  async function create() { const label = window.prompt('审稿轮次名称', `第 ${rounds.length + 1} 轮审稿`); if (!label) return; setBusy(true); try { const created = await api<ReviewRound>(`${endpoint(project.id)}/reviews`, json('POST', { label })); setRounds(old => [...old, created]); setSelected(created.id); setItems(created.items); setDirty(false); onRefresh(); notify('已建立审稿轮次与独立回复文档'); } catch (e: any) { notify(e.message, true); } finally { setBusy(false); } }
-  async function save() { if (!round) return; const submitted = items; setBusy(true); try { const result = await api<ReviewRound>(`${endpoint(project.id)}/reviews/${encodeURIComponent(round.id)}`, json('PUT', { items })); setRounds(old => old.map(r => r.id === result.id ? result : r)); if (JSON.stringify(itemsRef.current) === JSON.stringify(submitted)) { setDirty(false); localStorage.removeItem(draftKey(round.id)); } onRefresh(); notify('审稿回复已保存，回复文档已同步'); } catch (e: any) { notify(e.message, true); } finally { setBusy(false); } }
-  return <div className="workspace-section"><div className="section-heading"><div><span className="eyebrow">REVIEW & RESPONSE</span><h2>每一条意见，都有清晰的回应</h2><p>按轮次保存原文、回复与正文修改位置。</p></div><button className="button primary" onClick={create} disabled={busy}><Plus size={15}/>新建审稿轮次</button></div>
+  async function create() {
+    const label = window.prompt('审稿轮次名称', `第 ${rounds.length + 1} 轮审稿`);
+    if (!label) return;
+    setBusy(true);
+    try {
+      const created = await api<ReviewRoundDocument>(`${endpoint(project.id)}/reviews`, json('POST', { label }));
+      setRounds(old => [...old, created]); restoreRound(created); onRefresh();
+      notify('已建立审稿轮次与独立回复文档');
+    } catch (error) { notify((error as Error).message, true); }
+    finally { setBusy(false); }
+  }
+  function acceptBaseline(record: ReviewRoundDocument, next: ReviewItem[]) {
+    setRounds(old => old.map(value => value.id === record.id ? record : value));
+    setItems(next); itemsRef.current = next; setDirty(!equal(next, record.items));
+    storeDraft(record, next);
+  }
+  async function save() {
+    if (!round || conflict) return;
+    const submitted = itemsRef.current;
+    setBusy(true);
+    try {
+      const result = await api<ReviewRoundDocument>(`${endpoint(project.id)}/reviews/${encodeURIComponent(round.id)}`, json('PUT', { items: submitted, expectedHash: round.hash }));
+      acceptBaseline(result, equal(itemsRef.current, submitted) ? result.items : itemsRef.current);
+      onRefresh();
+      notify(result.needsSourceSync ? '回复已保存，源码同步失败。可点击“重试同步源码”。' : '审稿回复已保存，回复文档已同步', !!result.needsSourceSync);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.data.current) {
+        setConflict(error.data.current); setChoices({});
+      }
+      notify((error as Error).message, true);
+    } finally { setBusy(false); }
+  }
+  const savedById = new Map(conflict?.items.map(item => [item.id, item]));
+  const draftById = new Map(items.map(item => [item.id, item]));
+  const mergeIds = [...new Set([...savedById.keys(), ...draftById.keys()])];
+  const differingIds = mergeIds.filter(id => !equal(savedById.get(id), draftById.get(id)));
+  function merge() {
+    if (!conflict || differingIds.some(id => !Object.hasOwn(choices, id))) return;
+    const next = mergeIds.flatMap(id => {
+      const item = choices[id] === 'draft' ? draftById.get(id) : savedById.get(id);
+      return item ? [item] : [];
+    });
+    acceptBaseline(conflict, next); setConflict(undefined); setChoices({});
+  }
+  const describe = (item?: ReviewItem) => item
+    ? [item.reviewer, item.comment, item.response, item.location, item.status === 'addressed' ? '已处理' : '待处理'].filter(Boolean).join('\n')
+    : '该版本没有这一条';
+  return <div className="workspace-section"><div className="section-heading"><div><h2>审稿与回复</h2></div><button className="button primary" onClick={create} disabled={busy}><Plus size={15}/>新建审稿轮次</button></div>
     {!rounds.length ? <div className="section-empty"><MessageSquareText size={35} strokeWidth={1.2}/><h3>尚未建立审稿轮次</h3><p>收到审稿意见后创建轮次。原始意见和回复文档会分别保存在当前论文目录中。</p><button className="button" onClick={create}>创建第一轮审稿<ArrowRight size={14}/></button></div> : <>
-      <div className="section-toolbar"><select aria-label="选择审稿轮次" value={selected} onChange={e => { const r = rounds.find(r => r.id === e.target.value)!; restoreRound(r.id, r.items); }}>{rounds.map(r => <option value={r.id} key={r.id}>{r.label}</option>)}</select><span className="quiet">已处理 {items.filter(i => i.status === 'addressed').length} / {items.length}{dirty ? ' · 草稿已在浏览器保留' : ''}</span><div className="toolbar-spacer"/><button className="button small" onClick={() => onOpen(`reviews/${selected}/original/original.md`)}><FileText size={14}/>审稿原文</button><button className="button small" onClick={() => { const target = project.targets.find(t => t.id === round?.targetId); if (target) onOpen(target.main); else notify('请刷新项目后打开回复文档'); }}><FileCheck2 size={14}/>回复源码</button><button className="button primary small" disabled={busy || !dirty} onClick={save}>{busy ? <LoaderCircle size={14} className="spin"/> : <Save size={14}/>}保存回复</button></div>
-      <div className="review-evidence-summary"><span>待处理 {items.filter(i=>i.status==='open').length} 条</span><span>已填写回复 {items.filter(i=>i.response.trim()).length} 条</span><span>有可定位修改 {items.filter(i=>reviewLocations(i.location).length).length} 条</span><small>处理状态由作者标记；不代表修改或实验已经复核。</small></div><div className="review-filter-bar"><label>筛选意见<select aria-label="按处理状态筛选审稿意见" value={statusFilter} onChange={e=>setStatusFilter(e.target.value as typeof statusFilter)}><option value="all">全部意见</option><option value="open">待处理</option><option value="addressed">已处理</option></select></label><input aria-label="搜索审稿意见与回复" placeholder="搜索审稿人、意见、回复或修改位置…" value={reviewQuery} onChange={e=>setReviewQuery(e.target.value)}/></div>{!items.some(visible)&&<p role="status" className="quiet">没有符合当前筛选条件的意见。</p>}<div className="review-items">{items.map((item, index) => visible(item)&&<article className="review-card" key={item.id}><div className="review-card-top"><span className="item-number">{String(index + 1).padStart(2, '0')}</span><input aria-label={`意见 ${index + 1} 的审稿人`} placeholder="审稿人 / 问题编号" value={item.reviewer} onChange={e => update(index, { reviewer: e.target.value })}/><select aria-label={`意见 ${index + 1} 的状态`} value={item.status} onChange={e => update(index, { status: e.target.value as ReviewItem['status'] })}><option value="open">待处理</option><option value="addressed">已处理</option></select><button className="icon-button" aria-label={`删除意见 ${index + 1}`} onClick={() => { changeItems(items.filter((_, i) => i !== index)); }}><Trash2 size={14}/></button></div><div className="review-grid"><label><span>审稿意见</span><textarea placeholder="粘贴完整的原始意见" value={item.comment} onChange={e => update(index, { comment: e.target.value })}/></label><label><span>我们的回复</span><textarea placeholder="写下回应、证据与具体修改" value={item.response} onChange={e => update(index, { response: e.target.value })}/></label></div><label className="location-field"><span>对应修改</span><input placeholder="例如 manuscript/tex/4a_Method.tex:28；第 4 节，第 2 段" value={item.location} onChange={e => update(index, { location: e.target.value })}/></label><div className="review-source-actions">{reviewLocations(item.location).map(anchor=><button className="button small" key={anchor.path+':'+anchor.line} onClick={()=>onOpen(anchor.path,anchor.line)}><FileText size={13}/>打开修改 · {anchor.path}{anchor.line?':'+anchor.line:''}</button>)}{item.location&&!reviewLocations(item.location).length&&<small>位置说明已保留；填写相对文件路径与行号（如 manuscript/main.tex:28）后可直接定位。</small>}</div></article>)}</div>
-      <button className="add-item" onClick={() => { changeItems([...items, { id: crypto.randomUUID(), reviewer: '', comment: '', response: '', location: '', status: 'open' }]); }}><Plus size={16}/>添加一条审稿意见</button>
+      <div className="section-toolbar"><select aria-label="选择审稿轮次" value={selected} disabled={busy} onChange={e => restoreRound(rounds.find(r => r.id === e.target.value))}>{rounds.map(r => <option value={r.id} key={r.id}>{r.label}</option>)}</select><span className="quiet">已处理 {items.filter(i => i.status === 'addressed').length} / {items.length}{dirty ? ' · 草稿已在浏览器保留' : ''}</span><div className="toolbar-spacer"/><button className="button small" onClick={() => onOpen(`reviews/${selected}/original/original.md`)}><FileText size={14}/>审稿原文</button><button className="button small" onClick={() => { const target = project.targets.find(t => t.id === round?.targetId); if (target) onOpen(target.main); else notify('请刷新项目后打开回复文档'); }}><FileCheck2 size={14}/>回复源码</button><button className="button primary small" disabled={busy || !!conflict || (!dirty && !round?.needsSourceSync)} onClick={save}>{busy ? <LoaderCircle size={14} className="spin"/> : <Save size={14}/>}{!dirty && round?.needsSourceSync ? '重试同步源码' : '保存回复'}</button></div>
+      {conflict && <section className="information-strip" role="alert">
+        <div><strong>审稿回复有新版本</strong><p>草稿已保留。请逐条选择采用哪个版本，合并后再保存。</p>
+          {differingIds.map(id => <details key={id}>
+            <summary>{id}{Object.hasOwn(choices, id) ? (choices[id] === 'draft' ? ' · 采用草稿' : ' · 采用已保存') : ' · 待选择'}</summary>
+            <div className="review-grid">
+              <div><strong>已保存</strong><p style={{whiteSpace:'pre-wrap'}}>{describe(savedById.get(id))}</p><button className="button small" onClick={() => setChoices(old => ({...old, [id]:'saved'}))}>采用已保存</button></div>
+              <div><strong>草稿</strong><p style={{whiteSpace:'pre-wrap'}}>{describe(draftById.get(id))}</p><button className="button small" onClick={() => setChoices(old => ({...old, [id]:'draft'}))}>采用草稿</button></div>
+            </div>
+          </details>)}
+          <button className="button primary small" onClick={merge} disabled={differingIds.some(id => !Object.hasOwn(choices, id))}>合并到当前草稿</button>
+        </div>
+      </section>}
+      {round?.needsSourceSync&&<p role="status">回复已保存。回复源码待同步，可在修复文件路径后重试。</p>}
+      <div className="review-evidence-summary"><span>待处理 {items.filter(i=>i.status==='open').length} 条</span><span>已填写回复 {items.filter(i=>i.response.trim()).length} 条</span><span>有可定位修改 {items.filter(i=>reviewLocations(i.location).length).length} 条</span><small>处理状态由作者标记；不代表修改或实验已经复核。</small></div><div className="review-filter-bar"><label>筛选意见<select aria-label="按处理状态筛选审稿意见" value={statusFilter} onChange={e=>setStatusFilter(e.target.value as typeof statusFilter)}><option value="all">全部意见</option><option value="open">待处理</option><option value="addressed">已处理</option></select></label><input aria-label="搜索审稿意见与回复" placeholder="搜索审稿人、意见、回复或修改位置…" value={reviewQuery} onChange={e=>setReviewQuery(e.target.value)}/></div>{!items.some(visible)&&<p role="status" className="quiet">没有符合当前筛选条件的意见。</p>}<div className="review-items" inert={!!conflict}>{items.map((item, index) => visible(item)&&<article className="review-card" key={item.id}><div className="review-card-top"><span className="item-number">{String(index + 1).padStart(2, '0')}</span><input aria-label={`意见 ${index + 1} 的审稿人`} placeholder="审稿人 / 问题编号" value={item.reviewer} onChange={e => update(index, { reviewer: e.target.value })}/><select aria-label={`意见 ${index + 1} 的状态`} value={item.status} onChange={e => update(index, { status: e.target.value as ReviewItem['status'] })}><option value="open">待处理</option><option value="addressed">已处理</option></select><button className="icon-button" aria-label={`删除意见 ${index + 1}`} onClick={() => { changeItems(items.filter((_, i) => i !== index)); }}><Trash2 size={14}/></button></div><div className="review-grid"><label><span>审稿意见</span><textarea placeholder="粘贴完整的原始意见" value={item.comment} onChange={e => update(index, { comment: e.target.value })}/></label><label><span>我们的回复</span><textarea placeholder="写下回应、证据与具体修改" value={item.response} onChange={e => update(index, { response: e.target.value })}/></label></div><label className="location-field"><span>对应修改</span><input placeholder="例如 manuscript/tex/4a_Method.tex:28；第 4 节，第 2 段" value={item.location} onChange={e => update(index, { location: e.target.value })}/></label><div className="review-source-actions">{reviewLocations(item.location).map(anchor=><button className="button small" key={anchor.path+':'+anchor.line} onClick={()=>onOpen(anchor.path,anchor.line)}><FileText size={13}/>打开修改 · {anchor.path}{anchor.line?':'+anchor.line:''}</button>)}{item.location&&!reviewLocations(item.location).length&&<small>位置说明已保留；填写相对文件路径与行号（如 manuscript/main.tex:28）后可直接定位。</small>}</div></article>)}</div>
+      <button className="add-item" disabled={!!conflict} onClick={() => { changeItems([...items, { id: crypto.randomUUID(), reviewer: '', comment: '', response: '', location: '', status: 'open' }]); }}><Plus size={16}/>添加一条审稿意见</button>
     </>}
   </div>;
 }
@@ -38,7 +128,7 @@ export function Submissions({ project, targetId, notify }: { project: Project; t
   const load = () => api<{ submissions: Submission[] }>(`${endpoint(project.id)}/submissions`).then(data => setItems(data.submissions)).catch(e => notify(e.message, true));
   useEffect(() => { void load(); }, [project.id]);
   async function create() { setBusy(true); try { await api(`${endpoint(project.id)}/submissions`, json('POST', { targetId })); await load(); notify('投稿快照已保存，独立编译检查已完成'); } catch (e: any) { notify(e.message, true); } finally { setBusy(false); } }
-  return <div className="workspace-section"><div className="section-heading"><div><span className="eyebrow">SUBMISSION SNAPSHOTS</span><h2>保存每一次正式交付</h2><p>固定源码、PDF 与检查结果，后续编辑不会改变已经保存的投稿版本。</p></div><button className="button primary" disabled={busy || !targetId} onClick={create}>{busy ? <LoaderCircle size={15} className="spin"/> : <Archive size={15}/>} {busy ? '正在打包并独立编译…' : '创建投稿快照'}</button></div><div className="information-strip"><FileCheck2 size={19}/><div><strong>打包前会重新编译解压后的源码</strong><p>包内保留所选目标的源码、PDF、配置和文件校验值。检查结果帮助核对材料，是否符合会议要求仍需逐项确认。</p></div></div>
+  return <div className="workspace-section"><div className="section-heading"><div><h2>投稿快照</h2><p>固定源码、PDF 与检查结果，后续编辑不会改变已经保存的投稿版本。</p></div><button className="button primary" disabled={busy || !targetId} onClick={create}>{busy ? <LoaderCircle size={15} className="spin"/> : <Archive size={15}/>} {busy ? '正在打包并独立编译…' : '创建投稿快照'}</button></div><div className="information-strip"><FileCheck2 size={19}/><div><strong>打包前会重新编译解压后的源码</strong><p>包内保留所选目标的源码、PDF、配置和文件校验值。检查结果帮助核对材料，是否符合会议要求仍需逐项确认。</p></div></div>
     {!items.length ? <div className="section-empty"><Archive size={35} strokeWidth={1.2}/><h3>还没有投稿快照</h3><p>准备投稿或修回时，为当前编译目标创建一个固定版本。</p></div> : <div className="snapshot-list">{items.map(item => <article className="snapshot-card" key={item.id}><div className="snapshot-icon"><Archive size={23}/></div><div><h3>{project.targets.find(t=>t.id===item.targetId)?.label||item.targetId} · {prettyDate(item.createdAt)}</h3><p>{project.title}</p><details className="snapshot-identifiers"><summary>快照与构建标识</summary><small>快照：{item.id}<br/>构建：{item.buildId}<br/>来源：{item.sourceHash}</small></details><div className="snapshot-meta"><span className={`pill ${item.verified ? 'green' : 'amber'}`}>{item.verified ? <CheckCircle2 size={12}/> : <FileText size={12}/>} {item.verified ? '独立编译通过' : '独立编译未通过'}</span><span>{item.diagnostics.filter(d => d.severity !== 'info').length} 条检查提示</span><code>{item.sourceHash.slice(0, 12)}</code></div></div><a className="button small" href={`${endpoint(project.id)}/submissions/${encodeURIComponent(item.id)}/download`} download><ArrowDownToLine size={14}/>下载 ZIP</a></article>)}</div>}
   </div>;
 }
@@ -50,7 +140,7 @@ export function Versions({ project, selectedPath, notify, onRestored }: { projec
   async function checkpoint() { if (!message.trim()) return; setBusy(true); try { await api(`${endpoint(project.id)}/checkpoints`, json('POST', { message })); setMessage(''); await load(); notify('版本节点已保存'); } catch (e: any) { notify(e.message, true); } finally { setBusy(false); } }
   async function compare(hash: string) { if (!path) return notify('请先填写要比较的文件路径', true); setRef(hash); try { const result = await api<{ diff: string }>(`${endpoint(project.id)}/diff?path=${queryPath(path)}&ref=${queryPath(hash)}`); setDiff(result.diff || '该文件与选中版本一致。'); } catch (e: any) { notify(e.message, true); } }
   async function restore() { if (!ref || !path || !window.confirm(`恢复 ${path} 到所选版本？系统会先保存当前状态。`)) return; setBusy(true); try { await api(`${endpoint(project.id)}/restore`, json('POST', { path, ref })); await load(); onRestored(); notify('文件已恢复，恢复前状态已保存为版本节点'); await compare(ref); } catch (e: any) { notify(e.message, true); } finally { setBusy(false); } }
-  return <div className="workspace-section"><div className="section-heading"><div><span className="eyebrow">VERSION HISTORY</span><h2>让每一步修改都有来处</h2><p>保存有意义的版本节点，查看变化，需要时恢复单个文件。</p></div><History size={29} className="heading-art" strokeWidth={1}/></div><div className="checkpoint-form"><GitCommitHorizontal size={22}/><input value={message} placeholder="记录这个版本做了什么，例如：完成方法章节第一轮润色" aria-label="版本节点说明" onChange={e => setMessage(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void checkpoint(); }}/><button className="button primary" disabled={busy || !message.trim()} onClick={checkpoint}><Plus size={14}/>保存节点</button></div><div className="history-grid"><div className="history-list">{history.map(item => <button key={item.hash} className={`history-item ${ref === item.hash ? 'active' : ''}`} onClick={() => void compare(item.hash)}><span className="history-node"/><strong>{item.message}</strong><span>{prettyDate(item.date)} <code>{item.hash.slice(0, 7)}</code></span></button>)}{!history.length && <p className="quiet">还没有版本节点</p>}</div><div className="diff-panel"><div className="diff-toolbar"><label>比较文件<input aria-label="比较文件路径" value={path} onChange={e => setPath(e.target.value)}/></label><button className="button small" disabled={!ref} onClick={() => void compare(ref)}>查看差异</button><button className="button small" disabled={busy || !ref} onClick={restore}>恢复该文件</button></div><pre className="diff-output">{diff ? diff.split('\n').map((line, i) => <span key={i} className={line.startsWith('+') ? 'diff-added' : line.startsWith('-') ? 'diff-removed' : line.startsWith('@@') ? 'diff-location' : ''}>{line}{'\n'}</span>) : '选择左侧版本节点，比较当前文件与历史内容。'}</pre></div></div></div>;
+  return <div className="workspace-section"><div className="section-heading"><div><h2>版本记录</h2></div></div><div className="checkpoint-form"><GitCommitHorizontal size={22}/><input value={message} placeholder="记录这个版本做了什么，例如：完成方法章节第一轮润色" aria-label="版本节点说明" onChange={e => setMessage(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void checkpoint(); }}/><button className="button primary" disabled={busy || !message.trim()} onClick={checkpoint}><Plus size={14}/>保存节点</button></div><div className="history-grid"><div className="history-list">{history.map(item => <button key={item.hash} className={`history-item ${ref === item.hash ? 'active' : ''}`} onClick={() => void compare(item.hash)}><span className="history-node"/><strong>{item.message}</strong><span>{prettyDate(item.date)} <code>{item.hash.slice(0, 7)}</code></span></button>)}{!history.length && <p className="quiet">还没有版本节点</p>}</div><div className="diff-panel"><div className="diff-toolbar"><label>比较文件<input aria-label="比较文件路径" value={path} onChange={e => setPath(e.target.value)}/></label><button className="button small" disabled={!ref} onClick={() => void compare(ref)}>查看差异</button><button className="button small" disabled={busy || !ref} onClick={restore}>恢复该文件</button></div><pre className="diff-output">{diff ? diff.split('\n').map((line, i) => <span key={i} className={line.startsWith('+') ? 'diff-added' : line.startsWith('-') ? 'diff-removed' : line.startsWith('@@') ? 'diff-location' : ''}>{line}{'\n'}</span>) : '选择左侧版本节点，比较当前文件与历史内容。'}</pre></div></div></div>;
 }
 
 function savedDeadlineLocal(project: Project): string {
@@ -79,7 +169,7 @@ export function ProjectSettings({ project, notify, onSaved }: { project: Project
     if(sourceTouched)deadlinePatch.deadlineSource=venue.trim()&&deadlineLocal&&deadlineTimezone.trim()?deadlineSource||null:null;
     const saved=await api<Project>(endpoint(project.id),json('PATCH',{title,venue,...deadlinePatch,stage,targets,expectedUpdatedAt:baseline}));applyProject(saved);onSaved(saved);notify('项目设置已保存');
   }catch(error:any){if(error.status===409&&error.data?.current)onSaved(error.data.current);notify(error.message,true);}finally{setBusy(false);}}
-  return <div className="workspace-section"><div className="section-heading"><div><span className="eyebrow">PROJECT SETTINGS</span><h2>一篇论文，一个清晰的工作空间</h2><p>设置项目资料及独立编译目标。未知信息可以留空。</p></div><button className="button primary" onClick={save} disabled={busy}><Save size={14}/>保存设置</button></div>
+  return <div className="workspace-section"><div className="section-heading"><div><h2>论文设置</h2><p>未知信息可以留空。</p></div><button className="button primary" onClick={save} disabled={busy}><Save size={14}/>保存设置</button></div>
     {externalChange&&<div className="deadline-external-change" role="alert"><strong>项目设置已在其他窗口变化，当前输入已保留。</strong><p>最新设置：{project.title} · {project.venue||'未设会议'} · {STAGE_LABELS[project.stage]} · {savedDeadlineLocal(project).replace('T',' ')||project.deadline||'未设截止'} {project.deadlineTimezone||''}</p><div><button className="button small" disabled={busy} onClick={()=>{if(window.confirm('放弃当前未保存的设置，载入最新设置？'))applyProject(project);}}>载入最新设置</button><button className="button small" disabled={busy} onClick={()=>{if(window.confirm('已比较最新设置？继续编辑会以最新版本为基线，保存时应用当前表单中的所有设置。'))setBaseline(project.updatedAt);}}>保留填写并采用最新版本基线</button></div></div>}
     <fieldset disabled={busy} className="project-settings-fields"><div className="settings-card"><h3>论文资料</h3><div className="settings-form">
       <label className="full"><span>论文标题</span><input value={title} onChange={e=>setTitle(e.target.value)}/></label>
@@ -98,6 +188,6 @@ export function ProjectSettings({ project, notify, onSaved }: { project: Project
       </div></details>
       {(project.deadline||deadlineLocal||deadlineTimezone)&&<div className="deadline-settings-actions"><button type="button" onClick={clearDeadline}>清除截止设置</button></div>}
       <label><span>项目标识</span><input value={project.id} disabled/></label>
-    </div></div><div className="settings-card"><h3>编译目标</h3><p className="quiet">每个目标指定独立的主文件；正文、补充材料和回复文档分别构建。</p><div className="target-head"><span>标识</span><span>显示名称</span><span>主文件（相对项目目录）</span><span/></div>{targets.map((target,i)=><div className="target-row" key={i}><input aria-label={`目标 ${i+1} 标识`} value={target.id} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,id:e.target.value}:t))}/><input aria-label={`目标 ${i+1} 名称`} value={target.label} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,label:e.target.value}:t))}/><input aria-label={`目标 ${i+1} 主文件`} value={target.main} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,main:e.target.value}:t))}/><button className="icon-button" aria-label={`删除目标 ${i+1}`} onClick={()=>setTargets(old=>old.filter((_,k)=>k!==i))}><Trash2 size={14}/></button></div>)}<button className="button small" onClick={()=>setTargets(old=>[...old,{id:`target-${old.length+1}`,label:'新编译目标',main:'manuscript/main.tex'}])}><Plus size={14}/>添加目标</button></div></fieldset>
+    </div></div><div className="settings-card"><h3>编译目标</h3><p className="quiet">每个目标指定独立的主文件；正文、补充材料和回复文档分别构建。</p><div className="target-head"><span>标识</span><span>显示名称</span><span>主文件（相对项目目录）</span><span/></div>{targets.map((target,i)=><div className="target-row" key={i}><label><span>标识</span><input aria-label={`目标 ${i+1} 标识`} value={target.id} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,id:e.target.value}:t))}/></label><label><span>显示名称</span><input aria-label={`目标 ${i+1} 名称`} value={target.label} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,label:e.target.value}:t))}/></label><label><span>主文件</span><input aria-label={`目标 ${i+1} 主文件`} value={target.main} onChange={e=>setTargets(old=>old.map((t,k)=>k===i?{...t,main:e.target.value}:t))}/></label><button className="icon-button" aria-label={`删除目标 ${i+1}`} onClick={()=>setTargets(old=>old.filter((_,k)=>k!==i))}><Trash2 size={14}/></button></div>)}<button className="button small" onClick={()=>setTargets(old=>[...old,{id:`target-${old.length+1}`,label:'新编译目标',main:'manuscript/main.tex'}])}><Plus size={14}/>添加目标</button></div></fieldset>
     <div className="settings-card environment"><h3>本地运行环境</h3><div><span>编译器</span><code>{settings?.compiler||'加载中…'}</code></div><div><span>工作目录</span><code>{settings?.workspaceRoot||'加载中…'}</code></div><p>文件保存在本机。Codex 可以直接修改当前主稿，网页会同步检测变化。</p></div></div>;
 }

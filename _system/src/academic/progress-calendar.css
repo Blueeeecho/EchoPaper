@@ -10,9 +10,9 @@
 .work-calendar-week>span{padding:6px}
 .work-calendar-days{padding:4px 8px 10px;gap:3px}
 .work-calendar-days>button{display:flex;align-items:flex-start;flex-direction:column;min-height:64px;padding:6px;border:1px solid transparent;border-radius:5px;text-align:left;color:var(--ink);font:inherit;background:transparent;cursor:pointer}
-.work-calendar-days>button:hover{background:#f0f4eb}
-.work-calendar-days>button.outside{color:#8c948c}
-.work-calendar-days>button[aria-pressed=true]{background:#e4eddf;border-color:var(--accent)}
+.work-calendar-days>button:hover{background:var(--bg-subtle)}
+.work-calendar-days>button.outside{color:var(--text-muted)}
+.work-calendar-days>button[aria-pressed=true]{background:var(--accent-tint);border-color:var(--accent)}
 .work-calendar-days>button>span{font-size:16px;line-height:1.3}
 .work-calendar-days>button.today>span{font-weight:700;color:var(--accent);text-decoration:underline;text-underline-offset:4px}
 .work-calendar-days small{font-size:10px;color:var(--accent);white-space:nowrap;line-height:1.5;margin-top:3px}
@@ -38,7 +38,7 @@
 .daily-task-list .done{text-decoration:line-through;color:var(--muted)}
 .daily-task-list .done small{text-decoration:none}
 .research-history-records>summary{font-size:14px;color:var(--accent);cursor:pointer;margin:12px 0}
-@media(max-width:1050px){.progress-calendar{grid-template-columns:minmax(0,1fr)}.work-calendar{max-width:620px}.work-calendar-days>button{min-height:60px}}
+@media(max-width:1050px){.work-calendar{max-width:620px}.work-calendar-days>button{min-height:60px}}
 @media(max-width:560px){.work-calendar>header,.daily-report>header{padding:12px}.daily-report-section{padding:12px}.work-calendar-days>button{padding:4px;min-height:56px}.daily-report th:first-child{width:28%}}
 /* Editing lives in the selected date, with no record button or modal. */
 .daily-topic-choice{display:flex;align-items:center;gap:10px;padding:14px 18px 0;color:var(--muted);font-size:12px}
@@ -91,3 +91,17 @@
 #root .academic-app .day-field textarea:placeholder-shown{border:1px dashed var(--ep-border-strong);background:transparent;color:var(--ep-text-3)}
 #root .academic-app .day-progress-fields{display:flex;flex-direction:column;gap:6px}
 #root .academic-app .day-field footer{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}
+
+/* Keep the day readable at rest and show the editing tools with the active field. */
+#root .academic-app .day-field:not(:focus-within) .note-assistant:not(:has(.note-assistant-trigger[aria-expanded="true"])) {
+  display: none;
+}
+#root .academic-app .daily-topic-choice { align-items: baseline; flex-wrap: wrap; gap: 5px 8px; }
+#root .academic-app .daily-topic-choice select { min-width: 0; max-width: 100%; }
+#root .academic-app .day-field footer { flex-wrap: wrap; }
+
+@media (max-width: 1080px) {
+  #root .academic-app .progress-calendar { grid-template-columns: minmax(0, 1fr); }
+  #root .academic-app .work-calendar { max-width: none; }
+  #root .academic-app .daily-report > header { flex-wrap: wrap; gap: 5px 10px; }
+}

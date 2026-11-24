@@ -1,9 +1,11 @@
-import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactElement} from 'react';
+import {memo,useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactElement} from 'react';
 import {createPortal} from 'react-dom';
 import {AlertTriangle,BookOpenCheck,ChevronRight,Gauge,LoaderCircle,RefreshCw,SlidersHorizontal,Square} from 'lucide-react';
 import katex from 'katex';
 import type {PDFDocumentProxy,RenderTask} from 'pdfjs-dist';
 import {api,json} from '../api';
+import {OCR_CONFIG_EVENT,openModelSettings,readOcrCredentials,type OcrCredentialStatus} from '../modelSettings';
+import {isOcrEngineId} from '../serviceSetup';
 import type {TranslationAdapter} from '../translationAdapters';
 import type {TranslationLanguage} from '../selectionTranslation';
 import {bilingualFigureRow,bilingualStats,buildBilingualDocument,type BilingualBlock,type BilingualDocument,type DocumentLayout} from '../../shared/bilingual';
@@ -38,7 +40,7 @@ function lookup(translations:Record<string,string>,byText:Map<string,string>,ada
 }
 /** 行内公式：把 $…$、\\(…\\) 渲染成真正的符号，读者不必直接面对 LaTeX 源码。 */
 const INLINE_MATH=/\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]{1,300}?)\$/g;
-function MathText({text}:{text:string}){
+const MathText=memo(function MathText({text}:{text:string}){
  if(!text||!/[$\\]/.test(text))return <>{text}</>;
  const parts:ReactElement[]=[];
  let last=0,key=0;
@@ -56,7 +58,7 @@ function MathText({text}:{text:string}){
  if(!parts.length)return <>{text}</>;
  if(last<text.length)parts.push(<span key={key++}>{text.slice(last)}</span>);
  return <>{parts}</>;
-}
+});
 function equation(text:string):string{
  const value=(text||'').trim().replace(/^\\\[|\\\]$|^\$\$|\$\$$/g,'').trim();
  if(!value)return '';
@@ -80,17 +82,21 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
  const backgroundBusy=!!processing.snapshot?.settings.enabled&&!!backgroundStatus&&['queued','ocr','translating'].includes(backgroundStatus.stage);
  const [loaded,setLoaded]=useState<Loaded>();
  const [error,setError]=useState(''),[notice,setNotice]=useState('');
- const [parsing,setParsing]=useState(false),[needKey,setNeedKey]=useState(false),[keyDraft,setKeyDraft]=useState(''),[testing,setTesting]=useState(false);
- /** 每个引擎各有一份凭据，切引擎时要分别判断缺不缺。 */
- const [keyed,setKeyed]=useState<Record<string,boolean>>({});
+ const [parsing,setParsing]=useState(false),[needKey,setNeedKey]=useState(false);
+ const [credential,setCredential]=useState<OcrCredentialStatus>();
  const [usage,setUsage]=useState<Usage>(),[engine,setEngine]=useState('');
- useEffect(()=>{if(loaded?.layout?.engine)setEngine(loaded.layout.engine);},[loaded?.layout?.engine]);
- /** 星河社区那套接口与智能云鉴权方式不同，凭据提示要跟着引擎走。 */
- const aistudio=(usage?.engines.find(item=>item.id===(engine||usage.engines[0]?.id))?.kind)==='aistudio';
+ const configuredEngine=[loaded?.layout?.engine,processing.snapshot?.settings.engineId,credential?.engine,...Object.keys(credential?.engines??{})]
+  .find(id=>isOcrEngineId(id)&&credential?.engines[id]);
+ const selectedEngine=engine||configuredEngine||credential?.engine;
+ const missingKey=needKey||(isOcrEngineId(selectedEngine)&&credential?.engines[selectedEngine]===false);
  const [translations,setTranslations]=useState<Record<string,string>>({});
  const byText=useMemo(()=>translationIndex(translations),[translations]);
- const [running,setRunning]=useState(false),[progress,setProgress]=useState({done:0,total:0});
- const [view,setView]=useState<ReadingView>(()=>{const v=localStorage.getItem('echopaper-bilingual:view');return VIEWS.some(([id])=>id===v)?v as ReadingView:'stacked';});
+ const [running,setRunning]=useState(false),[saving,setSaving]=useState(false),[progress,setProgress]=useState({done:0,total:0});
+ const [view,setView]=useState<ReadingView>(()=>{
+  try{const value=localStorage.getItem('echopaper-bilingual:view');if(VIEWS.some(([id])=>id===value))return value as ReadingView;}catch{/* Reading preferences are optional. */}
+  return 'stacked';
+ });
+ const displayView=loaded?.stale&&view==='page'?'stacked':view;
  const layoutKey=`echopaper-bilingual:layout:${resourceId}`;
  const [layout,setLayout]=useState(()=>{try{return readBilingualLayout(localStorage.getItem(layoutKey));}catch{return readBilingualLayout(null);}});
  const layoutRef=useRef(layout);layoutRef.current=layout;
@@ -114,7 +120,7 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
    return view==='zh'?'translation':view==='en'?'source':side==='source'||side==='translation'?side:activeSideRef.current;
   }
   function activate(target:EventTarget|null){
-   const side=sideFor(target);activeSideRef.current=side;setActiveSide(side);return side;
+   const side=sideFor(target);if(activeSideRef.current!==side){activeSideRef.current=side;setActiveSide(side);}return side;
   }
   function change(side:'source'|'translation',steps:number,reset=false){
    const key=side==='source'?'sourceZoom':'translationZoom';
@@ -154,37 +160,53 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
   '--bi-source-small':`${13*layout.sourceZoom/100}px`,
   '--bi-target-small':`${13*layout.translationZoom/100}px`,
  } as CSSProperties;
- const unsaved=useRef<Record<string,string>>({});
+ const unsaved=useRef(new Map<string,Record<string,string>>());
  const alive=useRef(true),abort=useRef<AbortController|undefined>(undefined);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;abort.current?.abort();};},[]);
- useEffect(()=>{localStorage.setItem('echopaper-bilingual:view',view);},[view]);
+ useEffect(()=>{try{localStorage.setItem('echopaper-bilingual:view',view);}catch{/* Reading preferences are optional. */}},[view]);
+ useEffect(()=>{
+  let controller:AbortController|undefined;
+  const refreshCredential=()=>{
+   controller?.abort();
+   const request=controller=new AbortController();
+   void readOcrCredentials(request.signal).then(status=>{
+    if(!request.signal.aborted){setCredential(status);setNeedKey(false);}
+   }).catch(()=>{});
+  };
+  refreshCredential();
+  window.addEventListener(OCR_CONFIG_EVENT,refreshCredential);
+  return()=>{controller?.abort();window.removeEventListener(OCR_CONFIG_EVENT,refreshCredential);};
+ },[]);
 
+ const backgroundVersion=backgroundStatus?`${backgroundStatus.stage}:${backgroundStatus.done}:${backgroundStatus.updatedAt??''}`:'';
+ const backgroundVersionRef=useRef(backgroundVersion);backgroundVersionRef.current=backgroundVersion;
+ const syncedBackgroundVersion=useRef(backgroundVersion);
+ const loadAbort=useRef<AbortController|undefined>(undefined);
  const load=useCallback(async()=>{
+  loadAbort.current?.abort();
+  const controller=new AbortController();loadAbort.current=controller;
   setError('');
   try{
-   const value=await api<Loaded>(`/api/workspace/resources/${resourceId}/bilingual`);
-   if(!alive.current)return;
-   setLoaded(value);setTranslations({...value.translations,...unsaved.current});
-   const credential=await api<{engine?:string;engines?:Record<string,boolean>}>('/api/workspace/bilingual/credential').catch(()=>({engine:'',engines:undefined}));
-   if(alive.current&&credential.engines){
-    setKeyed(credential.engines);
-    // engine 为空表示跟随服务端默认，缺不缺凭据要按那个默认引擎判断。
-    if(!value.parsed)setNeedKey(credential.engines[engine||credential.engine||'']===false);
-   }
-   const counts=await api<Usage>('/api/workspace/bilingual/usage').catch(()=>undefined);
-   if(alive.current&&counts)setUsage(counts);
-  }catch(e:any){if(alive.current)setError(e.message);}
+   const [value,counts]=await Promise.all([
+    api<Loaded>(`/api/workspace/resources/${resourceId}/bilingual`,{signal:controller.signal}),
+    api<Usage>('/api/workspace/bilingual/usage',{signal:controller.signal}).catch(()=>undefined),
+   ]);
+   if(!alive.current||controller.signal.aborted)return;
+   syncedBackgroundVersion.current=backgroundVersionRef.current;
+   setLoaded(value);setTranslations({...value.translations,...unsaved.current.get(value.layout?.sourceHash??'')});
+   if(counts)setUsage(counts);
+  }catch(e:any){if(alive.current&&!controller.signal.aborted)setError(e.message);}
  },[resourceId]);
- useEffect(()=>{void load();},[load]);
- const backgroundVersion=backgroundStatus?`${backgroundStatus.stage}:${backgroundStatus.done}:${backgroundStatus.updatedAt??''}`:'';
+ useEffect(()=>{void load();return()=>loadAbort.current?.abort();},[load]);
  useEffect(()=>{
-  if(!backgroundVersion||running||parsing)return;
-  let cancelled=false;
-  void api<Loaded>(`/api/workspace/resources/${resourceId}/bilingual`).then(value=>{
-   if(!cancelled){setLoaded(value);setTranslations({...value.translations,...unsaved.current});}
+  if(!loaded||!backgroundVersion||backgroundVersion===syncedBackgroundVersion.current||running||parsing||saving)return;
+  syncedBackgroundVersion.current=backgroundVersion;
+  const controller=new AbortController();
+  void api<Loaded>(`/api/workspace/resources/${resourceId}/bilingual`,{signal:controller.signal}).then(value=>{
+   if(!controller.signal.aborted){setLoaded(value);setTranslations({...value.translations,...unsaved.current.get(value.layout?.sourceHash??'')});}
   }).catch(()=>{});
-  return()=>{cancelled=true;};
- },[backgroundVersion,resourceId,running,parsing]);
+  return()=>controller.abort();
+ },[!!loaded,backgroundVersion,resourceId,running,parsing,saving]);
 
  const doc:BilingualDocument|undefined=useMemo(()=>loaded?.layout?buildBilingualDocument(loaded.layout,{translateAppendix}):undefined,[loaded?.layout,translateAppendix]);
  const stats=useMemo(()=>doc?bilingualStats(doc):undefined,[doc]);
@@ -198,35 +220,30 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
  async function parse(force=false){
   setParsing(true);setError('');setNotice('');
   try{
-   const value=await api<{layout:DocumentLayout;reused:boolean;translations:Record<string,string>;engineLabel?:string;switched?:string}>(`/api/workspace/resources/${resourceId}/bilingual`,json('POST',{force,...(engine?{engine}:{})}));
+   const value=await api<{layout:DocumentLayout;reused:boolean;translations:Record<string,string>;engineLabel?:string;switched?:string}>(`/api/workspace/resources/${resourceId}/bilingual`,json('POST',{force,...(selectedEngine?{engine:selectedEngine}:{})}));
    if(!alive.current)return;
    setLoaded({parsed:true,sourceHash:value.layout.sourceHash,stale:false,layout:value.layout,translations:value.translations||{}});
-   setTranslations({...value.translations,...unsaved.current});setNeedKey(false);
+   setTranslations({...value.translations,...unsaved.current.get(value.layout.sourceHash)});setNeedKey(false);
    setNotice(value.reused?'已使用本机缓存的解析结果，未消耗额度。'
     :`${value.switched??''}解析完成，${value.engineLabel?value.engineLabel+' ':''}计费 ${value.layout.costPages} 页。`);
    const counts=await api<Usage>('/api/workspace/bilingual/usage').catch(()=>undefined);
    if(alive.current&&counts)setUsage(counts);
-  }catch(e:any){if(alive.current){setError(e.message);if(/密钥/.test(e.message||''))setNeedKey(true);}}
+  }catch(e:any){if(alive.current){setError(e.message);if(/密钥|访问令牌/.test(e.message||''))setNeedKey(true);}}
   finally{if(alive.current)setParsing(false);}
  }
 
- async function saveKey(){
-  const key=keyDraft.trim();if(!key)return;
-  setError('');
-  setTesting(true);
-  try{
-   await api('/api/workspace/bilingual/credential',json('PUT',{key,engine}));
-   const probe=await api<{ok:boolean;message:string}>('/api/workspace/bilingual/credential/test',json('POST',{engine}));
-   if(!alive.current)return;
-   if(!probe.ok){setError(probe.message);return;}
-   setKeyDraft('');setNeedKey(false);setKeyed(prev=>({...prev,[engine]:true}));setTesting(false);await parse();
-  }catch(e:any){if(alive.current)setError(e.message);}
-  finally{if(alive.current)setTesting(false);}
+ async function flushTranslations(sourceHash:string){
+  const buffer=unsaved.current.get(sourceHash);
+  if(!buffer||!Object.keys(buffer).length)return;
+  const entries={...buffer};
+  await api(`/api/workspace/resources/${resourceId}/bilingual/translations`,json('POST',{entries,sourceHash}));
+  for(const [key,value] of Object.entries(entries))if(buffer[key]===value)delete buffer[key];
  }
 
  /** 逐块翻译：图片、公式、表格、参考文献和附录不会进入队列。 */
  async function translateAll(){
-  if(!doc||!adapter)return;
+  if(!doc||!adapter||!loaded?.layout||loaded.stale||saving)return;
+  const sourceHash=loaded.layout.sourceHash;
   const order=new Map(doc.blocks.map((b,i)=>[b.id,i] as const));
   const neighbour=(index:number,step:1|-1)=>{
    for(let i=index+step;i>=0&&i<doc.blocks.length;i+=step){const b=doc.blocks[i];if(b.role==='paragraph'||b.role==='heading')return b.text;}
@@ -243,24 +260,23 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
   if(!pending.length){setNotice('这篇的正文都已翻译完成。');return;}
   const controller=new AbortController();abort.current=controller;
   setRunning(true);setError('');setNotice('');setProgress({done:0,total:pending.length});
-  let done=0,failed=0;const buffer=unsaved.current;
+  const buffer=unsaved.current.get(sourceHash)??{};
+  unsaved.current.set(sourceHash,buffer);
+  let done=0,failed=0;
   let saveError='';
-  const flush=async()=>{
-   const payload={...buffer};
-   if(!Object.keys(payload).length)return;
-   try{
-    await api(`/api/workspace/resources/${resourceId}/bilingual/translations`,json('POST',{entries:payload,sourceHash:loaded?.sourceHash}));
-    for(const [key,value] of Object.entries(payload))if(buffer[key]===value)delete buffer[key];
-    saveError='';
-   }catch(error:any){saveError=error.message;}
-  };
+  let flushWork:Promise<void>|undefined;
+  const flush=()=>flushWork??=flushTranslations(sourceHash)
+   .then(()=>{saveError='';})
+   .catch((error:Error)=>{saveError=error.message;})
+   .finally(()=>{flushWork=undefined;});
   const queue=[...pending];
   const worker=async()=>{
    while(queue.length&&!controller.signal.aborted){
     const block=queue.shift()!;const key=cacheKey(adapter,target,block.text);
     try{
      if(block.text.length>MAX_BLOCK_CHARS){failed++;done++;if(alive.current)setProgress({done,total:pending.length});continue;}
-     const text=await adapter.translate({resourceId,text:block.text,target,source:'pdf',...(contextFor(block)?{context:contextFor(block)}:{})},controller.signal,()=>{});
+     const context=contextFor(block);
+     const text=await adapter.translate({resourceId,text:block.text,target,source:'pdf',context},controller.signal,()=>{});
      if(controller.signal.aborted||!alive.current)return;
      if(text.trim()){buffer[key]=text.trim();setTranslations(current=>({...current,[key]:text.trim()}));}
     }catch(e:any){if(!controller.signal.aborted)failed++;}
@@ -282,22 +298,18 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
  if(error&&!loaded)return <div className="bi-state"><AlertTriangle size={18}/><p>{error}</p><button onClick={()=>void load()}>重试</button></div>;
  if(!loaded)return <div className="bi-state"><LoaderCircle size={18} className="spin"/><p>正在读取对照数据…</p></div>;
 
- if(!loaded.parsed&&backgroundBusy)return <div className="bi-state"><LoaderCircle size={18} className="spin"/><ProcessingBadge status={backgroundStatus}/><p>后台正在准备全文对照，关闭阅读页面后会继续处理。</p></div>;
+ if(!loaded.parsed&&backgroundBusy)return <div className="bi-state"><LoaderCircle size={18} className="spin"/><ProcessingBadge status={backgroundStatus}/><p>后台正在准备全文对照，关闭阅读页面后会继续处理。</p>{backgroundStatus?.error&&<p className="bi-hint" role="status">{backgroundStatus.error}</p>}</div>;
  if(!loaded.parsed)return <div className="bi-state bi-intro">
   <BookOpenCheck size={22}/>
   <h2>全文对照</h2>
   <p>先解析这篇 PDF 的版面，再只翻译正文。图片、公式、表格保持原样，参考文献和附录默认保留原文。</p>
-  {usage&&<EngineSwitch usage={usage} engine={engine} onEngine={id=>{setEngine(id);setNeedKey(keyed[id]===false);setError('');}} disabled={parsing}/>}
-  {needKey?<div className="bi-key">
-   <label htmlFor="bi-key">{aistudio?'AI Studio 访问令牌':'百度智能云文档解析密钥'}</label>
-   <input id="bi-key" type="password" autoComplete="off" spellCheck={false} placeholder={aistudio?'星河社区的 Access Token':'bce-v3/ALTAK-…  或  API Key:Secret Key'} value={keyDraft} onChange={e=>setKeyDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void saveKey();}}/>
-   <p className="bi-hint">{aistudio
-    ?'在星河社区（aistudio.baidu.com）的 PaddleOCR 页面获取访问令牌。令牌保存在 macOS 钥匙串，不写入工作区文件。'
-    :'两种都支持：IAM API Key（创建时「服务」需勾选「AI开放能力」），或该应用的 API Key 与 Secret Key、中间用英文冒号分隔。密钥保存在 macOS 钥匙串，不写入工作区文件。'}
-    额度与价格以你的控制台为准。</p>
-   <button className="bi-primary" disabled={!keyDraft.trim()||testing||parsing} onClick={()=>void saveKey()}>{testing?<><LoaderCircle size={15} className="spin"/>正在验证凭据…</>:'保存并解析'}</button>
+  {usage&&<EngineSwitch usage={usage} engine={selectedEngine||''} onEngine={id=>{setEngine(id);setNeedKey(false);setError('');}} disabled={parsing}/>}
+  {missingKey?<div className="bi-key">
+   <p className="bi-hint">请先配置所选 OCR 引擎的凭据。保存和测试不会提交 PDF，配置好后回到这里解析。</p>
+   <button className="bi-primary" onClick={()=>openModelSettings('ocr',selectedEngine)}>配置 OCR API</button>
   </div>:<button className="bi-primary" disabled={parsing} onClick={()=>void parse()}>{parsing?<><LoaderCircle size={15} className="spin"/>正在解析（通常 10–60 秒）…</>:'解析全文版面'}</button>}
   {error&&<p className="bi-error" role="alert">{error}</p>}
+  {!error&&backgroundStatus?.stage==='failed'&&backgroundStatus.error&&<p className="bi-error" role="alert">{backgroundStatus.error}</p>}
   <p className="bi-hint">解析结果按这份文件的内容缓存，同一篇不会重复计费。</p>
  </div>;
 
@@ -305,51 +317,55 @@ export default function BilingualReading({resourceId,pdf,adapter,adapters,onSele
  split.firstId=doc?.blocks.find(block=>block.translate&&block.role==='paragraph')?.id;
  const toolbar=<div className="bi-toolbar">
    <div className="bi-toolbar-row bi-main-controls">
-    <div className="bi-modes" role="group" aria-label="阅读方式">{VIEWS.map(([value,label,hint])=><button key={value} type="button" aria-pressed={view===value} title={hint} onClick={()=>setView(value)}>{label}</button>)}</div>
+    <div className="bi-modes" role="group" aria-label="阅读方式">{VIEWS.map(([value,label,hint])=><button key={value} type="button" aria-pressed={displayView===value} disabled={loaded.stale&&value==='page'} title={hint} onClick={()=>setView(value)}>{label}</button>)}</div>
     {backgroundBusy&&<span className="bi-cache-status"><ProcessingBadge status={backgroundStatus}/></span>}
     {running?<button className="bi-stop" onClick={()=>abort.current?.abort()}><Square size={13}/>停止（{progress.done}/{progress.total}）</button>
-     :!backgroundBusy&&untranslated>0&&adapter?<button className="bi-primary small" onClick={()=>void translateAll()} title={`翻译正文剩余 ${untranslated} 段`}>翻译（{untranslated}）</button>
-     :!backgroundBusy&&<span className="bi-cache-status" title={untranslated?'可在阅读设置中选择翻译来源':'正文译文已缓存'}>{untranslated?`待译 ${untranslated}`:'已译'}</span>}
+     :!backgroundBusy&&!loaded.stale&&(untranslated>0
+      ?adapter?<button className="bi-primary small" disabled={saving||parsing} onClick={()=>void translateAll()} title={`翻译正文剩余 ${untranslated} 段`}>翻译（{untranslated}）</button>
+        :<button className="bi-primary small" onClick={()=>openModelSettings('translations')}>配置翻译 API</button>
+      :<span className="bi-cache-status">已译</span>)}
     <details className="bi-settings" onKeyDown={event=>{if(event.key==='Escape'&&event.currentTarget.open){event.preventDefault();event.stopPropagation();event.currentTarget.open=false;}}}>
      <summary aria-label="阅读设置" title="翻译来源、解析引擎与阅读设置"><SlidersHorizontal size={15}/></summary>
      <div className="bi-settings-panel">
       {stats&&<p className="bi-stats">正文 {stats.translate} 段 · 参考文献 {stats.references} · 附录 {stats.appendix} · 图 {stats.figures} · 公式 {stats.equations} · 表 {stats.tables}</p>}
-      {(view==='page'||view==='columns')&&<label className="bi-check">原文占比<input type="range" aria-label="原文占比" min={Math.ceil(minimum)} max={Math.floor(maximum)} value={ratio} onChange={event=>updateLayout({ratio:Number(event.target.value)})}/><output>{Math.round(ratio)}%</output></label>}
+      {(displayView==='page'||displayView==='columns')&&<label className="bi-check">原文占比<input type="range" aria-label="原文占比" min={Math.ceil(minimum)} max={Math.floor(maximum)} value={ratio} onChange={event=>updateLayout({ratio:Number(event.target.value)})}/><output>{Math.round(ratio)}%</output></label>}
       {adapters.length>0&&<label className="bi-check">译文来源
      <select aria-label="翻译来源" value={adapter?.id||''} disabled={running} onChange={e=>onSelectSource(e.target.value)}>
       {adapters.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}
      </select></label>}
-      {!adapter&&<p className="bi-hint">可在设置与模型中启用翻译来源。</p>}
-      {usage&&<EngineSwitch usage={usage} engine={engine} onEngine={id=>{setEngine(id);setNeedKey(keyed[id]===false);}} disabled={backgroundBusy||parsing||running}/>}
+      {usage&&<EngineSwitch usage={usage} engine={selectedEngine||''} onEngine={id=>{setEngine(id);setNeedKey(false);}} disabled={backgroundBusy||parsing||running}/>}
       <label className="bi-check"><input type="checkbox" checked={translateAppendix} onChange={e=>onToggleAppendix(e.target.checked)}/>翻译附录</label>
       <div className="bi-settings-actions">{usage&&<UsageChip usage={usage} onSaved={setUsage}/>}
-       <button className="bi-icon" title="重新解析版面（会再次计费）" disabled={backgroundBusy||parsing||running} onClick={()=>{if(confirm('重新解析会再次消耗文档解析额度。继续？'))void parse(true);}}><RefreshCw size={14}/></button>
+       <button className="bi-stop" onClick={()=>openModelSettings('ocr',selectedEngine)}>OCR API</button>
+       <button className="bi-stop" onClick={()=>openModelSettings('translations')}>{adapter?'翻译 API':'配置翻译 API'}</button>
+       <button className="bi-icon" title="重新解析版面（会再次计费）" disabled={backgroundBusy||parsing||running||saving} onClick={()=>{if(missingKey){openModelSettings('ocr',selectedEngine);return;}if(confirm('重新解析会再次消耗文档解析额度。继续？'))void parse(true);}}><RefreshCw size={14}/></button>
       </div>
      </div>
     </details>
    </div>
   </div>;
- return <div ref={host} className="bi-root" style={layoutStyle}>
+ const sourceHash=loaded.layout?.sourceHash;
+ return <div ref={host} className="bi-root" style={layoutStyle} data-source-hash={sourceHash}>
   {toolbarTarget?createPortal(toolbar,toolbarTarget):toolbar}
-  {loaded.stale&&<p className="bi-warn" role="alert">原文件在解析后发生过改动，当前对照仍是旧版本。点右上角重新解析可同步。</p>}
+  {loaded.stale&&<div className="bi-warn" role="alert">原文已更新，当前显示上一次的对照结果。 <button className="bi-primary small" disabled={backgroundBusy||parsing||saving} onClick={()=>missingKey?openModelSettings('ocr',selectedEngine):void parse()}>{missingKey?'配置 OCR API':parsing?'正在解析…':'解析新版原文'}</button></div>}
   {notice&&<p className="bi-notice">{notice}<button onClick={()=>setNotice('')} aria-label="关闭">×</button></p>}
-  {Object.keys(unsaved.current).length>0&&!running&&<button className="bi-primary small" onClick={()=>{
-   void api(`/api/workspace/resources/${resourceId}/bilingual/translations`,json('POST',{entries:unsaved.current,sourceHash:loaded.sourceHash})).then(()=>{unsaved.current={};setError('');setNotice('译文已保存。');}).catch(error=>setError(error.message));
-  }}>重试保存</button>}
+  {sourceHash&&!loaded.stale&&Object.keys(unsaved.current.get(sourceHash)??{}).length>0&&!running&&<button className="bi-primary small" disabled={saving||parsing} onClick={()=>{
+   setSaving(true);void flushTranslations(sourceHash).then(()=>{setError('');setNotice('译文已保存。');}).catch(error=>setError(error.message)).finally(()=>setSaving(false));
+  }}>{saving?'正在保存…':'重试保存'}</button>}
   {error&&<p className="bi-error" role="alert">{error}<button onClick={()=>setError('')} aria-label="关闭">×</button></p>}
-  {doc&&<article className={`bi-doc view-${view}`} tabIndex={0} aria-label="论文阅读正文">
+  {doc&&<article className={`bi-doc view-${displayView}`} tabIndex={0} aria-label="论文阅读正文">
    <div className="bi-pane-tools">
     {view!=='zh'&&<div className="bi-tools-source"><BilingualZoom label="原文" active={view==='en'||activeSide==='source'} value={layout.sourceZoom} onChange={sourceZoom=>updateLayout({sourceZoom})}/></div>}
     {view!=='en'&&<div className="bi-tools-target"><BilingualZoom label="译文" active={view==='zh'||activeSide==='translation'} value={layout.translationZoom} onChange={translationZoom=>updateLayout({translationZoom})}/></div>}
    </div>
-   {view==='page'
+   {displayView==='page'
     ?<PageByPage doc={doc} translations={translations} byText={byText} adapter={adapter} target={target} pdf={pdf} split={split} sourceZoom={layout.sourceZoom}/>
-    :<Body doc={doc} translations={translations} byText={byText} adapter={adapter} target={target} pdf={pdf} onJumpToPage={onJumpToPage} split={view==='columns'?split:undefined}/>}
+    :<Body doc={doc} translations={translations} byText={byText} adapter={adapter} target={target} pdf={loaded.stale?undefined:pdf} onJumpToPage={loaded.stale?undefined:onJumpToPage} split={displayView==='columns'?split:undefined}/>}
   </article>}
  </div>;
 }
 
-function Body({doc,translations,byText,adapter,target,pdf,onJumpToPage,split}:{doc:BilingualDocument;translations:Record<string,string>;byText:Map<string,string>;adapter?:TranslationAdapter;target:TranslationLanguage;pdf?:PDFDocumentProxy;onJumpToPage?:(page:number)=>void;split?:BilingualSplitControls}){
+const Body=memo(function Body({doc,translations,byText,adapter,target,pdf,onJumpToPage,split}:{doc:BilingualDocument;translations:Record<string,string>;byText:Map<string,string>;adapter?:TranslationAdapter;target:TranslationLanguage;pdf?:PDFDocumentProxy;onJumpToPage?:(page:number)=>void;split?:BilingualSplitControls}){
  const nodes:ReactElement[]=[];
  const title=doc.blocks.find(b=>b.role==='doc_title');
  const metadata=doc.blocks.filter(b=>b.role==='meta'&&b.page===title?.page).sort((a,b)=>(a.rect?.[1]??0)-(b.rect?.[1]??0));
@@ -377,7 +393,7 @@ function Body({doc,translations,byText,adapter,target,pdf,onJumpToPage,split}:{d
    page=block.page;
    const at=page+1;
    nodes.push(<div key={`page-${block.id}`} className="bi-page">
-    <button onClick={()=>onJumpToPage?.(at)} title="在原版 PDF 中打开这一页">第 {at} 页</button></div>);
+    {onJumpToPage?<button onClick={()=>onJumpToPage(at)} title="在原版 PDF 中打开这一页">第 {at} 页</button>:<span>第 {at} 页</span>}</div>);
   }
   const row=bilingualFigureRow(doc.blocks,index);
   if(row){
@@ -390,13 +406,13 @@ function Body({doc,translations,byText,adapter,target,pdf,onJumpToPage,split}:{d
  }
  flush();
  return <>
-  {title&&<header className="bi-title"><h1 data-bi-side="source" lang={target==='zh-CN'?'en':'zh-CN'}><MathText text={title.text}/></h1>
+  {title&&<header className="bi-title" data-pdf-page={title.page+1}><h1 data-bi-side="source" lang={target==='zh-CN'?'en':'zh-CN'}><MathText text={title.text}/></h1>
    {lookup(translations,byText,adapter,target,title.text)&&<p data-bi-side="translation" lang={target==='zh-CN'?'zh-CN':'en'}>{lookup(translations,byText,adapter,target,title.text)}</p>}
    {metadata.map(block=><Block key={block.id} block={block} translations={translations} byText={byText} adapter={adapter} target={target} pdf={pdf} split={split}/>)}</header>}
   {nodes}
  </>;
-}
-function Block({block,translations,byText,adapter,target,pdf,split}:{block:BilingualBlock;translations:Record<string,string>;byText:Map<string,string>;adapter?:TranslationAdapter;target:TranslationLanguage;pdf?:PDFDocumentProxy;split?:BilingualSplitControls}){
+});
+const Block=memo(function Block({block,translations,byText,adapter,target,pdf,split}:{block:BilingualBlock;translations:Record<string,string>;byText:Map<string,string>;adapter?:TranslationAdapter;target:TranslationLanguage;pdf?:PDFDocumentProxy;split?:BilingualSplitControls}){
  const zh=block.translate?lookup(translations,byText,adapter,target,block.text):undefined;
  if(block.role==='figure')return <figure className="bi-figure" data-bi-side="source" id={block.id} data-pdf-page={block.page+1}>
   <PdfRegion pdf={pdf} block={block} label={`原文第 ${block.page+1} 页插图`}/></figure>;
@@ -416,6 +432,21 @@ function Block({block,translations,byText,adapter,target,pdf,split}:{block:Bilin
    :block.translate?<p className="bi-zh bi-waiting" data-bi-side="translation">待翻译</p>
    :block.skipReason&&block.skipReason!=='无需翻译'?<p className="bi-skip-note">{block.skipReason}·保留原文</p>:null}
  </div>;
+});
+
+function revokeBlob(url:string){if(url.startsWith('blob:'))URL.revokeObjectURL(url);}
+function canvasToBlobUrl(canvas:HTMLCanvasElement):Promise<string>{
+ return new Promise<string>((resolve,reject)=>{
+  const release=()=>{canvas.width=0;canvas.height=0;};
+  if(typeof canvas.toBlob!=='function'){
+   try{const url=canvas.toDataURL('image/png');release();resolve(url);}catch(e){release();reject(e);}
+   return;
+  }
+  canvas.toBlob(blob=>{
+   release();
+   if(blob)resolve(URL.createObjectURL(blob));else reject(Error('无法编码图像'));
+  },'image/png');
+ });
 }
 
 /**
@@ -432,10 +463,10 @@ function PdfRegion({pdf,block,label,fallback}:{pdf?:PDFDocumentProxy;block:Bilin
  const geometry=JSON.stringify([block.page,block.rect,block.cropRect,block.pageWidth,block.pageHeight]);
  useEffect(()=>setSourceFailed(false),[block.imageUrl]);
  useEffect(()=>{
-  setUrl('');setFailed(false);
+  setUrl(old=>{revokeBlob(old);return '';});setFailed(false);
   if(source||!ready)return;
   const node=host.current;if(!node)return;
-  let cancelled=false;
+  let cancelled=false,currentBlob='';
   let renderTask:RenderTask|undefined;
   const observer=new IntersectionObserver(async entries=>{
    if(!entries[0].isIntersecting||cancelled)return;
@@ -454,11 +485,13 @@ function PdfRegion({pdf,block,label,fallback}:{pdf?:PDFDocumentProxy;block:Bilin
     context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);
     renderTask=page.render({canvas,canvasContext:context,viewport:page.getViewport({scale}),transform:[1,0,0,1,-x*scale,-y*scale]});
     await renderTask.promise;
-    if(!cancelled)setUrl(canvas.toDataURL('image/png'));
+    const blobUrl=await canvasToBlobUrl(canvas);
+    if(cancelled){revokeBlob(blobUrl);return;}
+    currentBlob=blobUrl;setUrl(blobUrl);
    }catch{if(!cancelled)setFailed(true);}
   },{rootMargin:'600px'});
   observer.observe(node);
-  return()=>{cancelled=true;observer.disconnect();renderTask?.cancel();};
+  return()=>{cancelled=true;observer.disconnect();renderTask?.cancel();revokeBlob(currentBlob);};
  },[ready,pdf,block.id,geometry,source]);
  if(source)return <div ref={host} className="bi-region"><img src={source} alt={label} loading="lazy" onError={()=>setSourceFailed(true)}/></div>;
  if(!ready||failed)return <div ref={host} className="bi-region">{fallback??<div className="bi-placeholder">{label}</div>}</div>;
@@ -478,7 +511,7 @@ function PageByPage({doc,translations,byText,adapter,target,pdf,split,sourceZoom
  return <>{[...pages.entries()].sort((a,b)=>a[0]-b[0]).map(([page,blocks],index)=>{
   const prose=blocks.filter(b=>['doc_title','heading','paragraph','caption','footnote'].includes(b.role));
   const back=blocks.length>0&&blocks.every(b=>(b.section==='references'||b.section==='appendix')&&!b.translate);
-  return <section key={page} className="bi-spread">
+  return <section key={page} className="bi-spread" data-pdf-page={page+1}>
    <div className="bi-spread-left" data-bi-side="source"><PdfPageImage pdf={pdf} page={page} zoom={sourceZoom}/><span className="bi-spread-no">第 {page+1} 页</span></div>
    <BilingualDivider controls={split} focusable={index===0} label={`调整原文与译文比例 · 第 ${page+1} 页`}/>
    <div className="bi-spread-right" data-bi-side="translation">
@@ -499,7 +532,7 @@ function PageByPage({doc,translations,byText,adapter,target,pdf,split,sourceZoom
 
 /** 整页原版渲染，进入视口才画，避免一次性渲染几十页。 */
 function PdfPageImage({pdf,page,zoom}:{pdf?:PDFDocumentProxy;page:number;zoom:number}){
- const host=useRef<HTMLDivElement>(null);
+ const host=useRef<HTMLDivElement>(null),renderedFor=useRef<{pdf?:PDFDocumentProxy;page:number;width:number;url:string}>(undefined);
  const [url,setUrl]=useState(''),[failed,setFailed]=useState(false),[visible,setVisible]=useState(false),[width,setWidth]=useState(0);
  useEffect(()=>{
   const node=host.current;if(!node)return;
@@ -513,8 +546,14 @@ function PdfPageImage({pdf,page,zoom}:{pdf?:PDFDocumentProxy;page:number;zoom:nu
   setWidth(Math.round(node.clientWidth));const observer=new ResizeObserver(measure);observer.observe(node);
   return()=>{clearTimeout(timer);observer.disconnect();};
  },[]);
+ useEffect(()=>()=>{if(renderedFor.current){revokeBlob(renderedFor.current.url);renderedFor.current=undefined;}},[]);
  useEffect(()=>{
-  if(!pdf||!visible||!width)return;
+  if(!pdf||!width)return;
+  if(!visible){
+   if(renderedFor.current){revokeBlob(renderedFor.current.url);renderedFor.current=undefined;setUrl('');}
+   return;
+  }
+  if(renderedFor.current?.pdf===pdf&&renderedFor.current.page===page&&renderedFor.current.width===width&&renderedFor.current.url)return;
   let cancelled=false,task:RenderTask|undefined;
   setFailed(false);
   void (async()=>{
@@ -527,7 +566,10 @@ function PdfPageImage({pdf,page,zoom}:{pdf?:PDFDocumentProxy;page:number;zoom:nu
     const context=canvas.getContext('2d');if(!context)throw Error('无法绘制');
     context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);
     task=target.render({canvas,canvasContext:context,viewport});await task.promise;
-    if(!cancelled)setUrl(canvas.toDataURL('image/png'));
+    const blobUrl=await canvasToBlobUrl(canvas);
+    if(cancelled){revokeBlob(blobUrl);return;}
+    if(renderedFor.current)revokeBlob(renderedFor.current.url);
+    renderedFor.current={pdf,page,width,url:blobUrl};setUrl(blobUrl);
    }catch{if(!cancelled)setFailed(true);}
   })();
   return()=>{cancelled=true;task?.cancel();};
@@ -585,7 +627,7 @@ function UsageChip({usage,onSaved}:{usage:Usage;onSaved:(value:Usage)=>void}){
    <p className="bi-hint">统计的是 EchoPaper 自己解析掉的页数：智能云按月（{usage.month}），星河社区按天（{usage.day}）。
     接口都不返回账户余额，这里按你填的额度倒推剩余，真实余额以控制台为准：
     <a href="https://console.bce.baidu.com/ai-engine/ocr/overview/index?type=6" target="_blank" rel="noreferrer">文字识别控制台</a>。
-    默认额度为智能云每月 2000 页、星河社区每天 20000 页；与你控制台数字不一致时按实际改。</p>
+    本地估算不代表免费额度，请按对应服务控制台的实际限制调整。</p>
    {usage.engines.map(item=><label key={item.id} className="bi-usage-row">
     <span className="bi-usage-name">{item.label}<small>{item.note}</small></span>
     <span className="bi-usage-used">{item.period==='day'?'今日':'本月'}已用 {item.used}</span>

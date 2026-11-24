@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EditorState, EditorSelection } from '@codemirror/state';
-import { texWrapChange, sourceDoubleClickLine } from '../src/editorCommands.ts';
+import { compilesOnSave, texWrapChange, sourceDoubleClickLine } from '../src/editorCommands.ts';
+
+test('manual save compiles current target source and bibliography without compiling working notes',()=>{
+ const main='manuscript/main.tex';
+ for(const file of [main,'manuscript/sections/intro.tex','manuscript/refs.bib','manuscript/figures/data.csv'])assert.equal(compilesOnSave(file,main),true,file);
+ for(const file of ['','manuscript/README.md','notes/method.tex','manuscript/notes/old.tex','manuscript/.draft/appendix.tex','reviews/round/response/main.tex'])assert.equal(compilesOnSave(file,main),false,file);
+ assert.equal(compilesOnSave('reviews/round/response/refs.bib','reviews/round/response/main.tex'),true);
+ assert.equal(compilesOnSave('notes/research-basis.md','main.tex'),false);
+});
 test('TeX emphasis wraps a selected range and keeps the text selected',()=>{
  const state=EditorState.create({doc:'alpha beta',selection:{anchor:6,head:10}});
  const next=state.update(texWrapChange(state,'textbf')).state;

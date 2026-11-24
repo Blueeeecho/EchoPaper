@@ -3,6 +3,7 @@ import {createRoot,type Root} from 'react-dom/client';
 import {EditorSelection,StateEffect,StateField,type EditorState,type Range} from '@codemirror/state';
 import {syntaxTree} from '@codemirror/language';
 import {Decoration,EditorView,WidgetType,type DecorationSet} from '@codemirror/view';
+import katex from 'katex';
 import AiMarkdown from '../components/AiMarkdown';
 
 export const markdownFocus=StateEffect.define<boolean>();
@@ -14,20 +15,45 @@ function RenderedBlock({text,view}:{text:string;view:EditorView}){
  return <AiMarkdown text={text}/>;
 }
 
+function renderFastDom(dom:HTMLElement,text:string,block:boolean):boolean{
+ const trim=text.trim();
+ if(block&&trim.startsWith('$$')&&trim.endsWith('$$')&&trim.length>=4){
+  const body=trim.slice(2,-2).trim();
+  try{dom.innerHTML=katex.renderToString(body,{displayMode:true,throwOnError:false,output:'html'});return true;}catch{return false;}
+ }
+ if(!block&&trim.startsWith('$')&&trim.endsWith('$')&&!trim.startsWith('$$')&&trim.length>=3){
+  const body=trim.slice(1,-1).trim();
+  try{dom.innerHTML=katex.renderToString(body,{displayMode:false,throwOnError:false,output:'html'});return true;}catch{return false;}
+ }
+ if(!block){
+  const link=trim.match(/^\[([^\][\n*$!`\\]+)\]\(([^)\s]+)\)$/);
+  if(link&&/^(?:https?:\/\/|\/|#)/i.test(link[2])){
+   const a=document.createElement('a');
+   a.href=link[2];a.target='_blank';a.rel='noopener noreferrer';a.textContent=link[1];
+   dom.append(a);return true;
+  }
+ }
+ return false;
+}
+
 class MarkdownWidget extends WidgetType{
  constructor(readonly text:string,readonly from:number,readonly block:boolean){super();}
- eq(other:MarkdownWidget){return this.text===other.text&&this.from===other.from&&this.block===other.block;}
+ // Ignore `from` so typing above a widget reuses its DOM node instead of remounting React/KaTeX on every keystroke.
+ eq(other:MarkdownWidget){return this.text===other.text&&this.block===other.block;}
  toDOM(view:EditorView){
   const dom=document.createElement(this.block?'div':'span');
   dom.className=`markdown-live-widget research-note-markdown ${this.block?'block':'inline'}`;
   dom.addEventListener('mousedown',event=>{
    if((event.target as Element).closest('a'))return;
    event.preventDefault();
-   view.dispatch({selection:EditorSelection.cursor(this.from),scrollIntoView:true});
+   const pos=view.posAtDOM(dom);
+   view.dispatch({selection:EditorSelection.cursor(pos),scrollIntoView:true});
    view.focus();
   });
-  const root=createRoot(dom);roots.set(dom,root);
-  root.render(<RenderedBlock text={this.text} view={view}/>);
+  if(!renderFastDom(dom,this.text,this.block)){
+   const root=createRoot(dom);roots.set(dom,root);
+   root.render(<RenderedBlock text={this.text} view={view}/>);
+  }
   return dom;
  }
  destroy(dom:HTMLElement){const root=roots.get(dom);roots.delete(dom);if(root)queueMicrotask(()=>root.unmount());}
@@ -72,7 +98,14 @@ export function markdownDecorations(state:EditorState,focused:boolean):Decoratio
    return false;
   }
   if(/^ATXHeading[1-6]$/.test(name))ranges.push(Decoration.line({class:`markdown-live-heading h${name.slice(-1)}`}).range(state.doc.lineAt(node.from).from));
-  if(name==='HeaderMark'&&!activeLine(node.from))hide(node.from,Math.min(state.doc.lineAt(node.from).to,node.to+1));
+  if(name==='HeaderMark'){
+   const line=state.doc.lineAt(node.from);
+   const opening=node.from===node.node.parent?.from;
+   const before=opening?0:line.text.slice(0,node.from-line.from).match(/[ \t]+$/)?.[0].length??0;
+   const after=opening?line.text.slice(node.to-line.from).match(/^[ \t]+/)?.[0].length??0:0;
+   const from=node.from-before,to=node.to+after;
+   if(!active(from,to))hide(from,to);
+  }
   if(inlineStyles[name])ranges.push(Decoration.mark({class:inlineStyles[name]}).range(node.from,node.to));
   if(name==='InlineCode')protectedRanges.push({from:node.from,to:node.to});
   if(['EmphasisMark','StrikethroughMark','CodeMark','LinkMark'].includes(name)&&!activeLine(node.from))hide(node.from,node.to);
@@ -84,16 +117,18 @@ export function markdownDecorations(state:EditorState,focused:boolean):Decoratio
   }
  }});
  const text=state.doc.toString();
- // Formula widgets share the existing safe Markdown/KaTeX renderer.
- for(const match of text.matchAll(/^\$\$[^\S\n]*\n[\s\S]*?\n\$\$[^\S\n]*$|^\$\$[^\n]+\$\$[^\S\n]*$/gm)){
-  const from=match.index,to=from+match[0].length;
-  if(protectedAt(from,to))continue;
-  protectedRanges.push({from,to});
-  if(!active(from,to))ranges.push(Decoration.replace({widget:new MarkdownWidget(match[0],from,true),block:true}).range(from,to));
- }
- for(const match of text.matchAll(/(?<![\\$])\$(?!\$)([^\n$]+?)(?<!\\)\$(?!\$)/g)){
-  const from=match.index,to=from+match[0].length;
-  if(!protectedAt(from,to)&&!activeLine(from))ranges.push(Decoration.replace({widget:new MarkdownWidget(match[0],from,false)}).range(from,to));
+ if(text.includes('$')){
+  // Formula widgets share the existing safe Markdown/KaTeX renderer.
+  for(const match of text.matchAll(/^\$\$[^\S\n]*\n[\s\S]*?\n\$\$[^\S\n]*$|^\$\$[^\n]+\$\$[^\S\n]*$/gm)){
+   const from=match.index,to=from+match[0].length;
+   if(protectedAt(from,to))continue;
+   protectedRanges.push({from,to});
+   if(!active(from,to))ranges.push(Decoration.replace({widget:new MarkdownWidget(match[0],from,true),block:true}).range(from,to));
+  }
+  for(const match of text.matchAll(/(?<![\\$])\$(?!\$)([^\n$]+?)(?<!\\)\$(?!\$)/g)){
+   const from=match.index,to=from+match[0].length;
+   if(!protectedAt(from,to)&&!activeLine(from))ranges.push(Decoration.replace({widget:new MarkdownWidget(match[0],from,false)}).range(from,to));
+  }
  }
  return Decoration.set(ranges,true);
 }

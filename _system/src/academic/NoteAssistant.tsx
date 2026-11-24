@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { Download, LoaderCircle, Sparkles, Undo2, X } from 'lucide-react';
 import type { PublicModel } from '../../shared/model-providers';
 import { api, downloadText, json } from '../api';
@@ -19,13 +20,14 @@ const actions = [
     ['润色表达', '调整表达，使文字清晰、通顺、准确，保留原意、全部事实和证据状态。'],
     ['精简文字', '精简重复与冗余表达，保留事实、关键细节、逻辑关系和证据状态。'],
 ] as const;
-export default function NoteAssistant({ value, onChange, editorRef, disabled = false, maxLength = 100000, label = '当前笔记' }: {
+export default function NoteAssistant({ value, onChange, editorRef, disabled = false, maxLength = 100000, label = '当前笔记', toolbar }: {
     value: string;
     onChange: (value: string) => void;
     editorRef: RefObject<NoteTextSelection | null>;
     disabled?: boolean;
     maxLength?: number;
     label?: string;
+    toolbar?: HTMLElement|null;
 }) {
     const id = useId();
     const [open, setOpen] = useState(false);
@@ -136,18 +138,19 @@ export default function NoteAssistant({ value, onChange, editorRef, disabled = f
         setProposal(undefined);
         setError('');
     }
-    return <div className="note-assistant" onClick={event => event.stopPropagation()}>
-        <div className="note-assistant-bar">
-            <button type="button" className="note-assistant-trigger" aria-expanded={open} aria-controls={id} disabled={disabled} onClick={toggle}>
-                <Sparkles size={13}/>AI 助手
+    const controls=<div className="note-assistant-bar">
+            <button type="button" className="note-assistant-trigger" aria-label="AI 助手" title="AI 助手" aria-expanded={open} aria-controls={id} disabled={disabled} onClick={toggle}>
+                <Sparkles size={14}/><span>AI 助手</span>
             </button>
-            {canUndo && <button type="button" disabled={disabled || busy} onClick={() => {
+            {canUndo && <button type="button" title="撤销 AI 修改" aria-label="撤销 AI 修改" disabled={disabled || busy} onClick={() => {
                 if (undo && current.current === undo.after) {
                     onChange(undo.before);
                     setUndo(undefined);
                 }
-            }}><Undo2 size={12}/>撤销 AI 修改</button>}
-        </div>
+            }}><Undo2 size={14}/><span>撤销 AI 修改</span></button>}
+        </div>;
+    return <div className="note-assistant" hidden={toolbar!==undefined&&!open} onClick={event => event.stopPropagation()}>
+        {toolbar===undefined?controls:toolbar&&createPortal(controls,toolbar)}
         {open && <section id={id} className="note-assistant-panel" aria-label={`${label} AI 助手`} onKeyDown={event => {
             event.stopPropagation();
             if (event.key === 'Escape') {

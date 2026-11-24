@@ -24,7 +24,6 @@
     "@napi-rs/canvas": "1.0.13",
     "@uiw/react-codemirror": "^4.23.0",
     "@xmldom/xmldom": "0.9.10",
-    "chokidar": "^4.0.0",
     "fastify": "^5.0.0",
     "jszip": "3.10.1",
     "katex": "^0.19.0",

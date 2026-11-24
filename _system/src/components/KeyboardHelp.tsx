@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Keyboard, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import '../keyboard-help.css';
 
 type Shortcut = { action: string; mac: string; windows?: string; note?: string };
@@ -40,7 +40,7 @@ export default function KeyboardHelp({ onClose }: { onClose: () => void }) {
     return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
   return <dialog ref={dialog} className="keyboard-help-dialog" aria-labelledby="keyboard-help-title" aria-describedby="keyboard-help-scope" onCancel={event => { event.preventDefault(); onClose(); }}>
-    <header><div><span className="keyboard-help-eyebrow"><Keyboard size={14}/> ECHOPAPER</span><h2 id="keyboard-help-title">键盘快捷键</h2></div><button type="button" className="icon-button" aria-label="关闭快捷键帮助" onClick={onClose} autoFocus><X size={18}/></button></header>
+    <header><div><h2 id="keyboard-help-title">键盘快捷键</h2></div><button type="button" className="icon-button" aria-label="关闭快捷键帮助" onClick={onClose} autoFocus><X size={18}/></button></header>
     <div className="keyboard-help-scroll"><p id="keyboard-help-scope" className="keyboard-help-scope">编辑快捷键作用于源码编辑器。候选列表展开时，Enter 或 Tab 接受当前候选；没有候选时 Enter 正常换行。中文输入法正在组词时不会接受补全候选。AI 聊天输入框保留自己的输入行为。</p>
       <table><thead><tr><th scope="col">操作</th><th scope="col">macOS</th><th scope="col">Windows / Linux</th></tr></thead>{groups.map(group => <tbody key={group.title}><tr className="keyboard-help-group"><th colSpan={3} scope="colgroup">{group.title}</th></tr>{group.rows.map(row => <tr key={row.action}><th scope="row"><span>{row.action}</span>{row.note && <small>{row.note}</small>}</th><td><kbd>{row.mac}</kbd></td><td><kbd>{row.windows || row.mac}</kbd></td></tr>)}</tbody>)}</table>
       <p className="keyboard-help-footnote">⌘ 表示 Command，macOS 的 Alt 表示 Option。系统或浏览器保留的组合键可能优先响应；此时也可使用编辑器工具栏。</p>

@@ -50,7 +50,7 @@ test('failed amendment storage commit rolls back memory and permits a clean retr
  const sqlite=path.join(root,'workspace/catalog.sqlite');
  if(await fs.stat(sqlite).then(()=>true).catch(()=>false)){
  const {createRequire}=await import('node:module');const Database=createRequire(import.meta.url)('better-sqlite3');const db=new Database(sqlite);
- db.exec("CREATE TRIGGER reject_amend BEFORE UPDATE ON catalog BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");undo=async()=>{db.exec('DROP TRIGGER reject_amend');db.close();};
+ db.exec("CREATE TRIGGER reject_amend BEFORE UPDATE ON topics BEGIN SELECT RAISE(ABORT, 'injected failure'); END;");undo=async()=>{db.exec('DROP TRIGGER reject_amend');db.close();};
  }else{
  const file=path.join(root,'workspace/catalog.json'),backup=file+'.saved';await fs.rename(file,backup);await fs.mkdir(file);undo=async()=>{await fs.rmdir(file);await fs.rename(backup,file);};
  }

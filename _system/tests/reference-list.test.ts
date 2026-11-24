@@ -138,7 +138,7 @@ test('note searches omit the paper-only group and show request failures with ret
  const html=harness.render();assert.match(html,/搜索失败，索引读取失败/);assert.match(html,/重试/);assert.doesNotMatch(html,/没有匹配的笔记/);
 });
 
-test('active searches refresh as OCR and translated cache progresses',async context=>{
+test('active searches refresh only when reading cache completes',async context=>{
  context.mock.timers.enable({apis:['setTimeout']});
  let requests=0;
  context.mock.method(globalThis,'fetch',async()=>{requests++;return new Response(JSON.stringify({resources:[]}));});
@@ -151,9 +151,9 @@ test('active searches refresh as OCR and translated cache progresses',async cont
  context.after(()=>harness.dispose());harness.render();harness.setQuery('agent');harness.render();context.mock.timers.tick(180);await settle();harness.render();
  assert.equal(requests,1);
  const current=processing.snapshot!.statuses['paper-1'];
- current.stage='translating';current.pageCount=5;harness.render();context.mock.timers.tick(180);await settle();harness.render();assert.equal(requests,2);
- current.done=3;harness.render();context.mock.timers.tick(180);await settle();harness.render();assert.equal(requests,3);
- current.updatedAt='2026-11-13T01:00:00Z';harness.render();context.mock.timers.tick(200);assert.equal(requests,3);
+ current.stage='translating';current.pageCount=5;harness.render();context.mock.timers.tick(180);await settle();harness.render();assert.equal(requests,1);
+ current.done=3;harness.render();context.mock.timers.tick(180);await settle();harness.render();assert.equal(requests,1);
+ current.stage='complete';harness.render();context.mock.timers.tick(180);await settle();harness.render();assert.equal(requests,2);
 });
 
 test('library-controlled search keeps OCR-only matches and reuses compact numbered rows with details',async context=>{

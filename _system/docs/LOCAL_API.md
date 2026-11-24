@@ -14,9 +14,9 @@ EchoPaper 网页、Codex 与命令行使用同一份 `papers/<项目ID>/` 稿件
 
 ### 专用翻译服务（Bob 风格多来源）
 
-`GET /api/translation-services` 返回公开预设、官方额度/申请链接和 `reviewedAt`。它不会创建账户、写入配置或查询真实剩余额度。
+`GET /api/translation-services` 返回公开预设、接入链接与历史额度快照日期 `reviewedAt`。它不会创建账户、写入配置或查询真实剩余额度。
 
-`GET /api/ai/providers` 仍返回全部服务、引擎与有序翻译来源。新增 kind：`siliconflow-translate`、`zhipu-translate`、`niutrans`、`baidu-translate`、`deepl`、`microsoft-translator`、`qwen-mt`。沿用 `POST /api/ai/providers/:id`，携带 `{expectedRevision,provider,models,key?}`；百度 provider 需 `appId`，Microsoft 可填 `region`。专用翻译引擎用 `contextWindow:0,reasoning:'none'` 标记“仅翻译”，并非上游窗口为零；它们不会进入 AI 聊天模型列表。传统机器翻译 model 为 `text-translation`，Qwen-MT 用 `qwen-mt-*`，硅基流动/智谱填写其真实模型 ID。`auth:'bearer'` 表示需保存凭据，真实出站认证方式由专用适配器决定。
+`GET /api/ai/providers` 返回助手与翻译连接、引擎与有序翻译来源。翻译连接 kind：`zhipu-translate`、`minimax-translate`、`siliconflow-translate`、`niutrans`、`baidu-translate`、`deepl`、`microsoft-translator`、`qwen-mt`。通过 `POST /api/ai/providers/:id` 携带 `{expectedRevision,provider,models,key?}` 单独保存；百度需 `appId`，Microsoft 可填 `region`。翻译引擎用 `contextWindow:0,reasoning:'none'` 标记「仅翻译」，并非上游窗口为零，不进入聊天模型列表。传统机器翻译 model 为 `text-translation`，Qwen-MT 用 `qwen-mt-*`，GLM / MiniMax / 硅基流动使用其模型 ID。`auth:'bearer'` 表示需保存凭据，真实出站认证方式由适配器决定。
 
 沿用 `PUT /api/ai/translations {expectedRevision,sources,layout}` 保存来源、启用状态和顺序。配置冲突 409 时读取比较，不覆盖。密钥只在需要新增/更新时提供；读取和翻译无需取出密钥。注册表与备份只保留公开字段。
 
@@ -28,7 +28,7 @@ EchoPaper 网页、Codex 与命令行使用同一份 `papers/<项目ID>/` 稿件
 
 `source` 为 `tex|pdf`，`sourceLanguage` 为 `auto|zh-CN|en`（缺省 auto），目标为 `zh-CN|en`，选区最多 6000 字符。返回 `{text,model,provider}`，无流式事件；不改正文、不编译、不附带其他文件。仅允许已配置并启用的专用来源，每服务串行、最多两路专用请求；超时 90 秒，关闭连接取消。上游限流、认证、额度、空结果或不完整结束均返回可读错误。`POST /api/ai/providers/:id/test {modelId}` 对专用服务调用一句翻译样例；无需 GET /models。
 
-完整调研和申请要求见 [TRANSLATION_SERVICES.md](TRANSLATION_SERVICES.md)。
+三类服务的注册、取 Key 和启用流程见 [TRANSLATION_SERVICES.md](TRANSLATION_SERVICES.md)。
 
 `GET /api/ai/config` 返回公开模型列表、上下文窗口、默认模型和 `autoCompactRatio:0.7`；不返回密钥。`POST /api/ai/chat` 请求体：`{projectId,model,effort?,messages:[{id?,role,content,reasoning_content?}],checkpoint?,contextUsage?,forceCompact?,context?:{path,content}}`。`role` 仅 user/assistant，最后一条必须为 user。建议稳定提供消息 ID；未提供时后台派生。可使用 `shared/ai-context.ts` 的 `chatMessages()` 将保存的消息和明确附件转换为请求材料。
 
@@ -56,18 +56,18 @@ CLI：`chat list <项目ID>` 读取对话及 hash；`chat archive|delete|restore
 
 ## 模型服务配置 API
 
-配置版本为 1，`GET /api/ai/providers` 返回 `{version,revision,providers,models,translations,translationLayout}`，只含公开参数和 `configured` 布尔状态，不返回密钥。`GET /api/ai/config` 的 `models` 为已启用模型，`PUT /api/ai/config {defaultModel}` 只切换聊天默认模型，不改变翻译来源。
+配置版本为 2，`GET /api/ai/providers` 仅返回公开参数和 `configured` 状态。`GET /api/ai/config` 的 `models` 只列已启用的助手模型；`PUT /api/ai/config {expectedRevision,defaultModel}` 切换助手默认模型，不改变翻译来源。
 
 | 接口 | 请求与用途 |
 |---|---|
 | `POST /api/ai/providers/:id` | `{expectedRevision,provider,models,key?}` 新建或替换一个服务及其模型；留空 key 字段保留已有凭据，不传空字符串。|
-| `POST /api/ai/providers/:id/models` | 读取已保存服务的标准 `/models`；无此端点则手动添加。|
+| `POST /api/ai/providers/:id/models` | 读取已保存助手连接的标准 `/models`；无此端点则手动添加。翻译连接按各自协议配置。|
 | `POST /api/ai/providers/:id/test` | `{modelId}` 仅发简短测试，可能计费；不会创建本地聊天。|
 | `PUT /api/ai/translations` | `{expectedRevision,sources,layout:'stack'|'columns'}` 保存完整来源数组、顺序和布局。|
 
-`provider`：`{id,label,kind:'minimax'|'openai-compatible',baseUrl,plan,auth:'bearer'|'none',enabled,includeUsage,passReasoning}`。baseUrl 使用 HTTPS，只有 localhost / 127.0.0.1 / ::1 允许 HTTP；不含密钥、用户信息、查询参数、片段。也可填写完整 `/chat/completions`，保存时规范为 base URL。套餐端点（如 `/coding/v1`）保留；plan 只是备注，不改变供应商的授权或计费。`includeUsage` 发送流式用量参数，`passReasoning` 允许历史 reasoning_content，按供应商实际能力设置。
+`provider`：`{id,label,kind,baseUrl,plan,auth:'bearer'|'none',enabled,includeUsage,passReasoning}`。助手 kind 为 `minimax` 或 `openai-compatible`；翻译 kind 见前文。一个连接不能从助手改成翻译，反之亦然。baseUrl 使用 HTTPS，只有 localhost / 127.0.0.1 / ::1 允许 HTTP；不含密钥、用户信息、查询参数、片段。也可填写完整 `/chat/completions`，保存时规范为 base URL。套餐端点（如 `/coding/v1`）保留；plan 只是备注，不改变供应商的授权或计费。助手连接的 `includeUsage` 和 `passReasoning` 分别控制流式用量和历史推理字段。
 
-`models`：每项 `{id,providerId,model,label,contextWindow,reasoning:'none'|'standard'|'extended',enabled}`。`id` 是稳定本地编号；`model` 是发送给上游的 model ID。相同上游模型可属于不同服务；请求 `/api/ai/chat` 必须传本地 id。上下文必须明确填写，范围 1000–10000000，单位 tokens；未公布则让作者确认，不自动猜测。none 不发送 reasoning_effort，standard 为 low/medium/high，extended 增加 xhigh/max。切换模型后会按支持范围调整。
+`models`：每项 `{id,providerId,model,label,contextWindow,reasoning:'none'|'standard'|'extended',enabled}`。`id` 是本地编号；`model` 是上游模型 ID。相同上游模型可分别用于助手和翻译，须属于不同连接；请求 `/api/ai/chat` 只能传助手模型的本地 id。助手上下文窗口为 1000–10000000 tokens；`none` 不发送 `reasoning_effort`，`standard` 为 low/medium/high，`extended` 增加 xhigh/max。翻译模型使用适配器定义的参数，不读取助手的推理设置。
 
 `sources` 每项 `{id,label,modelId,enabled,color:'#RRGGBB'}`；数组顺序就是显示顺序。禁用服务或模型后来源会明确提示未配置/未启用，不静默切换模型。尚被来源引用的模型不能删除，应先修改或移除来源。各模型和来源 ID 在对应数组内唯一。
 
@@ -94,7 +94,7 @@ CLI 从 `_system/runtime/instance.json` 发现端口，必要时探测 4173–42
 
 ## 会议时间线
 
-`GET /api/workspace/conference-timeline` 返回 `{revision,conferences}`；`PUT` 同一地址携带 `{expectedRevision,conferences}`，成功后 revision 加一，409 时保留本地编辑并重新读取比较。会议记录包含 `id,title,year,color,enabled,paperIds,milestones`，可选 `conferenceId,roundId,roundLabel,officialUrl,sourceStatus,sourceUrls,warning,fetchedAt`；节点包含 `id,label,at`，可选 `date,note,sourceUrl`。`at` 未知时为 `""`，已知时须为含明确时区的 ISO 时间，服务端保存为 UTC；官网仅公布日期时使用 `date:"YYYY-MM-DD"`，不补造具体时刻。官网与来源只接受 HTTP(S) 地址；颜色使用 `#rrggbb`。数据存于 `workspace/catalog`，随工作区完整备份保留，不修改论文投稿状态或触发编译。
+`GET /api/workspace/conference-timeline` 返回 `{revision,conferences}`；`PUT` 同一地址携带 `{expectedRevision,conferences}`，成功后 revision 加一，409 时保留本地编辑并重新读取比较。会议记录包含 `id,title,year,color,enabled,paperIds,milestones`，可选 `conferenceId,roundId,roundLabel,officialUrl,sourceStatus,sourceUrls,warning,fetchedAt`；节点包含 `id,label,at`，可选 `date,note,sourceUrl`。`at` 未知时为 `""`，已知时须为含明确时区的 ISO 时间，服务端保存为 UTC；官网仅公布日期时使用 `date:"YYYY-MM-DD"`，不补造具体时刻。官网与来源只接受 HTTP(S) 地址；颜色使用 `#rrggbb`。数据存于 `workspace/catalog.sqlite`，SQLite 不可用时使用 `workspace/catalog.json`。会议时间线随工作区完整备份保留，保存会议记录不触发编译或改变稿件投稿状态。
 
 `POST /api/workspace/conference-timeline/resolve` 接收 `{conferenceId,roundId?,refresh?}`，会议须来自既有 CCFDDL 年份记录，多轮会议须明确轮次。自动读取会议官网及同源 CFP/重要日期页，返回来源链接、已公布的评审节点和 `sourceStatus:ready|partial|unavailable`。忽略官网已划除的旧日期，保留当前正文公布的修改日期；第一阶段拒稿通知不当作最终决定。未找到的日期保持缺失并说明，不从其他年份或投稿截止日期推算。每次最多读取四页，结果在内存缓存 15 分钟，`refresh:true` 可立即重新读取；不调用模型。读取限制排除本机、私有地址与跨域跳转。
 
@@ -153,6 +153,10 @@ node _system/scripts/echopaper.mjs file write WWW manuscript/main.tex \
 网页和 Codex 同时修改时，如果磁盘版本已经变化，服务返回 `409` 与 `current`。请保留自己的修改，比较新磁盘内容，再决定如何合并；不要用获取新 hash 后立即重送整篇旧稿的方式绕过冲突。
 
 也可直接用本地编辑器增量改稿，网页会通过文件监听得知变化；带 hash 的 HTTP 写入更适合需要避免竞争覆盖的自动化。
+
+审稿轮次读取及创建返回 `hash`。更新轮次用 `PUT /api/projects/:id/reviews/:roundId {items,expectedHash}`。过期版本返回 `409` 和 `current`，比较条目后再提交。`needsSourceSync:true` 表示结构化回复已保存，生成的 `responses.tex` 待同步。修复文件路径问题后可以用最新哈希和同一条目重试。
+
+`POST /api/projects/:id/restore {path,ref}` 按原始字节恢复 Git 历史文件。可编辑文本沿用 `{path,content,hash}`。二进制、非 UTF-8 或超出文本编辑上限的文件返回 `{path,restored:true}`。指定 `paths` 的版本节点仅提交所选路径，保留其他文件的暂存版本。
 
 ## 会议来源与截止时间
 
@@ -261,7 +265,7 @@ CLI 成功输出 JSON；帮助输出文本。错误输出到 stderr，退出非�
 
 ## 选区翻译
 
-网页读取 `GET /api/ai/providers` 的 `translations`，按数组顺序展示全部启用来源；每个来源使用独立 `sourceId` 调用 `POST /api/ai/translate`，由服务端解析其模型。旧纯函数 `src/selectionTranslation.ts` 的 `selectionTranslationRequest(projectId, model, text, target, source, sourceLanguage?)` 仅保留兼容，不作为当前翻译调用入口：`model` 为本地模型编号，`target` 为 `zh-CN` 或 `en`，`source` 为 `tex` 或 `pdf`，`sourceLanguage` 为 `auto`（默认）、`zh-CN` 或 `en`。仅发送选区与翻译要求，不包含文件或聊天历史，网页限 6000 字符。关闭浮窗使用 AbortController，仅完整译文进入页面内缓存；单来源重试不改变其他卡片。
+网页读取 `GET /api/ai/providers` 的 `translations`，按数组顺序展示启用且凭据已保存的专用翻译来源。每个来源使用独立 `sourceId` 调用 `POST /api/ai/translate`；旧助手模型绑定仍可在设置中替换，但不可调用。`target` 为 `zh-CN` 或 `en`，`source` 为 `tex` 或 `pdf`，`sourceLanguage` 为 `auto`（默认）、`zh-CN` 或 `en`。仅发送选区与翻译要求，不包含文件或聊天历史，网页限 6000 字符。关闭浮窗使用 AbortController，仅完整译文进入页面内缓存；单来源重试不改变其他卡片。
 翻译入口为物理 Control（Mac ⌃）+ 拖选源码/PDF，或选中后点击顶栏翻译；Command/Meta 和普通拖选不请求 API。Ctrl 选字打开的临时浮窗在未固定时，按下外部指针即关闭并取消请求；顶栏手动打开或固定的窗口保持显示。窗口内控件和模型设置门户属于同一操作流程，不触发外部关闭。浮窗的坐标、尺寸与固定状态保存在本机浏览器 `echopaper:translation-window:v1`，不保存原文或译文，不改项目配置或稿件。普通点击、拖选不执行源码/PDF 导航；对应位置导航只由双击触发，PDF 内引用链接仍按正常链接操作。
 
 
@@ -273,7 +277,7 @@ CLI 成功输出 JSON；帮助输出文本。错误输出到 stderr，退出非�
 
 ## 独立助手配置与任务接口（v2）
 
-设置分为 AI 助手、划词翻译、连接与模型。共享连接只表示可复用端点和钥匙串凭据，两种用途的模型绑定、参数和启用状态独立。`GET /api/ai/providers` 返回 v2 公共注册表（无密钥）、`revision`、`assistantFingerprint` 与 `translationFingerprint`；旧 v1 配置在内存中迁移，读取不改盘。`GET /api/ai/config` 返回助手白名单、角色、限制和 `defaultModel`（未选择时为 null）。`PUT /api/ai/config` 保存默认模型须同时提供 `expectedRevision`，不再接受无条件覆盖。角色/白名单/运行设置通过 `PUT /api/ai/assistant` 提交 `{expectedRevision,assistant}`。
+设置分为 AI 助手、翻译 API、OCR API。前两类共用公开注册表接口，但连接和凭据独立，不能交叉调用；OCR 凭据另行配置。`GET /api/ai/providers` 返回 v2 公共注册表、`revision`、`assistantFingerprint` 与 `translationFingerprint`；旧 v1 配置在内存中迁移，读取不改盘。`GET /api/ai/config` 返回助手白名单、角色、限制和 `defaultModel`（未选择时为 null）。`PUT /api/ai/config` 保存默认模型须提供 `expectedRevision`。角色/白名单/运行设置通过 `PUT /api/ai/assistant` 提交 `{expectedRevision,assistant}`。
 
 助手面板采用一个主助手持续对话入口。每条消息由同一次模型调用决定直接回答或使用原生工具；需要独立专业工作时自主委派已启用的角色，用户不必选择模式或角色。问候、能力说明和一般问答可在一次模型回复后结束，不调用工具、不创建项目检查笔记；仅在回答需要项目材料时按需读取。工具、子角色、差异、编译和撤销作为对话内可展开的操作记录。修复/润色/整理快捷入口也进入同一对话。
 
@@ -283,7 +287,9 @@ CLI 成功输出 JSON；帮助输出文本。错误输出到 stderr，退出非�
 
 旧 `POST /api/ai/compact` 与不带 `conversationId` 的显式 history 接口仍保留兼容。压缩接口接收 `{projectId,model,messages,checkpoint?}`，返回 `{checkpoint,compactionId}`；后续旧版请求携带该单次票据，真实压缩调用、token 和起始时间计入运行记录。票据绑定项目、模型、配置版本。
 
-统一翻译入口为 `POST /api/ai/translate`，输入 `{projectId,sourceId,text,target,source,sourceLanguage?}`，仅按启用翻译来源解析模型。响应为 NDJSON：`delta` 含增量文本片段，`done` 表示完整结束，`error` 表示本来源失败。没有完整 done 的结果不可入缓存；关闭翻译窗口只取消它自己的请求。专用引擎的旧 `/api/translation-services/translate` JSON 接口保留兼容。助手用途修改只更新公共 revision，不改变翻译指纹或中断在途翻译。
+统一翻译入口为 `POST /api/ai/translate`，输入 `{projectId,sourceId,text,target,source,sourceLanguage?,context?}`，仅解析已启用的专用翻译来源。成功时返回 NDJSON：先用 `delta` 返回完整译文，再用 `done` 标记结束；失败在响应正文中返回 JSON 错误，不发送部分译文。没有完整 `done` 的结果不可入缓存；关闭翻译窗口只取消自己的请求。只有 DeepL 支持 `context`。旧 `/api/translation-services/translate` JSON 接口保留兼容。助手用途修改不改变翻译指纹或中断在途翻译。
+
+OCR 凭据端点：`GET /api/workspace/bilingual/credential` 返回 `configured` 和引擎状态；`PUT /api/workspace/bilingual/credential {engine,key}` 保存；`POST /api/workspace/bilingual/credential/test {engine}` 返回 `{engine,ok,message}`。引擎为 `unlimited-ocr` 或 `aistudio-vl`。保存、测试都不提交 PDF；解析走独立请求。
 
 请求须使用 `Content-Type: application/json`。选区长度由前后端共用的 `shared/translation-limits.ts` 按 Unicode 码点计算；单次选区上限仍为本地策略的 6000 字符，不代表所有模型或供应商的能力限制。只有实际超限才返回长度错误，并含 `actualCharacters/maxCharacters`。请求格式、空原文、选区来源及目标/原文语种分别返回对应错误；格式错误不会显示成“6000 字符以内”。原生 fetch 调用必须显式传 JSON 请求头，不能仅依赖供 `api()` 包装使用的 `json()` 方法和正文。
 

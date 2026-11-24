@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { gitExecutable, disabledGitHooks } from './platform';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { HistoryEntry } from '../shared/types.ts';
@@ -7,11 +8,29 @@ import { HttpError, assertNoSymlinks, checkRef, editablePath } from './security.
 import { atomicWrite, preserveRecovery, withLock, withProjectMutation } from './storage.ts';
 
 const run = promisify(execFile);
-async function git(root: string, args: string[]) { return (await run('/usr/bin/git', ['--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd: root, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' } })).stdout; }
+async function gitBytes(root: string, args: string[], maxBuffer = 8 * 1024 * 1024) {
+  return (await run(gitExecutable(), ['--no-pager', '--literal-pathspecs', '-c', 'core.hooksPath=' + disabledGitHooks(), '-c', 'commit.gpgsign=false', ...args], {
+    cwd: root, maxBuffer, encoding: 'buffer', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' },
+  })).stdout;
+}
+async function git(root: string, args: string[]) { return (await gitBytes(root, args)).toString('utf8'); }
+const initializedRepos = new Map<string, string>();
 export async function initializeGit(root: string): Promise<void> { return withLock(`gitinit:${root}`, () => initializeGitUnlocked(root)); }
+async function gitConfigStamp(root: string): Promise<string> {
+  const cfg = await fs.lstat(path.join(root, '.git', 'config')).catch(() => null);
+  return cfg ? `${cfg.ino}:${cfg.size}:${cfg.mtimeMs}` : '';
+}
 async function initializeGitUnlocked(root: string): Promise<void> {
-  try { const stat = await fs.lstat(path.join(root, '.git')); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new HttpError(403, '版本目录无效。'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; await git(root, ['init', '-b', 'main']); }
+  try {
+    const stat = await fs.lstat(path.join(root, '.git'));
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new HttpError(403, '版本目录无效。');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    initializedRepos.delete(root);
+    await git(root, ['init', '-b', 'main']);
+  }
+  const stamp = await gitConfigStamp(root);
+  if (stamp && initializedRepos.get(root) === stamp) return;
   await fs.writeFile(path.join(root, '.gitignore'), 'build/\nsubmissions/\n.workbench/\n.DS_Store\n*.synctex.gz\n', { flag: 'wx' }).catch(error => { if (error.code !== 'EEXIST') throw error; });
   // Only repository-local identity is supplied; global Git configuration stays intact.
   for (const [key, value] of [['user.name', 'Paper Workbench'], ['user.email', 'workbench@localhost']]) {
@@ -21,24 +40,34 @@ async function initializeGitUnlocked(root: string): Promise<void> {
   // unchanged value, and this runs on every GET /api/projects.
   let quotepath = ''; try { quotepath = (await git(root, ['config', '--local', '--get', 'core.quotepath'])).trim(); } catch {}
   if (quotepath !== 'false') await git(root, ['config', '--local', 'core.quotepath', 'false']);
+  const nextStamp = await gitConfigStamp(root);
+  if (nextStamp) initializedRepos.set(root, nextStamp);
 }
 async function checkpointUnlocked(root: string, message: string, files?: string[]): Promise<HistoryEntry & { committed: boolean }> {
   await initializeGit(root);
   let hasHead = true; try { await git(root, ['rev-parse', '--verify', 'HEAD']); } catch { hasHead = false; }
+  const commitArgs = ['commit', '--no-verify', '-m', message.slice(0, 500) || '保存版本'];
+  let committed = false;
   if (files) {
-    if (hasHead) await git(root, ['reset', '-q', 'HEAD']);
-    for (const file of [...new Set(files.map(editablePath))]) {
-      try { await git(root, ['add', '--', file]); }
-      catch (error: any) { const text = String(error?.stderr || error?.message || error); if (!/did not match|pathspec|ignored/i.test(text)) throw error; }
+    const selected = [...new Set(files.map(editablePath))];
+    if (selected.length) {
+      for (const file of selected) await assertNoSymlinks(root, file, true);
+      const newFiles = (await git(root, ['ls-files', '-z', '--others', '--exclude-standard', '--', ...selected])).split('\0').filter(Boolean);
+      if (newFiles.length) await git(root, ['add', '--intent-to-add', '--', ...newFiles]);
+      const changes = await git(root, hasHead
+        ? ['diff', '--name-only', '--no-renames', '-z', 'HEAD', '--', ...selected]
+        : ['ls-files', '-z', '--cached', '--', ...selected]);
+      if (changes) {
+        await git(root, [...commitArgs, '--only', '--', ...changes.split('\0').filter(Boolean)]);
+        committed = true;
+      }
     }
   } else {
     await git(root, ['add', '--all', '--', '.']);
-  }
-  const changes = await git(root, ['diff', '--cached', '--name-only']);
-  let committed = false;
-  if (changes.trim() || (!hasHead && !files)) {
-    await git(root, ['commit', '--no-verify', '-m', message.slice(0, 500) || '保存版本']);
-    committed = true;
+    if ((await git(root, ['diff', '--cached', '--name-only'])).trim() || !hasHead) {
+      await git(root, commitArgs);
+      committed = true;
+    }
   }
   const row = (await git(root, ['log', '-1', '--format=%H%x1f%aI%x1f%s'])).trim().split('\x1f');
   return { hash: row[0], date: row[1], message: row.slice(2).join('\x1f'), committed };
@@ -64,9 +93,17 @@ export async function restore(root: string, file: string, ref: string): Promise<
   const filePath = editablePath(file); checkRef(ref);
   return withProjectMutation(root, () => withLock(`git:${root}`, () => withLock(`file:${root}:${filePath}`, async () => {
     await assertNoSymlinks(root, filePath, true);
-    let previous: string; try { previous = await git(root, ['show', `${ref}:${filePath}`]); } catch { throw new HttpError(404, '所选版本中没有该文件。'); }
-    await checkpointUnlocked(root, `恢复前自动保存：${filePath}`);
-    const current = await fs.readFile(path.join(root, filePath)).catch(() => null);
+    let previous: Buffer;
+    try { previous = await gitBytes(root, ['cat-file', 'blob', `${ref}:${filePath}`], 64 * 1024 * 1024); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw new HttpError(413, '历史文件过大，请通过 Git 单独恢复。');
+      throw new HttpError(404, '所选版本中没有该文件。');
+    }
+    await checkpointUnlocked(root, `恢复前自动保存：${filePath}`, [filePath]);
+    const current = await fs.readFile(path.join(root, filePath)).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    });
     if (current) {
       await preserveRecovery(root, filePath, current);
     }

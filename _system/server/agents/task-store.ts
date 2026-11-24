@@ -42,7 +42,7 @@ export async function openTaskStore(projectRoot:string,assertAvailable:()=>void=
  assertAvailable();
  const directory=await assertNoSymlinks(projectRoot,'.workbench',true);await fs.mkdir(directory,{recursive:true,mode:0o700});await assertNoSymlinks(projectRoot,'.workbench');
  const filename=await assertNoSymlinks(projectRoot,'.workbench/agent-state.sqlite',true);assertAvailable();const saver=SqliteSaver.fromConnString(filename),db=saver.db;
- db.pragma('journal_mode = WAL');db.pragma('synchronous = FULL');db.pragma('busy_timeout = 5000');
+ db.pragma('journal_mode = WAL');db.pragma('synchronous = NORMAL');db.pragma('busy_timeout = 5000');
  db.exec(`CREATE TABLE IF NOT EXISTS agent_runs (id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, data TEXT NOT NULL, runtime TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS agent_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run_id,seq));
  CREATE TABLE IF NOT EXISTS agent_tools (run_id TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(run_id,id));

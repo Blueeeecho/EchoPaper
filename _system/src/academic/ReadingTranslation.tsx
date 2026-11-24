@@ -1,6 +1,7 @@
 import {useState,type PointerEvent} from 'react';
-import {Check,ChevronDown,Copy,GripHorizontal,Languages,LoaderCircle,Pin,PinOff,RefreshCw,X} from 'lucide-react';
+import {Check,ChevronDown,Copy,GripHorizontal,LoaderCircle,Pin,PinOff,RefreshCw,X} from 'lucide-react';
 import type {TranslationCard} from '../translationAdapters';
+import {openModelSettings} from '../modelSettings';
 
 interface ReadingTranslationProps {
  cards:TranslationCard[];
@@ -12,11 +13,10 @@ interface ReadingTranslationProps {
  onDrag:(event:PointerEvent)=>void;
  onPin:()=>void;
  onClose:()=>void;
- onTranslate:()=>void;
  onRetry:(id:string)=>void;
 }
 
-export default function ReadingTranslation({cards,error,selected,hasSources,busy,pinned,onDrag,onPin,onClose,onTranslate,onRetry}:ReadingTranslationProps) {
+export default function ReadingTranslation({cards,error,selected,hasSources,busy,pinned,onDrag,onPin,onClose,onRetry}:ReadingTranslationProps) {
  const [collapsed,setCollapsed]=useState<Set<string>>(new Set());
  const [copied,setCopied]=useState(''),[copyError,setCopyError]=useState('');
  function toggle(id:string) {
@@ -44,8 +44,8 @@ export default function ReadingTranslation({cards,error,selected,hasSources,busy
   <div className="reader-pop-body">
    {error&&<p className="reader-pop-error" role="alert">{error}</p>}
    {!selected?<p className="reader-muted">选中文字后显示译文。</p>
-    :!hasSources?<p className="reader-muted">请在设置与模型中启用翻译来源。</p>
-    :!cards.length&&!busy?<button type="button" className="reader-pop-translate" onClick={onTranslate}><Languages size={15}/>翻译</button>:null}
+    :!hasSources?<button className="translation-picker-manage" onClick={()=>openModelSettings('translations')}>配置翻译 API</button>
+    :!cards.length?<p className="reader-muted" role="status">正在翻译…</p>:null}
    {cards.map(card=><section key={card.id} className="reader-translation-card" aria-label={`${card.label}译文`}>
     <div className="reader-translation-card-head">
      <span className="reader-translation-brand" style={{background:card.color||'var(--r-accent)'}}>{Array.from(card.label)[0]}</span>

@@ -6,7 +6,7 @@ export function readingPosition(raw:string|null,hash:string|null|undefined){
   if(!p||typeof p!=='object'||p.hash!==hash)return defaults;
   return {
    page:Number.isSafeInteger(p.page)&&p.page>0?p.page:1,
-   zoom:[.75,1,1.25,1.5,2].includes(p.zoom)?p.zoom:1,
+   zoom:typeof p.zoom==='number'&&p.zoom>=.5&&p.zoom<=3?p.zoom:1,
    top:typeof p.top==='number'&&Number.isFinite(p.top)&&p.top>=0?p.top:0,
   };
  }catch{return defaults;}

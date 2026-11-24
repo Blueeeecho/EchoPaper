@@ -15,8 +15,11 @@ const secret='mock-credential-never-real';
 const connection:ModelProvider={id:'connection',label:'共享账户',kind:'openai-compatible',baseUrl:'https://mock.invalid/v1',plan:'测试',auth:'bearer',enabled:true,includeUsage:false,passReasoning:true};
 const chatModel:ProviderModel={id:'chat-a',providerId:connection.id,model:'upstream-a',label:'通用模型 A',contextWindow:32000,reasoning:'standard',enabled:true,toolCalling:'unknown'};
 const otherModel:ProviderModel={...chatModel,id:'chat-b',model:'upstream-b',label:'通用模型 B'};
+const translator:ModelProvider={...connection,id:'deepl',label:'翻译账户',kind:'deepl',baseUrl:'https://translator.invalid/v2',passReasoning:false};
+const translationModel:ProviderModel={...chatModel,id:'deepl-text',providerId:translator.id,model:'text-translation',label:'文本翻译',contextWindow:0,reasoning:'none'};
 const source={id:'translation-a',label:'翻译来源 A',modelId:chatModel.id,enabled:true,color:'#556677'};
 const legacy=()=>structuredClone({version:1,providers:[connection],models:[chatModel,otherModel],translations:[source],translationLayout:'stack'});
+function dedicated(){const data=legacy();data.providers.push(translator);data.models.push(translationModel);data.translations[0].modelId=translationModel.id;return data;}
 function stream(text='译文结果',finish='stop'){return new Response(`data: ${JSON.stringify({model:'upstream-a',choices:[{delta:{content:text},finish_reason:finish}]})}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}});}
 const events=(response:{body:string})=>response.body.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
 async function fixture(options:{raw?:unknown;legacyDefault?:string;fetch?:typeof fetch;getKey?:()=>Promise<string>}={}){
@@ -107,29 +110,38 @@ test('removing a model or connection lists referencing purposes, and succeeds af
 });
 
 test('assistant defaults, role prompts and limits do not affect translation fingerprint or adapter cache versions',async()=>{
- const raw=legacy();raw.translations.push({...source,id:'source-b',modelId:otherModel.id});const f=await fixture({raw,legacyDefault:chatModel.id});try{const before=await f.read(),assistant={...before.assistant,defaultModelId:otherModel.id,roles:before.assistant.roles.map(role=>({...role,instructions:role.instructions+'\n任务要求'})),limits:{...before.assistant.limits,modelCalls:8}};const changed=await f.app.inject({method:'PUT',url:'/api/ai/assistant',payload:{expectedRevision:before.revision,assistant}});assert.equal(changed.statusCode,200,changed.body);const after=changed.json();assert.notEqual(after.revision,before.revision);assert.equal(after.translationFingerprint,before.translationFingerprint);assert.notEqual(after.assistantFingerprint,before.assistantFingerprint);assert.deepEqual(configuredTranslationAdapters(after).map(adapter=>adapter.cacheVersion),configuredTranslationAdapters(before).map(adapter=>adapter.cacheVersion));
+ const raw=dedicated();raw.translations.push({...source,id:'source-b',modelId:translationModel.id});const f=await fixture({raw,legacyDefault:chatModel.id});try{const before=await f.read(),assistant={...before.assistant,defaultModelId:otherModel.id,roles:before.assistant.roles.map(role=>({...role,instructions:role.instructions+'\n任务要求'})),limits:{...before.assistant.limits,modelCalls:8}};const changed=await f.app.inject({method:'PUT',url:'/api/ai/assistant',payload:{expectedRevision:before.revision,assistant}});assert.equal(changed.statusCode,200,changed.body);const after=changed.json();assert.notEqual(after.revision,before.revision);assert.equal(after.translationFingerprint,before.translationFingerprint);assert.notEqual(after.assistantFingerprint,before.assistantFingerprint);assert.equal(configuredTranslationAdapters(before).length,2);assert.deepEqual(configuredTranslationAdapters(after).map(adapter=>adapter.cacheVersion),configuredTranslationAdapters(before).map(adapter=>adapter.cacheVersion));
   const reordered=await f.registry.save(after.revision,data=>({...data,translationLayout:'columns',translations:[...data.translations].reverse().map(item=>({...item,label:item.label+' 新名',color:'#112233'}))}),'translation');assert.equal(reordered.translationFingerprint,before.translationFingerprint);
  }finally{await f.close();}
 });
 
-test('LLM translation resolves its source server-side, has its own translator prompt and never enters assistant context',async()=>{
- const data=normalizeRegistry(legacy());data.assistant.modelIds=[];const f=await fixture({raw:data});try{
-  const response=await f.translate({source:'tex',text:'\\textbf{Evidence} \\cite{x} $p<0.05$'});assert.equal(response.statusCode,200,response.body);assert.match(response.headers['content-type']||'',/ndjson/);assert.equal(events(response).at(-1)?.type,'done');assert.equal(events(response).at(-1)?.finishReason,'stop');assert.equal(events(response)[0].text,'译文结果');assert.equal(f.calls.length,1);
-  const call=f.calls[0];assert.equal(call.url,connection.baseUrl+'/chat/completions');assert.equal(call.body.model,chatModel.model);assert.equal(new Headers(call.init.headers).get('authorization'),'Bearer '+secret);assert.equal(call.body.messages.length,2);assert.match(call.body.messages[0].content,/学术译者/);assert.ok(!JSON.stringify(call.body).includes('论文写作与 LaTeX 助手'));assert.equal(call.body.messages[1].reasoning_content,undefined);assert.equal(call.body.checkpoint,undefined);assert.equal(call.body.context,undefined);assert.equal(call.body.tools,undefined);assert.equal(call.body.reasoning_effort,'medium');assert.equal(call.init.redirect,'error');
-  for(const patch of[{messages:[{role:'user',content:'history'}]},{context:{path:'main.tex',content:'paper'}},{model:otherModel.id},{sourceId:'missing'},{projectId:'Missing'},{text:'x'.repeat(6001)}])assert.ok((await f.translate(patch)).statusCode>=400);assert.equal(f.calls.length,1);
-  assert.equal((await f.app.inject({method:'POST',url:'/api/ai/chat',payload:{projectId:'Paper',model:chatModel.id,messages:[{role:'user',content:'hi'}]}})).statusCode,400);
+test('legacy assistant translation bindings are retained but never invoked, and can be replaced in place',async()=>{
+ let reads=0;
+ const raw=dedicated();raw.translations[0].modelId=chatModel.id;
+ const f=await fixture({raw,getKey:async()=>{reads++;return secret;}});try{
+  const before=await f.read(),readsBeforeCall=reads;
+  assert.deepEqual(before.translations,[source]);assert.deepEqual(configuredTranslationAdapters(before),[]);
+  const blocked=await f.translate();assert.equal(blocked.statusCode,400);assert.match(blocked.body,/已停止调用/);assert.equal(reads,readsBeforeCall);assert.equal(f.calls.length,0);
+  const update=(revision:string,sources:PublicRegistry['translations'])=>f.app.inject({method:'PUT',url:'/api/ai/translations',payload:{expectedRevision:revision,sources,layout:'stack'}});
+  const added=await update(before.revision,[source,{...source,id:'second'}]);assert.equal(added.statusCode,400);assert.equal((await f.read()).revision,before.revision);
+  const disabled=await update(before.revision,[{...source,enabled:false}]);assert.equal(disabled.statusCode,200,disabled.body);
+  const enabled=await update(disabled.json().revision,[source]);assert.equal(enabled.statusCode,400);
+  const translated=await update(disabled.json().revision,[{...source,modelId:translationModel.id}]);assert.equal(translated.statusCode,200,translated.body);assert.deepEqual(configuredTranslationAdapters(translated.json()).map(adapter=>adapter.id),[source.id]);
+  const retyped=await f.app.inject({method:'POST',url:'/api/ai/providers/'+connection.id,payload:{expectedRevision:translated.json().revision,provider:{...translator,id:connection.id},models:[],key:'must-not-write'}});assert.equal(retyped.statusCode,400);assert.match(retyped.body,/另一种用途/);assert.equal(f.writes.length,0);
+  for(const patch of[{messages:[{role:'user',content:'history'}]},{context:{path:'main.tex',content:'paper'}},{model:otherModel.id},{sourceId:'missing'},{projectId:'Missing'},{text:'x'.repeat(6001)}])assert.ok((await f.translate(patch)).statusCode>=400);assert.equal(f.calls.length,0);
+  assert.equal((await f.app.inject({method:'POST',url:'/api/ai/chat',payload:{projectId:'Paper',model:translationModel.id,messages:[{role:'user',content:'hi'}]}})).statusCode,400);
  }finally{await f.close();}
 });
 
-test('translation never emits done for incomplete streams and redacts upstream errors',async()=>{
- for(const transport of [async()=>stream('partial','length'),async()=>new Response(JSON.stringify({error:{message:'invalid '+secret}}),{status:401}),async()=>new Response(`data: ${JSON.stringify({error:{message:secret}})}\n\n`,{headers:{'content-type':'text/event-stream'}})]){
-  const f=await fixture({raw:legacy(),fetch:transport});try{const response=await f.translate();assert.ok(!response.body.includes(secret));if(response.statusCode===200){assert.ok(events(response).some(event=>event.type==='error'));assert.ok(!events(response).some(event=>event.type==='done'));}else assert.equal(response.statusCode,502);}finally{await f.close();}
+test('translation never emits done for invalid dedicated replies and redacts upstream errors',async()=>{
+ for(const transport of [async()=>Response.json({translations:[]}),async()=>Response.json({error:{message:'invalid '+secret}},{status:401}),async()=>new Response('incomplete '+secret)]){
+  const f=await fixture({raw:dedicated(),fetch:transport});try{const response=await f.translate();assert.equal(response.statusCode,502,response.body);assert.equal(response.json().type,'error');assert.ok(!response.body.includes(secret));}finally{await f.close();}
  }
 });
 
 test('cancelling translation during credential lookup never starts an upstream request',async()=>{
  let resolveKey!:(key:string)=>void,started!:()=>void,closed!:()=>void;const ready=new Promise<void>(resolve=>{started=resolve;}),key=new Promise<string>(resolve=>{resolveKey=resolve;}),disconnected=new Promise<void>(resolve=>{closed=resolve;});
- const f=await fixture({raw:legacy(),getKey:async()=>{started();return key;}});try{
+ const f=await fixture({raw:dedicated(),getKey:async()=>{started();return key;}});try{
   f.app.addHook('onRequest',async(_request,reply)=>{reply.raw.once('close',closed);});
   const origin=await f.app.listen({host:'127.0.0.1',port:0}),controller=new AbortController();
   const pending=fetch(origin+'/api/ai/translate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({projectId:'Paper',sourceId:source.id,text:'Evidence',target:'zh-CN',source:'pdf'}),signal:controller.signal});
@@ -137,9 +149,9 @@ test('cancelling translation during credential lookup never starts an upstream r
  }finally{resolveKey?.(secret);await f.close();}
 });
 
-test('one translation and one assistant request on the same connection have independent purpose lifecycles',async()=>{
+test('dedicated translation and an assistant request have independent lifecycles and credentials',async()=>{
  let release!:()=>void,started!:()=>void;const ready=new Promise<void>(resolve=>{started=resolve;}),held=new Promise<void>(resolve=>{release=resolve;});let calls=0;
- const f=await fixture({raw:legacy(),legacyDefault:chatModel.id,fetch:async(_url,init)=>{calls++;const body=JSON.parse(String(init?.body));if(body.messages[0].content.includes('论文写作与 LaTeX 助手')){started();await held;}return stream();}});
+ const f=await fixture({raw:dedicated(),legacyDefault:chatModel.id,fetch:async(url,init)=>{calls++;if(String(url)===translator.baseUrl+'/translate'){assert.equal(new Headers(init?.headers).get('authorization'),'DeepL-Auth-Key '+secret);return Response.json({translations:[{text:'证据'}]});}assert.equal(String(url),connection.baseUrl+'/chat/completions');assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+secret);started();await held;return stream();}});
  try{const chat=f.app.inject({method:'POST',url:'/api/ai/chat',payload:{projectId:'Paper',model:chatModel.id,messages:[{role:'user',content:'长任务'}]}});const pending=chat.then(response=>response);await ready;const translation=await f.translate();assert.equal(translation.statusCode,200,translation.body);assert.equal(events(translation).at(-1)?.type,'done');assert.equal(calls,2);release();assert.equal((await pending).statusCode,200);}finally{release?.();await f.close();}
 });
 

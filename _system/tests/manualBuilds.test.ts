@@ -36,7 +36,7 @@ test('legacy autoCompile never compiles filesystem edits or save/rename/upload/r
   const upload=await app.inject({method:'POST',url:'/api/projects/Manual/upload?directory=manuscript',headers:{'content-type':'multipart/form-data; boundary=manual-boundary'},payload:Buffer.from('--manual-boundary\r\nContent-Disposition: form-data; name="file"; filename="included.tex"\r\nContent-Type: text/plain\r\n\r\nIncluded text\r\n--manual-boundary--\r\n')});assert.equal(upload.statusCode,200,upload.body);
   const notes=await app.inject({method:'PUT',url:'/api/projects/Manual/file',payload:{path:'notes/edit.md',content:'A note',expectedHash:null}});assert.equal(notes.statusCode,200,notes.body);
   const round=await app.inject({method:'POST',url:'/api/projects/Manual/reviews',payload:{label:'Revision'}});assert.equal(round.statusCode,200,round.body);
-  const response=await app.inject({method:'PUT',url:`/api/projects/Manual/reviews/${round.json().id}`,payload:{items:[{id:'R1',comment:'Please explain.',response:'Explanation.',status:'addressed'}]}});assert.equal(response.statusCode,200,response.body);
+  const response=await app.inject({method:'PUT',url:`/api/projects/Manual/reviews/${round.json().id}`,payload:{expectedHash:round.json().hash,items:[{id:'R1',comment:'Please explain.',response:'Explanation.',status:'addressed'}]}});assert.equal(response.statusCode,200,response.body);
   // Longer than the removed 900ms debounce plus watcher stability delay.
   await new Promise(resolve=>setTimeout(resolve,1700));
   assert.deepEqual(calls,[],'No mutation, external file event, or legacy setting may start compilation');

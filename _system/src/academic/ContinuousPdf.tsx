@@ -1,12 +1,13 @@
 import {useEffect,useRef,useState,type RefObject} from 'react';
 import {TextLayer,type PDFDocumentProxy} from 'pdfjs-dist';
+import {mostVisiblePdfPage} from '../pdfClick';
 
 export function PdfPage({pdf,number,zoom,container}:{pdf:PDFDocumentProxy;number:number;zoom:number;container:RefObject<HTMLDivElement|null>}){
  const host=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),layer=useRef<HTMLDivElement>(null);
  const rendering=useRef<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['render']>|undefined>(undefined);
  const [visible,setVisible]=useState(false),[size,setSize]=useState({width:612,height:792}),[error,setError]=useState(''),[empty,setEmpty]=useState(false);
  useEffect(()=>{const element=host.current;if(!element)return;let closed=false;const observer=new IntersectionObserver(entries=>{if(!closed&&entries[0])setVisible(entries[0].isIntersecting);},{root:container.current,rootMargin:'1000px'});observer.observe(element);return()=>{closed=true;observer.disconnect();};},[]);
- useEffect(()=>{let cancelled=false;void pdf.getPage(number).then(p=>{if(!cancelled){const v=p.getViewport({scale:1});setSize({width:v.width,height:v.height});}}).catch(()=>{});return()=>{cancelled=true;};},[pdf,number]);
+ useEffect(()=>{if(!visible&&number!==1)return;let cancelled=false;void pdf.getPage(number).then(p=>{if(!cancelled){const v=p.getViewport({scale:1});setSize({width:v.width,height:v.height});}}).catch(()=>{});return()=>{cancelled=true;};},[pdf,number,visible]);
  useEffect(()=>{
   const drawingCanvas=canvas.current,textContainer=layer.current;
   if(!visible||!drawingCanvas||!textContainer)return;
@@ -45,10 +46,42 @@ export function PdfPage({pdf,number,zoom,container}:{pdf:PDFDocumentProxy;number
 }
 export default function ContinuousPdf({pdf,zoom,container,onPage,initialPage}:{pdf:PDFDocumentProxy;zoom:number;container:RefObject<HTMLDivElement|null>;onPage:(page:number)=>void;initialPage:number}){
  const callback=useRef(onPage);callback.current=onPage;
- useEffect(()=>{const root=container.current!;let cancelled=false,frame=0,restoring=true;
- const track=()=>{if(restoring)return;cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{const top=root.getBoundingClientRect().top;const pages=Array.from(root.querySelectorAll('[data-pdf-page]'));const current=pages.find(el=>el.getBoundingClientRect().bottom>top+40);if(current)callback.current(Number(current.getAttribute('data-pdf-page')));});};
- root.addEventListener('scroll',track,{passive:true});
- void Promise.all(Array.from({length:pdf.numPages},(_,i)=>pdf.getPage(i+1))).then(()=>{if(!cancelled)frame=requestAnimationFrame(()=>{if(!cancelled)root.querySelector(`[data-pdf-page="${initialPage}"]`)?.scrollIntoView({block:'start'});requestAnimationFrame(()=>requestAnimationFrame(()=>{restoring=false;}));});}).catch(()=>{restoring=false;});
- return()=>{cancelled=true;cancelAnimationFrame(frame);root.removeEventListener('scroll',track);};},[pdf]);
+ useEffect(()=>{
+  const root=container.current;
+  if(!root)return;
+  const pages=Array.from(root.querySelectorAll<HTMLElement>('[data-pdf-page]'));
+  let cancelled=false,frame=0,restoring=true,lastPage:number|undefined;
+  const track=()=>{
+   if(restoring)return;
+   cancelAnimationFrame(frame);
+   frame=requestAnimationFrame(()=>{
+    const viewport=root.getBoundingClientRect();
+    let first=0,end=pages.length;
+    while(first<end){
+     const middle=Math.floor((first+end)/2);
+     if(pages[middle].getBoundingClientRect().bottom<=viewport.top)first=middle+1;
+     else end=middle;
+    }
+    const visible=[];
+    for(let index=first;index<pages.length;index++){
+     const {top,bottom}=pages[index].getBoundingClientRect();
+     if(top>=viewport.bottom)break;
+     visible.push({page:Number(pages[index].dataset.pdfPage),top,bottom});
+    }
+    const current=mostVisiblePdfPage(visible,viewport.top,viewport.bottom);
+    if(current&&current!==lastPage){lastPage=current;callback.current(current);}
+   });
+  };
+  root.addEventListener('scroll',track,{passive:true});
+  // Only preceding page heights are needed for this initial position.
+  void Promise.allSettled(Array.from({length:initialPage},(_,index)=>pdf.getPage(index+1))).then(()=>{
+   if(cancelled)return;
+   frame=requestAnimationFrame(()=>{
+    pages[initialPage-1]?.scrollIntoView({block:'start'});
+    frame=requestAnimationFrame(()=>{restoring=false;track();});
+   });
+  });
+  return()=>{cancelled=true;cancelAnimationFrame(frame);root.removeEventListener('scroll',track);};
+ },[pdf]);
  return <>{Array.from({length:pdf.numPages},(_,i)=><PdfPage key={i+1} pdf={pdf} number={i+1} zoom={zoom} container={container}/>)}</>;
 }

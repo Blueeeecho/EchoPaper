@@ -83,12 +83,13 @@ export function usePdfImport(options:PdfImportOptions){
 }
 export type PdfImporter=ReturnType<typeof usePdfImport>;
 
-export function PdfImportButton({importer}:{importer:PdfImporter}){
- return <><button type="button" className="academic-secondary" disabled={importer.busy||!!importer.blocked} title={importer.blocked||`归档到 ${importer.destination}`} onClick={()=>importer.picker.current?.click()}>{importer.busy?<LoaderCircle size={14} className="spin"/>:<Upload size={14}/>}<span>{importer.busy?'正在导入…':'添加 PDF'}</span></button><input ref={importer.picker} type="file" multiple accept="application/pdf,.pdf" hidden onChange={event=>{void importer.upload(Array.from(event.target.files||[]));event.target.value='';}}/></>;
+export function PdfImportButton({importer,primary=false}:{importer:PdfImporter;primary?:boolean}){
+ return <><button type="button" className={primary?'academic-primary':'academic-secondary'} disabled={importer.busy||!!importer.blocked} title={importer.blocked||`归档到 ${importer.destination}`} onClick={()=>importer.picker.current?.click()}>{importer.busy?<LoaderCircle size={14} className="spin"/>:<Upload size={14}/>}<span>{importer.busy?'正在导入…':'添加 PDF'}</span></button><input ref={importer.picker} type="file" multiple accept="application/pdf,.pdf" hidden onChange={event=>{void importer.upload(Array.from(event.target.files||[]));event.target.value='';}}/></>;
 }
-export function PdfImportFeedback({importer}:{importer:PdfImporter}){
+export function PdfImportFeedback({importer,showDestination=true}:{importer:PdfImporter;showDestination?:boolean}){
+ if(!showDestination&&!importer.message&&!importer.reusedLocations.length&&!importer.error&&!importer.failures.length)return null;
  return <div className="pdf-import-feedback">
-  <p className="pdf-import-destination">{importer.blocked||`可拖入 PDF · 归档到 ${importer.destination}`}</p>
+  {showDestination&&<p className="pdf-import-destination">{importer.blocked||`可拖入 PDF · 归档到 ${importer.destination}`}</p>}
   {importer.message&&<p role="status"><span>{importer.message}</span>{importer.resultDestination!==importer.destination&&<small> · {importer.resultDestination}</small>}</p>}
   {importer.reusedLocations.length>0&&<p>已有文献位置 · {importer.reusedLocations.join('、')}</p>}
   {importer.error&&<p role="alert" className="pdf-import-error">{importer.error}</p>}

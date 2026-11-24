@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentCreateInput, AgentRun, AgentRunDetail, RunEvent } from '../shared/agent-types';
 import { api, json } from './api';
+import { subscribeWorkspaceEvents } from './workspaceEvents';
 
 export function mergeTaskRuns(previous: AgentRun[], incoming: AgentRun[]): AgentRun[] {
   const runs = new Map(previous.map(run => [run.id, run]));
@@ -37,6 +38,7 @@ const unpackRun = (value: AgentRun | { run: AgentRun }): AgentRun => 'run' in va
 /** The service owns execution. Closing or losing this subscription never cancels a run. */
 export function useProjectTasks(projectId: string): ProjectTasks {
   const [runs, setRuns] = useState<AgentRun[]>([]), [details, setDetails] = useState<Record<string, AgentRunDetail>>({});
+  const detailsRef = useRef(details); detailsRef.current = details;
   const [selectedId, setSelectedId] = useState(''), [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState('');
   const [listedProject,setListedProject]=useState('');
@@ -85,34 +87,48 @@ export function useProjectTasks(projectId: string): ProjectTasks {
     let active = true;
     void refresh().catch(e => { if (active) setError(e.message); }).finally(() => { if (active) setLoading(false); });
     if (!projectId) return () => { active = false; };
-    const events = new EventSource('/api/events');
-    events.onopen = () => { if (active) { setConnected(true); void refresh().catch(() => {}); } };
-    events.onerror = () => { if (active) setConnected(false); };
-    events.onmessage = event => { try { const value = JSON.parse(event.data); if (value.type === 'agent.updated' && value.projectId === projectId) { void refresh().catch(() => {}); if (value.runId) void refreshDetail(value.runId).catch(() => {}); } } catch {} };
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleRefresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => { refreshTimer = undefined; if (active) void refresh().catch(() => {}); }, 200);
+    };
+    const unsubscribe = subscribeWorkspaceEvents({
+      status: value => { if (active) setConnected(value); },
+      reconnect: () => { if (active) void refresh().catch(() => {}); },
+      message: value => { if (value.type === 'agent.updated' && value.projectId === projectId) { scheduleRefresh(); if (value.runId && value.runId === current.current.selectedId) void refreshDetail(value.runId).catch(() => {}); } },
+    });
     const recover=(force=false)=>{if(active&&document.visibilityState!=='hidden'&&(force||current.current.hasActive))void refresh().catch(()=>{});};
     const recoveryTimer=setInterval(()=>recover(),5000),onReturn=()=>recover(true);
     window.addEventListener('focus',onReturn);document.addEventListener('visibilitychange',onReturn);
-    return () => { active = false; events.close();clearInterval(recoveryTimer);window.removeEventListener('focus',onReturn);document.removeEventListener('visibilitychange',onReturn); };
+    return () => { active = false; clearTimeout(refreshTimer); unsubscribe();clearInterval(recoveryTimer);window.removeEventListener('focus',onReturn);document.removeEventListener('visibilitychange',onReturn); };
   }, [projectId, selectionKey, refresh, refreshDetail]);
-  const selectedExists=listedProject===projectId&&runs.some(run=>run.id===selectedId);
+  const selectedRun=listedProject===projectId?runs.find(run=>run.id===selectedId):undefined;
+  const selectedExists=!!selectedRun;
+  // Terminal runs never change again: read the snapshot once and keep no socket open for them.
+  const selectedActive=!!selectedRun&&['queued','running','cancelling','waiting_confirmation'].includes(selectedRun.status);
   useEffect(() => {
     if (!selectedId || !projectId || !selectedExists) return;
-    let active = true, timer: ReturnType<typeof setTimeout> | undefined;
+    let active = true, openedOnce = false, timer: ReturnType<typeof setTimeout> | undefined;
     const load = () => refreshDetail(selectedId).catch(e => { if (active) setError(e.message); });
     void load();
-    const events = new EventSource(base + '/' + encodeURIComponent(selectedId) + '/events');
-    events.onopen = () => { if (active) { setConnected(true); setError(''); void load(); } };
+    if (!selectedActive) return () => { active = false; };
+    const existingEvents = detailsRef.current[selectedId]?.events;
+    const lastSeq = existingEvents?.length ? existingEvents[existingEvents.length - 1].seq : 0;
+    const events = new EventSource(base + '/' + encodeURIComponent(selectedId) + '/events' + (lastSeq > 0 ? `?after=${lastSeq}` : ''));
+    events.onopen = () => { if (active) { setConnected(true); setError(''); if (openedOnce) void load(); openedOnce = true; } };
     events.onerror = () => { if (active) setConnected(false); };
     events.onmessage = message => {
       try {
         const event = JSON.parse(message.data) as RunEvent;
         if (event.runId !== selectedId || !Number.isFinite(event.seq)) return;
         setDetails(previous => previous[selectedId] ? { ...previous, [selectedId]: { ...previous[selectedId], events: mergeTaskEvents(previous[selectedId].events, [event]) } } : previous);
-        if (!timer) timer = setTimeout(() => { timer = undefined; if (active) void load(); }, 150);
+        if (event.type !== 'model.delta' && event.type !== 'model.waiting' && !timer) {
+          timer = setTimeout(() => { timer = undefined; if (active) void load(); }, 150);
+        }
       } catch { /* A malformed live event must not erase the authoritative snapshot. */ }
     };
     return () => { active = false; events.close(); clearTimeout(timer); };
-  }, [projectId, selectedId, selectedExists,base, refreshDetail]);
+  }, [projectId, selectedId, selectedExists, selectedActive, base, refreshDetail]);
   const create = useCallback(async (input: AgentCreateInput) => {
     setBusy('create'); setError('');
     try { const run = unpackRun(await api<AgentRun | { run: AgentRun }>(base, json('POST', input))); if (current.current.projectId === projectId) { receive(run); select(run.id); if(run.continuationOf)void refreshDetail(run.continuationOf).catch(()=>{}); } return run; }

@@ -75,6 +75,10 @@ export function createTimelineSourceService(workspaceRoot:string,options:Timelin
   if(/^(?:CVPR|ICCV)$/i.test(edition.title))urls=[`https://${edition.title.toLowerCase()}.thecvf.com/Conferences/${edition.year}/Dates`,...urls];
   const seen=new Set<string>();for(let index=0;index<urls.length&&seen.size<4;index++){const source=urls[index];if(seen.has(source))continue;seen.add(source);try{const page=await readPage(source);sourceUrls.push(page.url);for(const milestone of parseOfficialTimeline(page.html,page.url,edition,round))if(!milestones.has(milestone.id))milestones.set(milestone.id,milestone);if(index===0)urls.push(...linkedSources(page.html,page.url));}catch(error){failures.push(String((error as Error).message));}}
   const list=[...milestones.values()],core=['reviews','rebuttal_start','rebuttal_end','decision'],missing=core.filter(id=>!milestones.has(id)),sourceStatus=list.length?(missing.length?'partial':'ready'):'unavailable';
-  const value:ResolvedConferenceTimeline={conferenceId:edition.id,title:edition.title,year:edition.year,roundId:round?.id,roundLabel:round?.label,officialUrl:edition.officialUrl,milestones:list,sourceStatus,sourceUrls,fetchedAt:new Date(now()).toISOString(),...(missing.length?{warning:list.length?'已自动读取官网公布节点；其余节点尚未找到明确公告。':'官网暂未找到可明确对应本年份与轮次的评审节点，将在刷新时重新获取。'}:{})};if(failures.length&&!list.length)value.warning+=' 部分官网页面暂不可访问。';cache.set(key,{at:now(),value});return structuredClone(value);
+  const value:ResolvedConferenceTimeline={conferenceId:edition.id,title:edition.title,year:edition.year,roundId:round?.id,roundLabel:round?.label,officialUrl:edition.officialUrl,milestones:list,sourceStatus,sourceUrls,fetchedAt:new Date(now()).toISOString(),...(missing.length?{warning:list.length?'已自动读取官网公布节点；其余节点尚未找到明确公告。':'官网暂未找到可明确对应本年份与轮次的评审节点，将在刷新时重新获取。'}:{})};if(failures.length&&!list.length)value.warning+=' 部分官网页面暂不可访问。';
+  const ts=now();
+  for(const [k,v] of cache)if(ts-v.at>=15*60000)cache.delete(k);
+  if(cache.size>=128)cache.delete(cache.keys().next().value!);
+  cache.set(key,{at:ts,value});return structuredClone(value);
  }};
 }

@@ -4,17 +4,18 @@ import {registerBilingualRoutes} from './workspace/bilingual';
 import {registerDevSyncRoutes} from './dev-sync';
 import {registerTopicNotebookRoutes} from './workspace/topic-notebook';
 import {registerResearchInferenceRoutes} from './research-inference';
-import Fastify from 'fastify';
+import Fastify, {type FastifyReply} from 'fastify';
 import {registerProjectImportRoutes}from'./project-imports';
 import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
-import chokidar from 'chokidar';
+import { watchDirectoryTree } from './fs-watch.ts';
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { tectonicExecutable } from './platform';
 import type { ServerResponse } from 'node:http';
 import type { BuildService, Project, WorkspaceEvent } from '../shared/types.ts';
 import { createBuildService } from './builds.ts';
@@ -35,10 +36,11 @@ import { registerChatRoutes } from './chats.ts';
 import { registerSyncRoutes } from './synctex.ts';
 import { registerConferenceRoutes } from './conferences.ts';
 import {registerAnalysisRoutes} from './workspace/analysis-routes.ts';
+import {registerKnowledgeGraphRoutes} from './workspace/knowledge-graph-routes.ts';
 import { registerWorkspaceRoutes } from './workspace/index';
 import { registerPresentationRoutes } from './presentations/index';
 
-export interface AppOptions { workspaceRoot?: string; buildService?: BuildService; watch?: boolean; ai?: AiOptions }
+export interface AppOptions { workspaceRoot?: string; buildService?: BuildService; watch?: boolean; exitOnShutdown?: boolean; ai?: AiOptions; desktop?: { revealFile:(filename:string)=>Promise<void>; restart:()=>Promise<void> } }
 const defaultRoot = fileURLToPath(new URL('../../', import.meta.url));
 const mimeTypes: Record<string,string> = { '.json': 'application/json; charset=utf-8', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.tex': 'text/plain; charset=utf-8', '.bib': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8' };
 export async function createApp(options: AppOptions = {}) {
@@ -74,32 +76,40 @@ export async function createApp(options: AppOptions = {}) {
   });
   await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
   app.get('/api/health', async () => ({ ok: true, workspaceRoot, pid: process.pid,capabilities:{agentTasks:true,agentConversations:true,agentEventPurposes:true,chatLifecycle:true,modelConfigVersion:2,isolatedTranslation:true,academicWorkspace:true,presentations:true,researchProgressAmendment:true,researchInference:true,researchCalendar:true} }));
-  registerDevSyncRoutes(app, workspaceRoot);
-  app.get('/api/settings', async () => ({ compiler: process.env.TECTONIC_PATH ?? '/opt/homebrew/bin/tectonic', workspaceRoot }));
+  if (!options.desktop) registerDevSyncRoutes(app, workspaceRoot);
+  app.get('/api/settings', async () => ({ compiler: tectonicExecutable(), workspaceRoot }));
   let readingResource:((id:string)=>Promise<unknown>)|undefined;
   const registry=await registerAiRoutes(app, workspaceRoot, {...options.ai,validateResource:async id=>{if(!readingResource)throw new Error('资料服务尚未就绪');return readingResource(id);},onChanged:(purpose)=>{options.ai?.onChanged?.(purpose);emit({type:'ai.config.changed',projectId:'',purpose});}});
   registerEditorSessionRoutes(app,workspaceRoot,emit);
   const agents=await registerAgentRoutes(app,workspaceRoot,{registry,builds,emit,ai:options.ai});
-  const workspace=await registerWorkspaceRoutes(app,workspaceRoot,{watch:options.watch});
+  const workspace=await registerWorkspaceRoutes(app,workspaceRoot,{watch:options.watch,onEvent:emit} as {watch?:boolean;onEvent?:(event:WorkspaceEvent)=>void});
   readingResource=workspace.resourceFile;
   registerReadingRoutes(app,workspaceRoot,workspace);
   const bilingual=registerBilingualRoutes(app,workspaceRoot,workspace);
-  const readingProcessing=await registerReadingProcessingRoutes(app,workspaceRoot,workspace,registry,bilingual);
+  const readingProcessing=await registerReadingProcessingRoutes(app,workspaceRoot,workspace,registry,bilingual,{
+    translate: async (resourceId, sourceId, text, signal) => (await registry.translateSelection(
+      { resourceId, sourceId, text, target: 'zh-CN', source: 'pdf' }, signal,
+    )).text,
+  });
   registerTopicNotebookRoutes(app,workspaceRoot,async id=>(await workspace.overview()).topics.some(t=>t.id===id));
   registerResearchInferenceRoutes(app,workspaceRoot,registry,workspace,options.ai);
   const literatureAnalysis=registerAnalysisRoutes(app,workspaceRoot,{workspace,registry,ai:options.ai});
+  registerKnowledgeGraphRoutes(app,workspaceRoot,workspace);
   app.addHook('onClose',async()=>{literatureAnalysis.close();});
   const presentations=await registerPresentationRoutes(app,workspaceRoot,{registry,ai:options.ai,resourceFile:workspace.resourceFile});
   app.post<{Params:{id:string}}>('/api/workspace/resources/:id/reveal',async request=>{
     const resource=await workspace.resourceFile(request.params.id);
-    if(process.platform!=='darwin')throw new HttpError(501,'当前系统暂不支持在 Finder 显示，请使用文件路径。');
-    await promisify(execFile)('/usr/bin/open',['-R',resource.filename]);return {revealed:true};
+    if (options.desktop) await options.desktop.revealFile(resource.filename);
+    else if (process.platform === 'darwin') await promisify(execFile)('/usr/bin/open', ['-R',resource.filename]);
+    else if (process.platform === 'win32') await promisify(execFile)('explorer.exe', ['/select,' + resource.filename]);
+    else await promisify(execFile)('xdg-open', [path.dirname(resource.filename)]);
+    return {revealed:true};
   });
   await registerAnnotationRoutes(app, workspaceRoot, builds, emit);
   await registerReferenceRoutes(app, workspaceRoot);
   await registerCompareRoutes(app, workspaceRoot, builds);
   await registerChatRoutes(app, workspaceRoot, emit,{conversationBusy:(projectId,conversationId)=>agents.conversationBusy(projectId,conversationId)});
-  const backupState = await registerBackupRoutes(app, workspaceRoot, builds, emit,{agentsBusy:()=>readingProcessing.busy()||agents.busy()||workspace.busy()||presentations.busy()||literatureAnalysis.busy(),prepareAgentBackup:async()=>{await readingProcessing.checkpoint();await literatureAnalysis.checkpoint();await agents.checkpointForBackup();await workspace.checkpoint();await presentations.checkpoint();},afterWorkspaceRestore:async()=>{await readingProcessing.close(false);await workspace.close();await presentations.close();}});
+  const backupState = await registerBackupRoutes(app, workspaceRoot, builds, emit,{agentsBusy:()=>readingProcessing.busy()||agents.busy()||workspace.busy()||presentations.busy()||literatureAnalysis.busy(),prepareAgentBackup:async()=>{await readingProcessing.checkpoint();await literatureAnalysis.checkpoint();await agents.checkpointForBackup();await workspace.checkpoint();await presentations.checkpoint();},afterWorkspaceRestore:async()=>{await readingProcessing.close(false);await workspace.close();await presentations.close();},restart:options.desktop?.restart});
   workspaceLocked = backupState.isLocked;
   await registerProjectImportRoutes(app,workspaceRoot,emit);
   await registerSyncRoutes(app, workspaceRoot, builds);
@@ -136,34 +146,78 @@ export async function createApp(options: AppOptions = {}) {
   app.get<{Params:{id:string}}>('/api/projects/:id/history', async request => ({history:await history(await registeredRoot(workspaceRoot,request.params.id))}));
   app.post<{Params:{id:string};Body:{message?:string;paths?:string[]}}>('/api/projects/:id/checkpoints', async request => { const body=request.body??{}; if (body.message !== undefined && typeof body.message !== 'string') throw new HttpError(400,'版本说明无效。'); if (body.paths !== undefined && (!Array.isArray(body.paths) || body.paths.length>100 || body.paths.some(path=>typeof path!=='string')) ) throw new HttpError(400,'版本文件列表无效。'); const entry=await checkpoint(await registeredRoot(workspaceRoot,request.params.id),body.message || '保存版本',body.paths); emit({type:'history.changed',projectId:request.params.id}); return entry; });
   app.get<{Params:{id:string};Querystring:{path:string;ref?:string}}>('/api/projects/:id/diff', async request => ({diff:await diff(await registeredRoot(workspaceRoot,request.params.id),request.query.path,request.query.ref)}));
-  app.post<{Params:{id:string};Body:{path:string;ref:string}}>('/api/projects/:id/restore', async request => { await restore(await registeredRoot(workspaceRoot,request.params.id),request.body?.path,request.body?.ref); fileChanged(request.params.id,request.body.path); emit({type:'history.changed',projectId:request.params.id}); return document(await registeredRoot(workspaceRoot,request.params.id),request.body.path); });
+  app.post<{Params:{id:string};Body:{path:string;ref:string}}>('/api/projects/:id/restore', async request => {
+    const root = await registeredRoot(workspaceRoot, request.params.id);
+    const { path: restoredPath, ref } = request.body ?? {};
+    await restore(root, restoredPath, ref);
+    fileChanged(request.params.id, restoredPath);
+    emit({type:'history.changed',projectId:request.params.id});
+    try { return await document(root, restoredPath); }
+    catch (error) {
+      if (error instanceof HttpError && [413, 415].includes(error.statusCode)) return { path: restoredPath, restored: true };
+      throw error;
+    }
+  });
   app.get<{Params:{id:string}}>('/api/projects/:id/reviews', async request => ({rounds:await listReviews(workspaceRoot,request.params.id)}));
   app.post<{Params:{id:string};Body:{label?:string}}>('/api/projects/:id/reviews', async request => { const result=await createReview(workspaceRoot,request.params.id,request.body?.label); emit({type:'review.changed',projectId:request.params.id}); emit({type:'project.changed',projectId:request.params.id}); return result; });
-  app.put<{Params:{id:string;roundId:string};Body:{items:unknown}}>('/api/projects/:id/reviews/:roundId', async request => { const root=await registeredRoot(workspaceRoot,request.params.id);const result=await withProjectMutation(root,()=>updateReview(workspaceRoot,request.params.id,request.params.roundId,request.body?.items)); emit({type:'review.changed',projectId:request.params.id}); fileChanged(request.params.id,`reviews/${request.params.roundId}/response/responses.tex`); return result; });
+  app.put<{Params:{id:string;roundId:string};Body:{items:unknown;expectedHash:string}}>('/api/projects/:id/reviews/:roundId', async request => {
+    const { id, roundId } = request.params;
+    const root = await registeredRoot(workspaceRoot, id);
+    const result = await withProjectMutation(root, () => updateReview(workspaceRoot, id, roundId, request.body?.items, request.body?.expectedHash));
+    emit({type:'review.changed', projectId:id});
+    if (!result.needsSourceSync) fileChanged(id, `reviews/${roundId}/response/responses.tex`);
+    return result;
+  });
   app.get<{Params:{id:string}}>('/api/projects/:id/submissions', async request => { await registeredRoot(workspaceRoot,request.params.id); return {submissions:await builds.listSubmissions(request.params.id)}; });
   app.post<{Params:{id:string};Body:{targetId:string}}>('/api/projects/:id/submissions', async request => { await registeredRoot(workspaceRoot,request.params.id); return builds.createSubmission(request.params.id,request.body?.targetId); });
   app.get<{Params:{id:string;submissionId:string}}>('/api/projects/:id/submissions/:submissionId/download', async (request,reply) => { await registeredRoot(workspaceRoot,request.params.id); const file=await builds.submissionArtifact(request.params.id,request.params.submissionId); return reply.type('application/zip').header('Content-Disposition',`attachment; filename="${path.basename(file).replace(/[^A-Za-z0-9._-]/g,'_')}"`).send(createReadStream(file)); });
-  app.post('/api/shutdown', async (_request,reply) => { reply.code(202).send({ok:true}); setTimeout(()=>void app.close(),50).unref(); });
-  const dist=path.join(workspaceRoot,'_system','dist');
-  if (await fs.stat(dist).then(s=>s.isDirectory()).catch(()=>false)) await app.register(staticPlugin,{root:dist});
-  app.setNotFoundHandler(async (request,reply) => { if (request.url.startsWith('/api/')) return reply.code(404).send({error:'接口不存在。'}); const index=path.join(dist,'index.html'); if (await fs.stat(index).then(s=>s.isFile()).catch(()=>false)) return reply.type('text/html; charset=utf-8').send(createReadStream(index)); return reply.code(503).type('text/plain; charset=utf-8').send('网页尚未构建。请在 _system 中运行 npm run build。'); });
-  await listProjects(workspaceRoot);
-  const watcher=options.watch===false ? null : chokidar.watch(path.join(workspaceRoot,'papers'),{ignoreInitial:true,awaitWriteFinish:{stabilityThreshold:300,pollInterval:100},ignored:(file)=>{const relative=path.relative(path.join(workspaceRoot,'papers'),file); const parts=relative.split(path.sep); return parts.slice(1).some(part=>part.startsWith('.') || ['build','submissions'].includes(part));}});
-  watcher?.on('all',(event,file)=>{ if (!['add','change','unlink'].includes(event)) return; const relative=path.relative(path.join(workspaceRoot,'papers'),file).split(path.sep); if (relative.length<2) return; const [id,...parts]=relative; if(parts.join('/')==='project.json') emit({type:'project.changed',projectId:id}); else fileChanged(id,parts.join('/')); });
+  app.post('/api/shutdown', async (_request,reply) => {
+    reply.code(202).send({ok:true});
+    setTimeout(()=>{
+      const closing=app.close();
+      if(options.exitOnShutdown)void closing.finally(()=>process.exit(0));
+    },50).unref();
+  });
+  const dist=path.resolve(process.env.WORKBENCH_DIST_DIR || path.join(workspaceRoot,'_system','dist'));
+  const index=path.join(dist,'index.html');
+  async function sendIndex(reply:FastifyReply) {
+    if(await fs.stat(index).then(s=>s.isFile()).catch(()=>false)){
+      return reply.header('Cache-Control','no-store').type('text/html; charset=utf-8').send(createReadStream(index));
+    }
+    return reply.code(503).type('text/plain; charset=utf-8').send('网页尚未构建。请在 _system 中运行 npm run build。');
+  }
+  for(const url of ['/','/index.html'])app.get(url,(_request,reply)=>sendIndex(reply));
+  if(await fs.stat(dist).then(s=>s.isDirectory()).catch(()=>false))await app.register(staticPlugin,{root:dist});
+  app.setNotFoundHandler((request,reply) => {
+    const [pathname]=request.url.split('?');
+    if(pathname==='/api'||pathname.startsWith('/api/'))return reply.code(404).send({error:'接口不存在。'});
+    if(!['GET','HEAD'].includes(request.method)||/^\/(assets|pdfjs|presentation-covers)(\/|$)/.test(pathname)){
+      return reply.code(404).type('text/plain; charset=utf-8').send('文件不存在。');
+    }
+    return sendIndex(reply);
+  });
+  const papersRoot=path.join(workspaceRoot,'papers');
+  await fs.mkdir(papersRoot,{recursive:true});
+  const watcher=options.watch===false ? null : watchDirectoryTree(papersRoot,{
+    debounceMs:100,
+    ignore:(relative)=>{const parts=relative.split('/').filter(Boolean); return parts.some((part,index)=>part.startsWith('.') || (index>0 && ['build','submissions'].includes(part)));},
+    onChange:(changedPaths)=>{
+      for(const rel of changedPaths){
+        const parts=rel.split('/').filter(Boolean);
+        if(parts.length<2 || parts[0].startsWith('.'))continue;
+        const [id,...rest]=parts;
+        if(rest.join('/')==='project.json')emit({type:'project.changed',projectId:id});
+        else fileChanged(id,rest.join('/'));
+      }
+    },
+  });
   app.addHook('preClose',async()=>{ for(const client of clients) client.end(); clients.clear(); await watcher?.close(); });
   app.addHook('onClose',async()=>{ await presentations.close();await workspace.close();await agents.close(); await builds.close(); });
-  // Do not advertise a ready service while ignoreInitial is still scanning:
-  // a project created in that window can otherwise swallow its first edit.
-  if (watcher) await new Promise<void>((resolve, reject) => {
-    const ready = () => { watcher.off('error', failed); resolve(); };
-    const failed = (error: unknown) => { watcher.off('ready', ready); reject(error); };
-    watcher.once('ready', ready); watcher.once('error', failed);
-  });
   return app;
 }
 const invoked = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invoked) {
-  const app=await createApp();
+  const app=await createApp({exitOnShutdown:true});
   const port=Number(process.env.WORKBENCH_PORT ?? 4173); if (!Number.isInteger(port) || port<1024 || port>65535) throw new Error('WORKBENCH_PORT must be between 1024 and 65535');
   await app.listen({host:'127.0.0.1',port});
   console.log(`Paper Workbench http://127.0.0.1:${port}`);

@@ -6,9 +6,31 @@ import path from 'node:path';
 import Fastify from 'fastify';
 import {buildBilingualDocument,bilingualStats,isAppendixHeading,isReferencesHeading,type LayoutPage} from '../shared/bilingual';
 import {registerBilingualRoutes} from '../server/workspace/bilingual';
-import {aiStudioPages} from '../server/workspace/document-layout';
+import {aiStudioPages,usageStore} from '../server/workspace/document-layout';
 
 const L=(id:string,type:string,text:string,extra:Record<string,unknown>={})=>({layout_id:id,type,text,...extra});
+
+test('OCR credential tests query only the chosen engine, never open a file, and reject ambiguous upstream failures',async t=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'echopaper-ocr-probe-'));
+ const app=Fastify(),reads:string[]=[],requests:{url:string;method?:string;authorization:string|null;body:unknown}[]=[];
+ const secret='fixture-ocr-secret';let response=()=>Response.json({error_code:282007,error_msg:'任务不存在'});
+ t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+ registerBilingualRoutes(app,root,{resourceFile:async()=>{throw Error('Credential testing must not open a PDF');}}, {
+  readKey:async engine=>{reads.push(engine.id);return secret+'-'+engine.id;},
+  fetch:async(input,init)=>{requests.push({url:String(input),method:init?.method,authorization:new Headers(init?.headers).get('authorization'),body:init?.body});return response();},
+ });
+ const check=(engine:string)=>app.inject({method:'POST',url:'/api/workspace/bilingual/credential/test',payload:{engine}});
+ assert.equal((await check('assistant')).statusCode,400);assert.equal(reads.length,0);assert.equal(requests.length,0);
+ assert.equal((await check('unlimited-ocr')).json().ok,true);
+ assert.match(requests[0].url,/unlimited-ocr-parser\/task\/query$/);assert.match(String(requests[0].body),/^task_id=/);assert.equal(requests[0].authorization,'Bearer '+secret+'-unlimited-ocr');
+ response=()=>Response.json({code:11001,msg:'Job not found'},{status:404});
+ assert.equal((await check('aistudio-vl')).json().ok,true);
+ assert.match(requests[1].url,/\/api\/v2\/ocr\/jobs\/ocrjob-/);assert.equal(requests[1].method,'GET');assert.equal(requests[1].body,undefined);assert.equal(requests[1].authorization,'bearer '+secret+'-aistudio-vl');
+ for(const invalid of[()=>Response.json({error_code:18}),()=>Response.json({unexpected:true}),()=>Response.json({message:secret},{status:503})]){
+  response=invalid;
+  for(const engine of['unlimited-ocr','aistudio-vl']){const result=await check(engine);assert.equal(result.json().ok,false);assert.ok(!result.body.includes(secret));}
+ }
+});
 
 test('分区标题识别：参考文献与附录，不误伤正文章节',()=>{
  for(const value of ['References','REFERENCES','7 References','VII. REFERENCES','Bibliography:','参考文献','References and Notes'])assert.ok(isReferencesHeading(value),value);
@@ -124,6 +146,7 @@ test('解析接口：缓存复用、原文更新后失效、译文存储、无�
   // 原文变化后标记为过期，并在重新解析时丢弃旧译文
   hash='v2';
   assert.equal((await app.inject('/api/workspace/resources/a/bilingual')).json().stale,true);
+  assert.equal((await app.inject({method:'POST',url:'/api/workspace/resources/a/bilingual/translations',payload:{entries:{old:'过期译文'},sourceHash:'v1'}})).statusCode,409);
   const second=(await app.inject({method:'POST',url:'/api/workspace/resources/a/bilingual',payload:{}})).json();
   assert.equal(second.reused,false);assert.equal(calls,2);
   assert.deepEqual((await app.inject('/api/workspace/resources/a/bilingual')).json().translations,{});
@@ -217,6 +240,26 @@ test('用量计数与自动换引擎：智能云按月、星河社区按天，�
   assert.equal((await app.inject({method:'PUT',url:'/api/workspace/bilingual/usage',payload:{quota:{'unlimited-ocr':-5}}})).statusCode,400);
  }finally{await app.close();await fs.rm(root,{recursive:true,force:true});}
 });
+test('OCR quota switching keeps the configured engine when alternatives have no credential',async context=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'bilingual-available-engine-')),file=path.join(root,'paper.pdf');
+ const app=Fastify(),calls:string[]=[];
+ context.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+ await fs.writeFile(file,'%PDF-1.4 fixture');
+ await usageStore(root).saveSettings({quota:{'unlimited-ocr':1,'aistudio-vl':100},threshold:1,autoSwitch:true});
+ registerBilingualRoutes(app,root,{resourceFile:async()=>({filename:file,hash:'v1',resource:{name:'paper.pdf'} as any})},{
+  readKey:async engine=>engine.id==='unlimited-ocr'?'fixture-key':'',sleep:async()=>{},
+  fetch:async input=>{
+   const url=String(input);calls.push(url);
+   if(url.endsWith('/task'))return Response.json({error_code:0,result:{task_id:'fixture-job'}});
+   if(url.endsWith('/task/query'))return Response.json({error_code:0,result:{status:'success',cost_page_num:1,parse_result_url:'https://example.invalid/result.json'}});
+   return Response.json({pages:[]});
+  },
+ });
+ const response=await app.inject({method:'POST',url:'/api/workspace/resources/a/bilingual',payload:{engine:'unlimited-ocr'}});
+ assert.equal(response.statusCode,200,response.body);assert.equal(response.json().engine,'unlimited-ocr');assert.equal(response.json().switched,undefined);
+ assert.equal(calls.length,3);assert.ok(!calls.some(url=>url.includes('/api/v2/ocr/jobs')));
+});
+
 test('AI Studio 的 JSONL 按页展开，标签归一化后公式不会被当成正文', ()=>{
  const line=(pages:any[])=>JSON.stringify({logId:'x',errorCode:0,result:{layoutParsingResults:pages}});
  const page=(blocks:any[])=>({prunedResult:{width:1224,height:1584,parsing_res_list:blocks},markdown:{text:'',images:{}},outputImages:{}});

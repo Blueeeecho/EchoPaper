@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { tectonicExecutable } from './platform';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import type { Build, BuildService, BuildRequestOptions, EmitEvent, Submission } from '../shared/types.ts';
@@ -9,7 +10,9 @@ import { DIAGNOSTICS_VERSION, dedupeDiagnostics, parseDiagnostics, placeholderDi
 import type { SourceFile } from './compile-utils.ts';
 import { createSubmissionArchive } from './submissions.ts';
 
-interface BuildRecord { build: Build; directory: string; main: string; prefix: string; child?: ChildProcess; controller?: AbortController; persist: Promise<void>; completion: ((build: Build) => void)[]; cancelled: boolean; diagnosticsVersion?: number; diagnosticsRefresh?: Promise<void> }
+interface BuildRecord { build: Build; directory: string; main: string; prefix: string; targetMain?: string; child?: ChildProcess; controller?: AbortController; persist: Promise<void>; completion: ((build: Build) => void)[]; cancelled: boolean; diagnosticsVersion?: number; diagnosticsRefresh?: Promise<void>; logTrimmed?: boolean }
+const BOOT_LOG_CAP = 16384;
+type CurrentSource = Awaited<ReturnType<typeof currentBuildSource>>;
 export interface BuildServiceOptions { workspaceRoot: string; emit: EmitEvent; compilerPath?: string; timeoutMs?: number }
 const terminal = (build: Build) => ['succeeded', 'failed', 'cancelled'].includes(build.status);
 const clone = <T>(value: T): T => structuredClone(value);
@@ -17,7 +20,7 @@ export async function currentBuildSource(workspaceRoot:string,projectId:string,t
 
 export function createBuildService(options: BuildServiceOptions): BuildService {
   const workspaceRoot = path.resolve(options.workspaceRoot);
-  const compiler = options.compilerPath || process.env.TECTONIC_PATH || '/opt/homebrew/bin/tectonic';
+  const compiler = options.compilerPath || tectonicExecutable();
   const timeoutMs = options.timeoutMs ?? 15 * 60 * 1000;
   const records = new Map<string, BuildRecord>();
   const queue: string[] = [];
@@ -56,9 +59,11 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
           if (!contained(projectDirectory, directory)) continue;
           const build = JSON.parse(await fs.readFile(path.join(directory, 'build.json'), 'utf8')) as Build;
           if (build.id !== entry || build.projectId !== projectName) continue;
-          let configuration = { main: 'main.tex', prefix: 'manuscript' };
+          let configuration: {main:string;prefix:string;targetMain?:string} = { main: 'main.tex', prefix: 'manuscript' };
           try { configuration = JSON.parse(await fs.readFile(path.join(directory, 'compile-config.json'), 'utf8')); } catch { /* Legacy interrupted run. */ }
-          const record: BuildRecord = { build, directory, main: configuration.main, prefix: configuration.prefix, persist: Promise.resolve(), completion: [], cancelled: false };
+          const logTrimmed = terminal(build) && typeof build.log === 'string' && build.log.length > BOOT_LOG_CAP;
+          if (logTrimmed) build.log = build.log.slice(-BOOT_LOG_CAP);
+          const record: BuildRecord = { build, directory, main: configuration.main, prefix: configuration.prefix, targetMain: configuration.targetMain, persist: Promise.resolve(), completion: [], cancelled: false, logTrimmed };
           records.set(build.id, record);
           if (!terminal(build)) {
             build.status = 'failed';
@@ -111,14 +116,16 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
     })().finally(() => { record.diagnosticsRefresh = undefined; });
     return record.diagnosticsRefresh;
   }
-  async function refreshStaleness(record: BuildRecord): Promise<Build> {
+  function readCurrentSource(projectId: string, targetId: string): Promise<CurrentSource | undefined> {
+    return currentBuildSource(workspaceRoot, projectId, targetId).catch(() => undefined);
+  }
+  async function refreshStaleness(record: BuildRecord, current?: Promise<CurrentSource | undefined>): Promise<Build> {
     await refreshDiagnostics(record);
     const result = clone(record.build);
     if (!result.sourceHash) return result;
-    try {
-      const source = await targetSource(workspaceRoot, result.projectId, result.targetId);
-      result.stale = fingerprint(await sourceFiles(source.sourceDirectory, source.main)) !== result.sourceHash;
-    } catch { result.stale = true; }
+    const source = await (current ?? readCurrentSource(result.projectId, result.targetId));
+    result.stale = !source || source.sourceHash !== result.sourceHash ||
+      (record.targetMain !== undefined && source.targetMain !== record.targetMain);
     return result;
   }
   async function execute(record: BuildRecord): Promise<void> {
@@ -137,6 +144,7 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
       if(record.build.expectedTargetMain&&record.build.expectedTargetMain!==source.target.main)throw serviceError('任务绑定的编译目标已变化，未运行编译。',409);
       record.main = source.main;
       record.prefix = source.prefix;
+      record.targetMain = source.target.main;
       const frozen = await withProjectMutation(source.directory,()=>snapshotSource(source.sourceDirectory, path.join(record.directory, 'source'), source.main));
       if(record.build.expectedSourceHash&&record.build.expectedSourceHash!==frozen.hash)throw serviceError('排队期间源码已变化，本构建未验证任务提交的版本。',409);
       record.build.sourceHash = frozen.hash;
@@ -267,7 +275,11 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
     await ready;
     const record = records.get(id);
     if (!record) throw serviceError('编译任务不存在', 404);
-    return refreshStaleness(record);
+    const result = await refreshStaleness(record);
+    if (record.logTrimmed) {
+      try { result.log = (await fs.readFile(path.join(record.directory, 'compile.log'), 'utf8')).slice(-262144); } catch { /* Keep tail from build.json. */ }
+    }
+    return result;
   }
   async function artifact(id: string, name: string): Promise<string> {
     await ready;
@@ -287,7 +299,20 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
   async function list(projectId: string): Promise<Build[]> {
     await ready;
     await readProject(workspaceRoot, projectId);
-    return Promise.all([...records.values()].filter(record => record.build.projectId === projectId).sort((a, b) => b.build.createdAt.localeCompare(a.build.createdAt)).map(refreshStaleness));
+    const sources = new Map<string, Promise<CurrentSource | undefined>>();
+    const projectBuilds = [...records.values()]
+      .filter(record => record.build.projectId === projectId)
+      .sort((a, b) => b.build.createdAt.localeCompare(a.build.createdAt));
+    return Promise.all(projectBuilds.map(record => {
+      const {targetId, sourceHash} = record.build;
+      if (!sourceHash) return refreshStaleness(record);
+      let source = sources.get(targetId);
+      if (!source) {
+        source = readCurrentSource(projectId, targetId);
+        sources.set(targetId, source);
+      }
+      return refreshStaleness(record, source);
+    }));
   }
   async function createSubmission(projectId: string, targetId: string): Promise<Submission> {
     await ready;

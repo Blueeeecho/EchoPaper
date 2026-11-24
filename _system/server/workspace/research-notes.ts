@@ -61,19 +61,23 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
 
  function index(t:ResearchTopic,source:SourceRoot,filename:string,bytes:NoteBytes,s:ResearchNoteSection,id?:string){
   let item=state.resources.find(item=>item.rootId===source.id&&item.path===filename);
+  let changed=false;
+  let contentChanged=false;
   if(!item){
    item={id:id??randomUUID(),rootId:source.id,path:filename,name:filename,kind:'file',size:bytes.size,hash:bytes.hash,modifiedAt:bytes.updatedAt,tags:[],missing:false,revision:1};
-   state.resources.push(item);source.scannedFiles++;source.revision++;
+   state.resources.push(item);source.scannedFiles++;source.revision++;changed=true;contentChanged=true;
   }else if(item.hash!==bytes.hash||item.modifiedAt!==bytes.updatedAt||item.missing){
+   contentChanged=item.hash!==bytes.hash;
    Object.assign(item,{size:bytes.size,hash:bytes.hash,modifiedAt:bytes.updatedAt,missing:false,revision:item.revision+1});
+   changed=true;
   }
   if(s==='ideation'){
    const title=bytes.content.match(/^ {0,3}# +(.+)$/m)?.[1].replace(/\s+#+\s*$/,'').trim().slice(0,300);
-   if(item.title!==title){if(title)item.title=title;else delete item.title;item.revision++;}
+   if(item.title!==title){if(title)item.title=title;else delete item.title;item.revision++;changed=true;}
   }
-  item.text=bytes.content;item.snippet=bytes.content.replace(/\s+/g,' ').slice(0,240);
-  if(!t.resourceIds.includes(item.id)){t.resourceIds.push(item.id);t.revision++;t.updatedAt=new Date().toISOString();}
-  return item;
+  if(contentChanged){item.text=bytes.content;item.snippet=bytes.content.replace(/\s+/g,' ').slice(0,240);}
+  if(!t.resourceIds.includes(item.id)){t.resourceIds.push(item.id);t.revision++;t.updatedAt=new Date().toISOString();changed=true;}
+  return {item,changed};
  }
 
  function summary(item:IndexedResource,t:ResearchTopic,s:ResearchNoteSection):ResearchNoteSummary {
@@ -92,7 +96,8 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
   if(!item||!source||source.path!==path.join(root,folder(t,s))||item.kind!=='file'||item.name.startsWith('.')||!/\.md$/i.test(item.name)||item.path!==item.name)throw new HttpError(404,'指定研究记录不存在。');
   await rootFile(root,source,item.path);
   const bytes=await readBytes(`${folder(t,s)}/${item.name}`);
-  index(t,source,item.name,bytes,s);await save();
+  const indexed=index(t,source,item.name,bytes,s);
+  if(indexed.changed)await save();
   return {...summary(item,t,s),content:bytes.content,hash:bytes.hash};
  }
 
@@ -118,24 +123,29 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
 
  type Params={id:string;section:string;noteId:string};
  app.get<{Params:Params}>('/api/workspace/topics/:id/notes/:section',async request=>mutate(async()=>{
-  const t=topic(request.params.id),s=section(request.params.section),notes:ResearchNoteSummary[]=[];
+  const t=topic(request.params.id),s=section(request.params.section),notes:ResearchNoteSummary[]=[],unavailable:string[]=[];
   const previous=legacy(t,s);if(previous?.content.trim()){const {content:_,hash:__,...note}=previous;notes.push(note);}
   const source=await sourceFor(t,s,false);
   if(source){
    const present=new Set<string>();
+   let anyChanged=false;
    for(const entry of await fs.readdir(source.path,{withFileTypes:true})){
     if(!entry.isFile()||entry.name.startsWith('.')||!/\.md$/i.test(entry.name))continue;
-    const bytes=await readBytes(`${folder(t,s)}/${entry.name}`);
     present.add(entry.name);
-    notes.push(summary(index(t,source,entry.name,bytes,s),t,s));
+    let bytes:NoteBytes;
+    try{bytes=await readBytes(`${folder(t,s)}/${entry.name}`);}catch{unavailable.push(entry.name);continue;}
+    const indexed=index(t,source,entry.name,bytes,s);
+    if(indexed.changed)anyChanged=true;
+    notes.push(summary(indexed.item,t,s));
    }
    for(const item of state.resources.filter(item=>item.rootId===source.id&&item.kind==='file'&&item.path===item.name&&/\.md$/i.test(item.name))){
-    if(!present.has(item.name)&&!item.missing){item.missing=true;item.revision++;}
+    if(!present.has(item.name)&&!item.missing){item.missing=true;item.revision++;anyChanged=true;}
    }
-   await save();watch?.(source);
+   if(anyChanged)await save();
+   watch?.(source);
   }
   notes.sort((a,b)=>s==='ideation'?b.updatedAt.localeCompare(a.updatedAt)||(b.filename||'').localeCompare(a.filename||'',undefined,{numeric:true}):Number(b.legacy)-Number(a.legacy)||b.name.replace(/\.md$/i,'').localeCompare(a.name.replace(/\.md$/i,''),undefined,{numeric:true}));
-  return {notes};
+  return {notes,...(unavailable.length?{unavailable}:{})};
  }));
  function deletion(t:ResearchTopic,s:ResearchNoteSection,id:string){
   const operation=state.operations.find(item=>item.id===id&&item.kind==='trash');
@@ -229,7 +239,7 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
    }
   }
   const bytes=await readBytes(`${folder(t,s)}/${creation.filename}`);
-  const item=index(t,source!,creation.filename,bytes,s,creation.id);creation.id=item.id;
+  const {item}=index(t,source!,creation.filename,bytes,s,creation.id);creation.id=item.id;
   await save();creation.complete=true;await saveJournal(t,s,log);await fs.rm(staged,{force:true}).catch(()=>{});watch?.(source!);
   return reply.code(201).send({...summary(item,t,s),content:bytes.content,hash:bytes.hash});
  }));

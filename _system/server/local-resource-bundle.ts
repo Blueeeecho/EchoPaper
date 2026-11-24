@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const execute = promisify(execFile);
-const defaultMirrorRoot = fileURLToPath(new URL('../runtime/tectonic-bundles/', import.meta.url));
+const defaultMirrorRoot = process.env.WORKBENCH_RUNTIME_DIR ? path.join(process.env.WORKBENCH_RUNTIME_DIR, 'tectonic-bundles') : fileURLToPath(new URL('../runtime/tectonic-bundles/', import.meta.url));
 export interface LocalResourceBundle { directory: string; digest: string }
 interface Options { compiler: string; mirrorRoot?: string; signal?: AbortSignal; deadline: number }
 

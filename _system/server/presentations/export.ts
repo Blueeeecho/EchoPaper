@@ -1,10 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Automizer } from 'pptx-automizer';
-import PptxGenJS from 'pptxgenjs';
+import type PptxGenJS from 'pptxgenjs';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { loadImage } from '@napi-rs/canvas';
 import type { PresentationCheck, PresentationDocument, PresentationSlide } from '../../shared/presentation-types';
 import type { ResolvedStyle } from './styles';
 import { C, fontFor, layoutSlide, layoutSvg, wrapText, type LayoutItem, type SlideLayout } from './layout';
@@ -37,16 +35,46 @@ async function pruneUnreachableParts(zip:JSZip){
  for(const name of Object.keys(zip.files))if(!zip.files[name].dir&&!keep.has(name))zip.remove(name);
  const content=parse(await zip.file('[Content_Types].xml')!.async('string'));for(const override of elements(content,'http://schemas.openxmlformats.org/package/2006/content-types','Override'))if(!zip.file(override.getAttribute('PartName').replace(/^\//,'')))override.parentNode.removeChild(override);zip.file('[Content_Types].xml',serializer.serializeToString(content));
 }
-async function patchPackage(zip:JSZip,doc:PresentationDocument,signal:AbortSignal){const slides=await presentationSlideFiles(zip),content=parse(await zip.file('[Content_Types].xml')!.async('string'));const cns='http://schemas.openxmlformats.org/package/2006/content-types';for(const[index,file]of slides.entries()){checkAbort(signal);const relFile=path.posix.join(path.posix.dirname(file),'_rels',path.posix.basename(file)+'.rels'),rels=parse(await zip.file(relFile)!.async('string'));for(const relation of elements(rels,REL,'Relationship').filter(r=>r.getAttribute('Type').endsWith('/notesSlide')))relation.parentNode.removeChild(relation);const id='rIdEchoNotes',target=`../notesSlides/notesSlide${index+1}.xml`,node=rels.createElementNS(REL,'Relationship');node.setAttribute('Id',id);node.setAttribute('Type',R+'/notesSlide');node.setAttribute('Target',target);rels.documentElement!.appendChild(node);zip.file(relFile,serializer.serializeToString(rels));const noteFile=`ppt/notesSlides/notesSlide${index+1}.xml`;zip.file(noteFile,notesXml(notesText(doc,doc.slides[index])));zip.file(`ppt/notesSlides/_rels/notesSlide${index+1}.xml.rels`,`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${R}/slide" Target="../slides/${path.posix.basename(file)}"/></Relationships>`);if(!elements(content,cns,'Override').some(e=>e.getAttribute('PartName')==='/'+noteFile)){const override=content.createElementNS(cns,'Override');override.setAttribute('PartName','/'+noteFile);override.setAttribute('ContentType','application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml');content.documentElement!.appendChild(override);}}
+async function patchPackage(zip:JSZip,doc:PresentationDocument,signal:AbortSignal){
+ const slides=await presentationSlideFiles(zip);
+ const content=parse(await zip.file('[Content_Types].xml')!.async('string'));
+ const presentationRels=parse(await zip.file('ppt/_rels/presentation.xml.rels')!.async('string'));
+ const notesMaster=elements(presentationRels,REL,'Relationship').find(r=>r.getAttribute('Type')===R+'/notesMaster')?.getAttribute('Target');
+ const masterTarget=notesMaster?path.posix.relative('ppt/notesSlides',path.posix.resolve('/ppt',notesMaster).slice(1)):'';
+ const masterRelation=masterTarget?`<Relationship Id="rId2" Type="${R}/notesMaster" Target="${escape(masterTarget)}"/>`:'';
+ const cns='http://schemas.openxmlformats.org/package/2006/content-types';
+ for(const[index,file]of slides.entries()){
+  checkAbort(signal);
+  const number=index+1,relFile=path.posix.join(path.posix.dirname(file),'_rels',path.posix.basename(file)+'.rels');
+  const rels=parse(await zip.file(relFile)!.async('string'));
+  for(const relation of elements(rels,REL,'Relationship').filter(r=>r.getAttribute('Type').endsWith('/notesSlide')))relation.parentNode.removeChild(relation);
+  const node=rels.createElementNS(REL,'Relationship');
+  node.setAttribute('Id','rIdEchoNotes');
+  node.setAttribute('Type',R+'/notesSlide');
+  node.setAttribute('Target',`../notesSlides/notesSlide${number}.xml`);
+  rels.documentElement!.appendChild(node);
+  zip.file(relFile,serializer.serializeToString(rels));
+  const noteFile=`ppt/notesSlides/notesSlide${number}.xml`;
+  zip.file(noteFile,notesXml(notesText(doc,doc.slides[index])));
+  zip.file(`ppt/notesSlides/_rels/notesSlide${number}.xml.rels`,
+   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${R}/slide" Target="../slides/${path.posix.basename(file)}"/>${masterRelation}</Relationships>`);
+  if(!elements(content,cns,'Override').some(e=>e.getAttribute('PartName')==='/'+noteFile)){
+   const override=content.createElementNS(cns,'Override');
+   override.setAttribute('PartName','/'+noteFile);
+   override.setAttribute('ContentType','application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml');
+   content.documentElement!.appendChild(override);
+  }
+ }
  zip.file('[Content_Types].xml',serializer.serializeToString(content));
  // Set explicit script fonts in slides, masters, themes, chart text and notes; no inherited Arial/Calibri.
  for(const file of Object.keys(zip.files).filter(n=>n.startsWith('ppt/')&&n.endsWith('.xml'))){const xml=parse(await zip.file(file)!.async('string'));fonts(xml);zip.file(file,serializer.serializeToString(xml));}
 }
-export async function checkPresentationPackage(zip:JSZip,doc:PresentationDocument,layouts?:SlideLayout[]):Promise<PresentationCheck[]>{const files=await presentationSlideFiles(zip),checks:PresentationCheck[]=[];if(files.length!==doc.slides.length)throw Error('导出页数与批准大纲不符。');for(const[i,file]of files.entries()){const raw=await zip.file(file)!.async('string'),xml=parse(raw),texts=elements(xml,A,'t').map(t=>t.textContent).join(''),notes=await zip.file(`ppt/notesSlides/notesSlide${i+1}.xml`)!.async('string');if(/\{\{|\}\}/.test(texts))throw Error(`第 ${i+1} 页仍有模板占位符。`);if(!['cover','contents'].includes(doc.slides[i].layout))for(const name of['研究背景','研究内容','研究结果','未来计划'])if(!texts.includes(name))throw Error(`第 ${i+1} 页缺少固定导航 ${name}。`);for(const heading of['本页目的','讲稿建议','过渡句','可能追问'])if(!notes.includes(heading))throw Error(`第 ${i+1} 页缺少四段备注。`);for(const latin of elements(xml,A,'latin'))if(latin.getAttribute('typeface')!=='Times New Roman')throw Error('英文可编辑文本字体不符合要求。');if(layouts){for(const item of layouts[i].items){const expected=item.kind==='text'?[item.text]:item.kind==='table'?item.rows.flat():[];for(const text of expected)if(!texts.replace(/\s+/g,' ').includes(text.replace(/\s+/g,' ')))throw Error(`第 ${i+1} 页有正文或表格文字未完整写入：${text.slice(0,60)}`);}}const sourceSlide=doc.slides[i];if(!['cover','contents','thanks'].includes(sourceSlide.layout)&&!sourceSlide.sourceIds.length)checks.push({code:'missing_evidence',status:'warning',slide:i+1,message:'本页没有关联材料证据，请作者核对事实依据。'});if(/待补|待填写|\b(?:TODO|TBD)\b/i.test(JSON.stringify(sourceSlide)))checks.push({code:'draft_placeholders',status:'warning',slide:i+1,message:'本页含待补内容，导出成功不表示内容完整。'});if(Object.values(sourceSlide.notes).some(v=>!v.trim()))checks.push({code:'incomplete_notes',status:'warning',slide:i+1,message:'本页四段讲稿备注中仍有空字段。'});checks.push({code:'slide_content',status:'passed',slide:i+1,message:'导航、模板占位符、四段备注与显式中英文字体校验通过。'});}
+export async function checkPresentationPackage(zip:JSZip,doc:PresentationDocument,layouts?:SlideLayout[]):Promise<PresentationCheck[]>{const files=await presentationSlideFiles(zip),checks:PresentationCheck[]=[];if(files.length!==doc.slides.length)throw Error('导出页数与批准大纲不符。');for(const[i,file]of files.entries()){const raw=await zip.file(file)!.async('string'),xml=parse(raw),texts=elements(xml,A,'t').map(t=>t.textContent).join(''),notes=await zip.file(`ppt/notesSlides/notesSlide${i+1}.xml`)!.async('string');if(/\{\{|\}\}/.test(texts))throw Error(`第 ${i+1} 页仍有模板占位符。`);if(!['cover','contents'].includes(doc.slides[i].layout))for(const name of['研究背景','研究内容','研究结果','未来计划'])if(!texts.includes(name))throw Error(`第 ${i+1} 页缺少固定导航 ${name}。`);for(const heading of['本页目的','讲稿建议','过渡句','可能追问'])if(!notes.includes(heading))throw Error(`第 ${i+1} 页缺少四段备注。`);for(const latin of elements(xml,A,'latin'))if(latin.getAttribute('typeface')!=='Times New Roman')throw Error('英文可编辑文本字体不符合要求。');if(layouts){const written=texts.replace(/\s+/g,'');for(const item of layouts[i].items){const expected=item.kind==='text'?[item.text]:item.kind==='table'?item.rows.flat():[];for(const text of expected)if(!written.includes(text.replace(/\s+/g,'')))throw Error(`第 ${i+1} 页有正文或表格文字未完整写入：${text.slice(0,60)}`);}}const sourceSlide=doc.slides[i];if(!['cover','contents','thanks'].includes(sourceSlide.layout)&&!sourceSlide.sourceIds.length)checks.push({code:'missing_evidence',status:'warning',slide:i+1,message:'本页没有关联材料证据，请作者核对事实依据。'});if(/待补|待填写|\b(?:TODO|TBD)\b/i.test(JSON.stringify(sourceSlide)))checks.push({code:'draft_placeholders',status:'warning',slide:i+1,message:'本页含待补内容，导出成功不表示内容完整。'});if(Object.values(sourceSlide.notes).some(v=>!v.trim()))checks.push({code:'incomplete_notes',status:'warning',slide:i+1,message:'本页四段讲稿备注中仍有空字段。'});checks.push({code:'slide_content',status:'passed',slide:i+1,message:'导航、模板占位符、四段备注与显式中英文字体校验通过。'});}
  for(const file of Object.keys(zip.files).filter(n=>n.endsWith('.rels'))){const rels=parse(await zip.file(file)!.async('string'));for(const r of elements(rels,REL,'Relationship')){if(r.getAttribute('TargetMode')==='External')continue;const target=r.getAttribute('Target');if(!target)continue;const base=file==='_rels/.rels'?'':path.posix.dirname(path.posix.dirname(file)),resolved=target.startsWith('/')?target.slice(1):path.posix.normalize(path.posix.join(base,target));if(!zip.file(resolved))throw Error(`PPTX 包中缺少关联文件：${resolved}（${file}）`);}}
  checks.push({code:'package_integrity',status:'passed',message:'PPTX 关系目标全部存在；文字、表格、流程图和图表为原生可编辑对象。'},{code:'native_office',status:'not_run',message:'尚未在 PowerPoint/WPS 原生应用检查字体替换、图表显示和分页。SVG 为布局预览。'});return checks;
 }
 export async function exportPresentation(input:{document:PresentationDocument;documentHash:string;style:ResolvedStyle;directory:string;assets:Record<string,string>;signal:AbortSignal;phase?:(phase:string)=>Promise<void>}){
+ const [{Automizer},{default:PptxGenJS},{loadImage}]=await Promise.all([import('pptx-automizer'),import('pptxgenjs'),import('@napi-rs/canvas')]);
  const{document:doc,style,directory,assets,signal}=input;checkAbort(signal);await input.phase?.('测量与布局');const layouts=doc.slides.map((slide,i)=>layoutSlide(doc,slide,i));await fs.mkdir(directory,{recursive:true});const template=await fs.readFile(style.template);if(hash(template)!==style.style.templateHash)throw Error('导出时模板哈希发生变化。');const donorBuffer=await donor(template),generator=new PptxGenJS();generator.defineLayout({name:'HZAU',width:13.3333333333,height:7.5});generator.layout='HZAU';generator.author='';generator.subject=doc.title;generator.title=doc.title;generator.theme={headFontFace:'Times New Roman',bodyFontFace:'Times New Roman'};
  const dimensions:Record<string,{width:number;height:number}>={};for(const[id,file]of Object.entries(assets)){const image=await loadImage(file);dimensions[id]={width:image.width,height:image.height};}
  const pres=new Automizer({removeExistingSlides:true,autoImportSlideMasters:true,cleanup:false,cleanupPlaceholders:false,pptxGenJs:generator,verbosity:0,compression:6}).loadRoot(donorBuffer).load(donorBuffer,'hzau');

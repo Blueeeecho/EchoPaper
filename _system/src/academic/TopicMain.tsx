@@ -6,8 +6,8 @@ import TopicNotes,{type TopicPaperRequest} from './TopicNotes';
 import {useTopicNotebook} from './useTopicNotebook';
 
 /** Independent topic notes and the papers used to develop them. */
-export default function TopicMain({topic,overview,onRefresh,onError,onGuardChange,importer}:{topic:ResearchTopic;overview?:WorkspaceOverview;onRefresh:()=>Promise<void>;onError:(s:string)=>void;onGuardChange:(guard:(()=>Promise<boolean>)|undefined)=>void;importer:PdfImporter}){
- const {notebook,update}=useTopicNotebook(topic.id,onError);
+export default function TopicMain({topic,overview,onRefresh,onError,onGuardChange,onReaderGuard,importer}:{topic:ResearchTopic;overview?:WorkspaceOverview;onRefresh:()=>Promise<void>;onError:(s:string)=>void;onGuardChange:(guard:(()=>Promise<boolean>)|undefined)=>void;onReaderGuard?:(guard:(()=>Promise<boolean>)|undefined)=>void;importer:PdfImporter}){
+ const {notebook,loaded,saving,loadFailed,update,refresh}=useTopicNotebook(topic.id,onError);
  const [files,setFiles]=useState<Resource[]>([]),[paperRequest,setPaperRequest]=useState<TopicPaperRequest>();
  const [noteRequest,setNoteRequest]=useState<{id:string;noteId:string}>();
  const openPaper=useCallback((paper:Resource)=>setPaperRequest({id:crypto.randomUUID(),paper}),[]);
@@ -16,6 +16,6 @@ export default function TopicMain({topic,overview,onRefresh,onError,onGuardChang
  const toggleStar=(f:Resource)=>update(n=>n.keyRefs.some(r=>r.resourceId===f.id)?{...n,keyRefs:n.keyRefs.filter(r=>r.resourceId!==f.id)}:{...n,keyRefs:[...n.keyRefs,{resourceId:f.id,note:'',addedAt:new Date().toISOString()}]});
  return <div className="topic-main-stack">
   <TopicNotes topic={topic} files={files} paperRequest={paperRequest} noteRequest={noteRequest} legacyIdeas={notebook.ideas} onRefresh={onRefresh} onGuardChange={onGuardChange}/>
-  <TopicLiterature importer={importer} topic={topic} overview={overview} onRefresh={onRefresh} onError={onError} starred={starred} onToggleStar={toggleStar} onFiles={setFiles} onOpenPaper={openPaper} onOpenTopicNote={openNote}/>
+  <TopicLiterature importer={importer} topic={topic} overview={overview} onRefresh={onRefresh} onError={onError} starred={starred} starDisabled={!loaded||saving||loadFailed} onToggleStar={toggleStar} priorityUnavailable={loadFailed} onRetryPriority={()=>void refresh().catch((error:Error)=>onError(error.message))} onFiles={setFiles} onOpenPaper={openPaper} onOpenTopicNote={openNote} onReaderGuard={onReaderGuard}/>
  </div>;
 }

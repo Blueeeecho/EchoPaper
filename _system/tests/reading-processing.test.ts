@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -8,16 +9,19 @@ import multipart from '@fastify/multipart';
 import {PDFDocument} from 'pdf-lib';
 import {registerReadingProcessingRoutes} from '../server/workspace/reading-processing';
 import {registerWorkspaceRoutes} from '../server/workspace/index';
-import {layoutStore,PARSE_ENGINES} from '../server/workspace/document-layout';
+import {layoutStore,OcrResumeBlocked,PARSE_ENGINES,parseDocument,type OcrJobPart} from '../server/workspace/document-layout';
 import {translationCacheKey} from '../shared/bilingual-cache';
 import type {Resource} from '../shared/workspace-types';
 import type {DocumentLayout} from '../shared/bilingual';
+import type {ProviderRegistry} from '../server/model-providers';
+import {registerUnifiedTranslationRoutes} from '../server/translation';
+import {registerBilingualRoutes} from '../server/workspace/bilingual';
 import type {PublicRegistry} from '../shared/model-providers';
 import {HttpError} from '../server/security';
 
 const config={translations:[{id:'zhipu',modelId:'glm',label:'智谱',enabled:true}],
  models:[{id:'glm',providerId:'provider',model:'glm-4-flash',label:'GLM',enabled:true,configured:true}],
- providers:[{id:'provider',enabled:true}]} as PublicRegistry;
+ providers:[{id:'provider',kind:'zhipu-translate',enabled:true}]} as PublicRegistry;
 const registry={publicConfig:async()=>config};
 const engineOptions=async()=>PARSE_ENGINES.map(engine=>({id:engine.id,label:engine.label,configured:true}));
 const resource=(id='paper',hash='hash1'):Resource=>({id,hash,name:`${id}.pdf`,path:`${id}.pdf`,kind:'file',rootId:'root',size:100,modifiedAt:new Date().toISOString(),tags:[],missing:false,revision:1});
@@ -146,25 +150,50 @@ test('normal topic PDF upload automatically enters processing on the next queue 
  assert.equal(status.statuses[id].stage,'complete');assert.ok(await store.readLayout(id));
 });
 
-test('background translation consumes the existing NDJSON route and rejects incomplete responses',async t=>{
- const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'reading-stream-')));
- const app=Fastify();const resources:Resource[]=[];const store=layoutStore(root);
+test('background translation shares the adapter, rejects incomplete text, and aborts an in-flight request',async t=>{
+ const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'reading-adapter-')));
+ const app=Fastify(),resources:Resource[]=[],store=layoutStore(root);
  const workspace={resources:()=>resources,resourceFile:async()=>({resource:resources[0],filename:'unused',hash:'hash1'})};
- let complete=false;
- app.post<{Body:{sourceId:string;text:string}}>('/api/ai/translate',async request=>{
-  assert.equal(request.body.sourceId,'zhipu');
-  return JSON.stringify({type:'delta',text:'译文'})+'\n'+(complete?JSON.stringify({type:'done',finishReason:'stop'})+'\n':'');
+ const data={...config,providers:[{...config.providers[0],baseUrl:'https://fixture.invalid',auth:'bearer'}]};
+ const providerRegistry={...registry,read:async()=>({data}),getKey:async()=> 'fixture-only',scheduler:{acquire:async()=>()=>{}}};
+ let calls=0, aborted=false, entered!:()=>void;
+ const inFlight=new Promise<void>(resolve=>{entered=resolve;});
+ const translate=registerUnifiedTranslationRoutes(app,root,providerRegistry as unknown as ProviderRegistry,{
+  validateResource:workspace.resourceFile,
+  fetch:async(_input,init)=>{
+   calls++;
+   if(calls===2)await new Promise<void>((_resolve,reject)=>{
+    init!.signal!.addEventListener('abort',()=>{aborted=true;reject(new DOMException('Stopped','AbortError'));},{once:true});
+    entered();
+   });
+   return Response.json({choices:[{finish_reason:calls===1?'length':'stop',message:{content:'完整译文'}}]});
+  },
  });
- const service=await registerReadingProcessingRoutes(app,root,workspace,registry,{engineOptions,ensureLayout:async()=>{
-  const result=layout('paper','hash1');await store.writeLayout(result);return result;
- }},{intervalMs:100000});
+ const queue=await registerReadingProcessingRoutes(app,root,workspace,registry,{engineOptions,ensureLayout:async()=>{
+  const result=layout('paper','hash1');
+  result.pages[0].layouts=[{layout_id:'body',type:'text',text:'One synthetic paragraph for the shared adapter.'}];
+  await store.writeLayout(result);return result;
+ }},{intervalMs:100000,translate:async(resourceId,sourceId,text,signal)=>(await translate({resourceId,sourceId,text,target:'zh-CN',source:'pdf'},signal)).text});
  t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
- await app.ready();resources.push(resource());await service.tick();
+ await app.ready();resources.push(resource());
+ const route='/api/workspace/bilingual/processing';
+ const status=async()=>(await app.inject(route+'?ids=paper')).json();
+ const settings=async(enabled:boolean)=>app.inject({method:'PUT',url:route,payload:{expectedRevision:(await status()).revision,enabled}});
+ await queue.tick();
+ assert.equal(calls,1,JSON.stringify(await status()));
  assert.deepEqual(await store.readTranslations('paper'),{});
- assert.equal((await app.inject('/api/workspace/bilingual/processing?ids=paper')).json().statuses.paper.stage,'queued');
- complete=true;await app.inject({method:'POST',url:'/api/workspace/bilingual/processing',payload:{resourceIds:['paper']}});
- await service.tick();
- assert.equal((await app.inject('/api/workspace/bilingual/processing?ids=paper')).json().statuses.paper.stage,'complete');
+ await app.inject({method:'POST',url:route,payload:{resourceIds:['paper']}});
+ const pending=queue.tick();
+ const started=await Promise.race([inFlight.then(()=>true),pending.then(()=>false)]);
+ assert.equal(started,true,JSON.stringify(await status()));
+ assert.equal((await settings(false)).statusCode,200);
+ await pending;
+ assert.equal(aborted,true);
+ assert.deepEqual(await store.readTranslations('paper'),{});
+ assert.equal((await settings(true)).statusCode,200);
+ await queue.tick();
+ assert.equal((await status()).statuses.paper.stage,'complete');
+ assert.equal(calls,3);
 });
 
 test('source revisions archive earlier OCR, translations and analysis before replacing caches',async t=>{
@@ -272,4 +301,145 @@ test('byte-identical resources share existing OCR and translations without upstr
  assert.equal(status.statuses.copy.stage,'complete');
  assert.equal((await f.store.readLayout('copy'))?.resourceId,'copy');
  assert.deepEqual(await f.store.readTranslations('copy'),await f.store.readTranslations('paper'));
+});
+
+test('OCR journals the accepted provider job and queries it after pause and restart', {timeout:5000}, async t=>{
+ const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'reading-ocr-resume-')));
+ const filename=path.join(root,'paper.pdf');
+ const bytes=Buffer.from('%PDF-1.4');
+ await fs.writeFile(filename,bytes);
+ const item=resource('paper',createHash('sha256').update(bytes).digest('hex')), resources:Resource[]=[];
+ const workspace={resources:()=>resources,resourceFile:async()=>({resource:item,filename,hash:item.hash!})};
+ let submissions=0, firstPoll!:()=>void, polls=0;
+ const polling=new Promise<void>(resolve=>{firstPoll=resolve;});
+ const mock:typeof fetch=async (input,init)=>{
+  const url=String(input);
+  if(url.endsWith('/ocr/jobs')&&init?.method==='POST'){
+   submissions++;
+   return Response.json({errorCode:0,data:{jobId:'accepted-job'}});
+  }
+  if(url.endsWith('/ocr/jobs/accepted-job')){
+   polls++;
+   if(polls===1)await new Promise((_resolve,reject)=>{
+    init!.signal!.addEventListener('abort',()=>reject(new DOMException('Paused','AbortError')),{once:true});
+    firstPoll();
+   });
+   return Response.json({errorCode:0,data:{state:'done',extractProgress:{extractedPages:1},resultUrl:{jsonUrl:'https://fixture.invalid/result.jsonl'}}});
+  }
+  assert.ok(url.endsWith('result.jsonl'));
+  return new Response(JSON.stringify({errorCode:0,result:{layoutParsingResults:[
+   {prunedResult:{width:100,height:100,parsing_res_list:[
+    {block_label:'text',block_content:'A synthetic paragraph used to verify OCR resume.',block_bbox:[1,2,3,4],block_order:1},
+   ]},markdown:{text:'',images:{}},outputImages:{}},
+  ]}}));
+ };
+ async function open(){
+  const app=Fastify();
+  const bilingual=registerBilingualRoutes(app,root,workspace,{fetch:mock,readKey:async()=> 'fixture-only',sleep:async()=>{}});
+  const queue=await registerReadingProcessingRoutes(app,root,workspace,registry,bilingual,{intervalMs:100000,translate:async()=> '模拟译文'});
+  await app.ready();
+  return {app,queue};
+ }
+ let server=await open();
+ t.after(async()=>{await server.app.close();await fs.rm(root,{recursive:true,force:true});});
+ const route='/api/workspace/bilingual/processing';
+ const status=async()=>(await server.app.inject(route+'?ids=paper')).json();
+ const settings=async(enabled:boolean)=>server.app.inject({method:'PUT',url:route,payload:{expectedRevision:(await status()).revision,enabled}});
+ resources.push(item);
+ const first=server.queue.tick();
+ await polling;
+ assert.equal((await settings(false)).statusCode,200);
+ await first;
+ const saved=JSON.parse(await fs.readFile(path.join(root,'workspace/reading-layout/_processing.json'),'utf8'));
+ assert.deepEqual(saved.jobs.paper.ocr,{engineId:'aistudio-vl',parts:{0:{state:'accepted',id:'accepted-job'}}});
+ await server.app.close();
+ server=await open();
+ assert.equal((await settings(true)).statusCode,200);
+ await server.queue.tick();
+ assert.equal(submissions,1);
+ assert.equal(polls,2);
+ assert.equal((await status()).statuses.paper.stage,'complete');
+});
+
+test('an ambiguous OCR submission is preserved and cannot be automatically sent again',async()=>{
+ const parts=new Map<number,OcrJobPart>();
+ let submissions=0;
+ const deps={
+  checkpoint:{read:(i:number)=>parts.get(i),write:async(i:number,value:OcrJobPart|null)=>{if(value)parts.set(i,value);else parts.delete(i);}},
+  readKey:async()=> 'fixture-only',
+  fetch:async()=>{submissions++;throw new Error('Connection lost after send');},
+ };
+ const attempt=()=>parseDocument(Buffer.from('%PDF-1.4'),'paper.pdf',deps,new AbortController().signal,'aistudio-vl');
+ await assert.rejects(attempt,OcrResumeBlocked);
+ assert.deepEqual(parts.get(0),{state:'submitting'});
+ await assert.rejects(attempt,OcrResumeBlocked);
+ assert.equal(submissions,1);
+});
+
+test('Unlimited OCR resumes its persisted task without a new submit',async()=>{
+ const calls:string[]=[];
+ const result=await parseDocument(Buffer.from('%PDF-1.4'),'paper.pdf',{
+  readKey:async()=> 'fixture-only',
+  sleep:async()=>{},
+  checkpoint:{read:()=>({state:'accepted',id:'previous-task'}),write:async()=>{throw Error('No journal change expected');}},
+  fetch:async(input,init)=>{
+   const url=String(input);calls.push(url);
+   if(url.endsWith('/query')){
+    assert.equal(new URLSearchParams(String(init?.body)).get('task_id'),'previous-task');
+    return Response.json({result:{status:'success',parse_result_url:'https://fixture.invalid/result'}});
+   }
+   assert.equal(url,'https://fixture.invalid/result');
+   return Response.json({pages:[{page_num:1,layouts:[]}]});
+  },
+ },new AbortController().signal,'unlimited-ocr');
+ assert.equal(result.costPages,1);
+ assert.equal(calls.length,2);
+});
+
+test('upgrading an already-paused legacy OCR preserves an unknown acceptance state',async t=>{
+ const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'reading-ocr-upgrade-')));
+ const filename=path.join(root,'workspace/reading-layout/_processing.json');
+ await fs.mkdir(path.dirname(filename),{recursive:true});
+ const item=resource();
+ await fs.writeFile(filename,JSON.stringify({version:1,revision:1,settings:{enabled:false,translateAppendix:false,engineId:'aistudio-vl',translationSourceId:null},
+  seen:{paper:item.hash},jobs:{paper:{resourceId:'paper',hash:item.hash,stage:'queued',done:0,total:0,pageCount:0,appendix:false,attempts:0,ocrStartedAt:'2026-01-01T00:00:00Z'}}}));
+ const app=Fastify();
+ const workspace={resources:()=>[item],resourceFile:async()=>({resource:item,filename:'unused',hash:item.hash!})};
+ await registerReadingProcessingRoutes(app,root,workspace,registry,{engineOptions,ensureLayout:async()=>{throw Error('Disabled queue');}});
+ t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+ const saved=JSON.parse(await fs.readFile(filename,'utf8'));
+ assert.equal(saved.ocrCheckpoints,true);
+ assert.deepEqual(saved.jobs.paper.ocr.parts,{0:{state:'submitting'}});
+});
+
+test('completed jobs fast-path status queries without re-reading layout JSON',async t=>{
+ const f=await fixture(t);f.resources.push(resource());
+ await f.service.tick();
+ assert.equal((await f.status()).statuses.paper.stage,'complete');
+ const originalReadFile=fs.readFile;let layoutReads=0;
+ fs.readFile=(async(target:any,...args:any[])=>{
+  if(String(target).endsWith('reading-layout/paper.json'))layoutReads++;
+  return (originalReadFile as any)(target,...args);
+ }) as typeof fs.readFile;
+ try{
+  const polled=await f.status();
+  assert.equal(polled.statuses.paper.stage,'complete');
+  assert.equal(layoutReads,0);
+ }finally{fs.readFile=originalReadFile;}
+});
+
+test('permanent 402 quota errors fail fast without retry and auto-pause the queue',async t=>{
+ let calls=0;
+ const f=await fixture(t,async()=>{calls++;throw new HttpError(502,'余额或额度不足',{upstreamStatus:402});});
+ f.resources.push(resource());
+ await f.service.tick();
+ const snap=await f.status();
+ assert.equal(snap.statuses.paper.stage,'failed');
+ assert.equal(snap.settings.enabled,false);
+ const saved=JSON.parse(await fs.readFile(path.join(f.root,'workspace/reading-layout/_processing.json'),'utf8'));
+ assert.equal(saved.jobs.paper.attempts,1);
+ assert.equal(saved.jobs.paper.retryAt,undefined);
+ const afterFirst=calls;
+ await f.service.tick();
+ assert.equal(calls,afterFirst);
 });

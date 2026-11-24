@@ -2,13 +2,13 @@ import fs from 'node:fs/promises';
 import {DOMParser} from '@xmldom/xmldom';
 import {buildBilingualDocument,type DocumentLayout} from '../../shared/bilingual';
 import {textFingerprint} from '../../shared/bilingual-cache';
-import type {ResourceSearchMatch} from '../../shared/workspace-types';
+import type {Resource,ResourceSearchMatch} from '../../shared/workspace-types';
 import {assertNoSymlinks} from '../security';
 import {atomicWrite,withLock} from '../storage';
 import type {IndexedResource} from './catalog';
 
-interface SearchBlock {text:string;page:number;translations?:string[]}
-interface SearchDocument {version:2;resourceId:string;sourceHash:string;layoutStamp:string;translationStamp:string;blocks:SearchBlock[]}
+export interface ReadingTextBlock {text:string;page:number;translations?:string[]}
+interface SearchDocument {version:2;resourceId:string;sourceHash:string;layoutStamp:string;translationStamp:string;blocks:ReadingTextBlock[]}
 interface SearchPassage {text:string;normalized:string;source:'ocr'|'translation';page:number}
 interface CachedDocument {stamp:string;document:SearchDocument;passages:SearchPassage[];normalized:string}
 const safeId=/^[a-zA-Z0-9_-]{1,100}$/;
@@ -42,7 +42,7 @@ export async function refreshReadingSearch(root:string,id:string,input:{layout?:
   if(!layoutStamp){await fs.rm(searchFile,{force:true});return null;}
   const candidate=await readJson<SearchDocument>(searchFile).catch(()=>null),previous=validDocument(candidate)&&candidate.resourceId===id?candidate:null;
   if(!input.layout&&!input.translations&&previous&&previous.layoutStamp===layoutStamp&&previous.translationStamp===translationStamp)return previous;
-  let blocks:SearchBlock[],sourceHash:string;
+  let blocks:ReadingTextBlock[],sourceHash:string;
   if(!input.layout&&previous&&previous.layoutStamp===layoutStamp){blocks=previous.blocks.map(({text,page})=>({text,page}));sourceHash=previous.sourceHash;}
   else{
    const layout=input.layout??await readJson<DocumentLayout>(layoutFile);
@@ -78,16 +78,25 @@ function excerpt(text:string,terms:string[]):string{
 }
 const allTerms=(text:string,terms:string[])=>terms.every(term=>text.includes(term));
 
-export function createReadingSearch(root:string){
+const MAX_CACHE=40;
+export function createReadingSearch(root:string,options:{getText?:(id:string)=>string|undefined;getMeta?:(resource:Resource)=>Promise<{titleZh?:string;venue?:string;year?:string;keywords?:string[]}|undefined>}={}){
  const cache=new Map<string,CachedDocument>();
  let closed=false;
- async function document(resource:IndexedResource):Promise<CachedDocument|undefined>{
+ function putCache(id:string,value:CachedDocument){
+  cache.delete(id);
+  cache.set(id,value);
+  if(cache.size>MAX_CACHE)cache.delete(cache.keys().next().value!);
+ }
+ async function document(resource:Resource):Promise<CachedDocument|undefined>{
   if(resource.missing||resource.kind!=='file'||!/\.pdf$/i.test(resource.name)||!safeId.test(resource.id))return;
   const [layoutFile,translationFile,searchFile]=await Promise.all([file(root,resource.id,'layout'),file(root,resource.id,'translation'),file(root,resource.id,'search')]);
   const [layoutStamp,translationStamp,searchStamp]=await Promise.all([stamp(layoutFile),stamp(translationFile),stamp(searchFile)]);
   const signature=`${layoutStamp}|${translationStamp}|${searchStamp}`;
   const existing=cache.get(resource.id);
-  if(existing?.stamp===signature)return existing.document.sourceHash===resource.hash?existing:undefined;
+  if(existing?.stamp===signature){
+   cache.delete(resource.id);cache.set(resource.id,existing);
+   return existing.document.sourceHash===resource.hash?existing:undefined;
+  }
   let value=searchStamp?await readJson<SearchDocument>(searchFile).catch(()=>null):null;
   if(!validDocument(value)||value.resourceId!==resource.id||value.layoutStamp!==layoutStamp||value.translationStamp!==translationStamp)value=await refreshReadingSearch(root,resource.id);
   if(!value||value.sourceHash!==resource.hash){cache.delete(resource.id);return;}
@@ -96,11 +105,14 @@ export function createReadingSearch(root:string){
    ...(block.translations??[]).map(text=>({text,normalized:normalize(text),source:'translation' as const,page:block.page})),
   ]);
   const result:CachedDocument={stamp:`${layoutStamp}|${translationStamp}|${await stamp(searchFile)}`,document:value,passages,normalized:passages.map(passage=>passage.normalized).join(' ')};
-  cache.set(resource.id,result);return result;
+  putCache(resource.id,result);return result;
  }
  async function match(resource:IndexedResource,terms:string[]):Promise<ResourceSearchMatch|undefined>{
-  const metadata=[resource.title??'',resource.name,resource.path,...resource.tags].join(' '),text=resource.text??'';
+  const extra=options.getMeta?await options.getMeta(resource).catch(()=>undefined):undefined;
+  const venueLabel=[extra?.venue,extra?.year].filter(Boolean).join(' ');
+  const metadata=[resource.title??'',extra?.titleZh??'',venueLabel,...(extra?.keywords??[]),resource.name,resource.path,...resource.tags].filter(Boolean).join(' ');
   if(allTerms(normalize(metadata),terms))return {source:'metadata',snippet:excerpt(metadata,terms),terms};
+  const text=resource.text??options.getText?.(resource.id)??'';
   let indexed:CachedDocument|undefined;
   try{indexed=await document(resource);}catch{/* A damaged OCR cache does not prevent searching other documents. */}
   if(!allTerms(`${normalize(metadata)} ${normalize(text)} ${indexed?.normalized??''}`,terms))return;
@@ -117,9 +129,12 @@ export function createReadingSearch(root:string){
   }
   return matches;
  }
- let warming:Promise<void>|undefined;
- function warm(resources:IndexedResource[]){
-  warming=(async()=>{for(let offset=0;offset<resources.length&&!closed;offset+=2)await Promise.all(resources.slice(offset,offset+2).map(resource=>document(resource).catch(()=>undefined)));})();
+ function warm(_resources:IndexedResource[]){
+  // Lazy LRU loading on demand; avoid eager boot-time RAM inflation.
  }
- return {find,warm,async close(){closed=true;await warming;cache.clear();}};
+ async function readText(resource:Resource){
+  const indexed=await document(resource);
+  if(indexed?.document.blocks.length)return indexed.document.blocks;
+ }
+ return {find,warm,readText,async close(){closed=true;cache.clear();}};
 }

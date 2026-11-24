@@ -4,10 +4,9 @@
  * 只取版面，不做翻译：翻译仍走读者自己配置的翻译来源。解析结果按资料的内容哈希缓存，
  * 同一份 PDF 只解析一次，不重复消耗额度；接口返回的结果链接 30 天过期，因此图片一并落盘。
  */
-import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
-import {fileURLToPath} from 'node:url';
 import fs from 'node:fs/promises';
+import {readKeychain,writeKeychain} from '../keychain';
 import {HttpError,assertNoSymlinks} from '../security';
 import {atomicWrite,withLock} from '../storage';
 import type {DocumentLayout,LayoutElement,LayoutImage,LayoutPage,LayoutTable} from '../../shared/bilingual';
@@ -16,16 +15,12 @@ import {refreshReadingSearch,removeReadingSearch} from './reading-search';
 export const PARSE_PROVIDER='baidu-doc-parse';
 export const PARSE_BASE_URL='https://aip.baidubce.com';
 const TOKEN=PARSE_BASE_URL+'/oauth/2.0/token';
-/**
- * 可选的解析引擎。两者都在 aip.baidubce.com 上、同一套异步流程与鉴权，
- * 额度各自独立，因此一个用完可以切到另一个。
- */
 export interface ParseEngine{id:string;label:string;path:string;note:string;kind:'baidu-cloud'|'aistudio';
  /** 额度按月还是按天刷新，决定提醒与自动切换看哪个计数。 */
  period:'month'|'day'}
 export const PARSE_ENGINES:ParseEngine[]=[
- {id:'unlimited-ocr',kind:'baidu-cloud',period:'month',label:'文档解析（Unlimited-OCR）',path:'/rest/2.0/brain/online/v2/unlimited-ocr-parser/task',note:'智能云的文档解析，每月额度，长文档跨页表格与段落更完整。'},
- {id:'aistudio-vl',kind:'aistudio',period:'day',label:'PaddleOCR 官方 API（AI Studio）',path:'/api/v2/ocr/jobs',note:'星河社区的 PaddleOCR-VL，每天两万页额度，与智能云各自独立。'},
+ {id:'unlimited-ocr',kind:'baidu-cloud',period:'month',label:'文档解析（Unlimited-OCR）',path:'/rest/2.0/brain/online/v2/unlimited-ocr-parser/task',note:'百度智能云文档解析，按月统计本地用量。'},
+ {id:'aistudio-vl',kind:'aistudio',period:'day',label:'PaddleOCR 官方 API（AI Studio）',path:'/api/v2/ocr/jobs',note:'AI Studio 的 PaddleOCR-VL，按日统计本地用量。'},
 ];
 /** AI Studio（星河社区）的 PaddleOCR 服务：固定地址，凭据只有一个访问令牌。 */
 export const AISTUDIO_PROVIDER='aistudio-paddleocr';
@@ -53,21 +48,51 @@ export class ParseError extends HttpError{
 }
 
 /** 凭据只经 stdin 进出钥匙串，不出现在参数、日志或配置文件里。 */
-export function parsingKeychain(value?:string,provider=PARSE_PROVIDER,url=PARSE_BASE_URL):Promise<string>{
- return new Promise((resolve,reject)=>{
-  const child=spawn('/usr/bin/python3',[fileURLToPath(new URL('../../scripts/provider-keychain.py',import.meta.url)),value===undefined?'read':'write',provider,url],{stdio:['pipe','pipe','pipe']});
-  let output='',bytes=0;
-  const timer=setTimeout(()=>{child.kill();reject(Error('钥匙串操作超时。'));},15000);
-  child.stdout.on('data',part=>{bytes+=part.length;if(bytes>16384){child.kill();return;}output+=part;});
-  child.stderr.resume();
-  child.on('error',error=>{clearTimeout(timer);reject(error);});
-  child.on('close',code=>{clearTimeout(timer);code===0?resolve(value===undefined?output.trim():''):reject(Error('无法读写 macOS 钥匙串，请确认钥匙串已解锁。'));});
-  child.stdin.on('error',()=>{});
-  child.stdin.end(value===undefined?'':value);
- });
+export async function parsingKeychain(value?:string,provider=PARSE_PROVIDER,url=PARSE_BASE_URL):Promise<string>{
+ if(value===undefined)return readKeychain(provider,url);
+ await writeKeychain(provider,url,value);
+ return '';
+}
+
+export type OcrJobPart = { state: 'submitting' } | { state: 'accepted' | 'failed'; id: string };
+export interface OcrCheckpoint {
+ read(part: number): OcrJobPart | undefined;
+ write(part: number, value: OcrJobPart | null): Promise<void>;
+}
+export class OcrResumeBlocked extends HttpError {
+ constructor(message: string) { super(409, message); }
+}
+
+function submissionRejected(error: unknown) {
+ if (error instanceof AiStudioError) return [400, 401, 403, 429].includes(error.upstream);
+ return error instanceof ParseError || (error instanceof HttpError && [400, 401, 403, 429].includes(error.statusCode));
+}
+
+async function upstreamJob(part: number, signal: AbortSignal, checkpoint: OcrCheckpoint | undefined, submit: () => Promise<string>) {
+ const previous = checkpoint?.read(part);
+ if (previous?.state === 'accepted') return previous.id;
+ if (previous?.state === 'failed') throw new OcrResumeBlocked('上游 OCR 已报告失败，可手动重试该文献。');
+ if (previous?.state === 'submitting') throw new OcrResumeBlocked('上次 OCR 接单状态未知。请先核对供应商任务，再从阅读页手动重新解析。');
+ signal.throwIfAborted();
+ if (!checkpoint) return submit();
+ await checkpoint.write(part, { state: 'submitting' });
+ if (signal.aborted) {
+  await checkpoint.write(part, null);
+  signal.throwIfAborted();
+ }
+ let id: string;
+ try { id = await submit(); }
+ catch (error) {
+  if (submissionRejected(error)) await checkpoint.write(part, null);
+  else if (!signal.aborted) throw new OcrResumeBlocked('OCR 接单状态未知。请先核对供应商任务，再从阅读页手动重新解析。');
+  throw error;
+ }
+ await checkpoint.write(part, { state: 'accepted', id });
+ return id;
 }
 
 export interface ParseDeps{fetch?:typeof fetch;readKey?:(engine:ParseEngine)=>Promise<string>;sleep?:(ms:number)=>Promise<void>;
+ checkpoint?:OcrCheckpoint;
  onProgress?:(completedPages:number)=>void;
  onBackpressure?:()=>void;
  /** 诊断用：拿到上游原始结果的第一行，便于核对不同引擎的字段。 */
@@ -96,7 +121,10 @@ export async function authorize(credential:string,upstream:typeof fetch,signal:A
  const data=await response.json().catch(()=>({})) as any;
  if(!response.ok||!data?.access_token)throw new HttpError(503,`换取 access_token 失败：${String(data?.error_description??data?.error??`HTTP ${response.status}`)}`);
  const token=String(data.access_token);
- tokenCache.set(value,{token,expires:Date.now()+Math.max(60,Number(data.expires_in??2592000)-3600)*1000});
+ const now=Date.now();
+ for(const [k,v] of tokenCache)if(v.expires<=now)tokenCache.delete(k);
+ if(tokenCache.size>=64)tokenCache.delete(tokenCache.keys().next().value!);
+ tokenCache.set(value,{token,expires:now+Math.max(60,Number(data.expires_in??2592000)-3600)*1000});
  return {headers:{},query:`?access_token=${encodeURIComponent(token)}`};
 }
 
@@ -113,13 +141,13 @@ export async function probeCredential(deps:ParseDeps,signal:AbortSignal,engineId
  try{
   if(engine.kind==='aistudio')return await probeAiStudio(credential,upstream,signal);
   const auth=await authorize(credential,upstream,signal);
-  await result(await post(upstream,queryUrl(engine),auth,{task_id:'echopaper-probe'},signal));
-  return {ok:true,message:'凭据可用。'};
+  const payload=await result(await post(upstream,queryUrl(engine),auth,{task_id:'echopaper-probe'},signal));
+  if(typeof payload?.status==='string')return {ok:true,message:'文档解析任务查询通过。'};
+  return {ok:false,message:'文档解析接口未返回有效的任务状态，无法确认凭据。'};
  }catch(error){
   const code=error instanceof ParseError?error.code:'';
-  // 任务号不存在说明鉴权已通过，正是我们要的结果。
-  if(code&&!['14','23','100','110','111','6','17','19'].includes(code))return {ok:true,message:`凭据可用（探测返回 ${code}）。`};
-  return {ok:false,message:error instanceof Error?error.message:'凭据校验失败。'};
+  if(code==='282007')return {ok:true,message:'文档解析任务查询通过，未提交文件。'};
+  return {ok:false,message:signal.aborted?'OCR 连接测试已超时或取消。':ERROR_HINTS[code]||'OCR 连接未能验证，请检查凭据、服务开通状态和网络后重试。'};
  }
 }
 async function result(response:Response):Promise<any>{
@@ -136,12 +164,17 @@ export async function parseDocument(file:Buffer,name:string,deps:ParseDeps,signa
  if(file.byteLength>MAX_BYTES)throw new HttpError(413,'文件超过 50MB，文档解析接口要求改用链接提交，当前尚未支持。');
  const upstream=deps.fetch??fetch,sleep=deps.sleep??((ms:number)=>delay(ms,undefined,{signal,ref:false}));
  const credential=(await readCredential(engine,deps).catch(()=>''))?.trim();
- if(!credential)throw new HttpError(503,`尚未配置${engine.kind==='aistudio'?' AI Studio 访问令牌':'文档解析密钥'}，请在阅读器的「全文对照」中填写。`,undefined,true);
- if(engine.kind==='aistudio')return await parseAiStudio(file,name,credential,engine,upstream,sleep,signal,deps.onSample,deps.log,deps.onProgress,deps.onBackpressure);
+ if(!credential)throw new HttpError(503,`尚未配置${engine.kind==='aistudio'?' AI Studio 访问令牌':'文档解析密钥'}，请在「设置与模型 → OCR API」中配置。`,undefined,true);
+ if(engine.kind==='aistudio')return await parseAiStudio(file,name,credential,engine,upstream,sleep,signal,deps);
  const auth=await authorize(credential,upstream,signal);
- const submitted=await result(await post(upstream,submitUrl(engine),auth,{file_data:file.toString('base64'),file_name:name},signal));
- const taskId=String(submitted?.task_id??'');
- if(!taskId)throw new HttpError(502,'文档解析服务未返回任务编号。');
+ const taskId = await upstreamJob(0, signal, deps.checkpoint, async () => {
+  const response = await post(upstream, submitUrl(engine), auth, {file_data:file.toString('base64'),file_name:name}, signal);
+  if ([400, 401, 403].includes(response.status)) throw new HttpError(response.status, `文档解析服务拒绝请求（HTTP ${response.status}）。`);
+  const submitted = await result(response);
+  const id = String(submitted?.task_id ?? '');
+  if (!id) throw new HttpError(502, '文档解析服务未返回任务编号。');
+  return id;
+ });
  const started=Date.now();
  await sleep(FIRST_POLL_MS);
  for(let wait=4000;;wait=Math.min(wait*1.3,MAX_POLL_MS)){
@@ -157,7 +190,14 @@ export async function parseDocument(file:Buffer,name:string,deps:ParseDeps,signa
    if(!parsed||!Array.isArray(parsed.pages))throw new HttpError(502,'解析结果格式无法识别。');
    return {pages:parsed.pages,costPages:Number(task?.cost_page_num??parsed.pages.length)||parsed.pages.length};
   }
-  if(status==='failed')throw new HttpError(502,`文档解析失败：${String(task?.task_error??'接口未说明原因')}`);
+  if(status==='failed'){
+   const message=`文档解析失败：${String(task?.task_error??'接口未说明原因')}`;
+   if(deps.checkpoint){
+    await deps.checkpoint.write(0,{state:'failed',id:taskId});
+    throw new OcrResumeBlocked(message);
+   }
+   throw new HttpError(502,message);
+  }
   if(Date.now()-started>PARSE_TIMEOUT_MS)throw new HttpError(504,'文档解析超时；稍后可重新发起，已解析页数仍会计入额度。');
   await sleep(wait);
  }
@@ -188,16 +228,14 @@ const aiStudioAuth=(token:string)=>({Authorization:`bearer ${token}`});
 
 /** 查一个不存在的任务号验证令牌，不提交文档、不消耗额度。 */
 async function probeAiStudio(token:string,upstream:typeof fetch,signal:AbortSignal):Promise<{ok:boolean;message:string}>{
- const url=`${AISTUDIO_BASE_URL}/api/v2/ocr/jobs/echopaper-probe`;
- try{
-  await aiStudioJson(upstream,url,{method:'GET',signal,headers:aiStudioAuth(token)},'任务查询');
-  return {ok:true,message:'令牌可用。'};
- }catch(error){
-  const message=error instanceof Error?error.message:'令牌校验失败。';
-  // 任务号查不到说明鉴权已通过，正是我们要的结果；只有鉴权/额度类错误才算失败。
-  if(/令牌无效|无权调用|额度/.test(message))return {ok:false,message};
-  return {ok:true,message:'令牌可用（探测返回任务不存在）。'};
- }
+ const url=`${AISTUDIO_BASE_URL}/api/v2/ocr/jobs/ocrjob-000000000000`;
+ const response=await upstream(url,{method:'GET',redirect:'error',signal,headers:aiStudioAuth(token)});
+ const data=await response.json().catch(()=>null);
+ const code=Number(data?.code??data?.errorCode);
+ if((response.status===404&&code===11001)||(response.ok&&code===0&&typeof data?.data?.jobId==='string'))return {ok:true,message:'AI Studio 任务查询通过，未提交文件。'};
+ if(response.status===401||response.status===403)return {ok:false,message:'AI Studio 访问令牌无效或无权调用。'};
+ if(response.status===429)return {ok:false,message:'AI Studio 调用过于频繁或额度已用完。'};
+ return {ok:false,message:`AI Studio 未返回可验证的任务结果（HTTP ${response.status}）。`};
 }
 
 /**
@@ -241,7 +279,7 @@ async function aiStudioChunks(file:Buffer,log?:(message:string)=>void):Promise<B
  }
 }
 
-async function aiStudioSubmit(upstream:typeof fetch,jobs:string,token:string,part:Buffer,name:string,sleep:(ms:number)=>Promise<void>,signal:AbortSignal,log?:(message:string)=>void,onBackpressure?:()=>void):Promise<string>{
+async function aiStudioSubmit(upstream:typeof fetch,jobs:string,token:string,part:Buffer,name:string,sleep:(ms:number)=>Promise<void>,signal:AbortSignal,log?:(message:string)=>void,onBackpressure?:()=>void, tracked = false):Promise<string>{
  for(let attempt=1;;attempt++){
   try{
    const form=new FormData();
@@ -255,14 +293,15 @@ async function aiStudioSubmit(upstream:typeof fetch,jobs:string,token:string,par
    throw new AiStudioError(0,502,'AI Studio 未返回任务编号。');
   }catch(error){
    if(error instanceof AiStudioError&&(error.upstream===503||/队列已满|too many|rate ?limit|busy/i.test(error.message)))onBackpressure?.();
-   if(attempt>=AISTUDIO_ATTEMPTS||signal.aborted||!aiStudioRetryable(error))throw error;
+   if(attempt>=AISTUDIO_ATTEMPTS||signal.aborted||!aiStudioRetryable(error)||(tracked&&!submissionRejected(error)))throw error;
    log?.(`AI Studio 提交未成功（第 ${attempt} 次）：${(error as Error).message} 等 ${Math.round(aiStudioBackoff(attempt)/1000)} 秒后重试。`);
    await sleep(aiStudioBackoff(attempt));
   }
  }
 }
 
-async function parseAiStudio(file:Buffer,name:string,token:string,engine:ParseEngine,upstream:typeof fetch,sleep:(ms:number)=>Promise<void>,signal:AbortSignal,onSample?:(engineId:string,text:string)=>void,log?:(message:string)=>void,onProgress?:(completedPages:number)=>void,onBackpressure?:()=>void):Promise<{pages:LayoutPage[];costPages:number}>{
+async function parseAiStudio(file:Buffer,name:string,token:string,engine:ParseEngine,upstream:typeof fetch,sleep:(ms:number)=>Promise<void>,signal:AbortSignal,deps:ParseDeps):Promise<{pages:LayoutPage[];costPages:number}>{
+ const {checkpoint,onSample,log,onProgress,onBackpressure}=deps;
  const jobs=AISTUDIO_BASE_URL+engine.path;
  const parts=await aiStudioChunks(file,log);
  const pages:LayoutPage[]=[];
@@ -270,8 +309,9 @@ async function parseAiStudio(file:Buffer,name:string,token:string,engine:ParseEn
  const deadline=Date.now()+PARSE_TIMEOUT_MS;
  for(const [index,part] of parts.entries()){
   // 分块时上一块刚跑完就紧接着提交容易撞上提交队列上限，隔一下再提交。
-  if(index)await sleep(3000);
-  const jobId=await aiStudioSubmit(upstream,jobs,token,part,name,sleep,signal,log,onBackpressure);
+  if(index&&!checkpoint?.read(index))await sleep(3000);
+  const jobId=await upstreamJob(index,signal,checkpoint,
+   ()=>aiStudioSubmit(upstream,jobs,token,part,name,sleep,signal,log,onBackpressure,!!checkpoint));
   let soft=0;
   for(let first=true;;first=false){
    if(signal.aborted)throw new HttpError(499,'解析已取消。');
@@ -291,6 +331,10 @@ async function parseAiStudio(file:Buffer,name:string,token:string,engine:ParseEn
    if(state==='failed'){
     const message=String(task?.errorMsg??'接口未说明原因');
     if(/(?:状态码\s*|HTTP\s*)50[03]|busy|overload/i.test(message))onBackpressure?.();
+    if(checkpoint){
+     await checkpoint.write(index,{state:'failed',id:jobId});
+     throw new OcrResumeBlocked(`AI Studio 解析失败：${message}`);
+    }
     throw new HttpError(502,`AI Studio 解析失败：${message}`,undefined,true);
    }
    if(state==='done'){

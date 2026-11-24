@@ -4,6 +4,14 @@ import { indentMore, indentLess, toggleLineComment } from '@codemirror/commands'
 import { acceptCompletion, closeCompletion, completionStatus, hasNextSnippetField, hasPrevSnippetField, moveCompletionSelection, nextSnippetField, prevSnippetField, startCompletion } from '@codemirror/autocomplete';
 import { sourceWordAt, type SyncWordHint } from './syncWords';
 
+export function compilesOnSave(path: string, main: string) {
+ const root = main.slice(0, main.lastIndexOf('/') + 1);
+ const relative = path.slice(root.length);
+ return path.startsWith(root) &&
+   !/(^|\/)(?:notes|literature|reviews|build|submissions|node_modules|__pycache__|\.[^/]*)(\/|$)/.test(relative) &&
+   /\.(?:tex|sty|cls|bib|bst|bbl|bbx|cbx|lbx|cfg|def|fd|clo|ltx|tikz|pgf|csv|tsv|dat)$/i.test(relative);
+}
+
 export function texWrapChange(state: EditorState, command: 'textbf'|'textit') {
  const prefix=`\\${command}{`;
  return state.changeByRange(range=>({changes:{from:range.from,to:range.to,insert:`${prefix}${state.sliceDoc(range.from,range.to)}}`},range:EditorSelection.range(range.from+prefix.length,range.to+prefix.length)}));

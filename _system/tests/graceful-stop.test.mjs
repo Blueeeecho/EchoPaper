@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
-import { portReleased, requestGracefulStop, waitForPortRelease } from '../scripts/graceful-stop.mjs';
+import { findWorkspaceInstance, portReleased, requestGracefulStop, waitForPortRelease } from '../scripts/graceful-stop.mjs';
 test('shutdown rejection preserves the failure instead of permitting restart', async () => {
   for (const status of [200, 403, 409, 500]) {
     await assert.rejects(requestGracefulStop(4173, async () => ({status})), /未强制终止/);
@@ -86,4 +86,21 @@ test('an already released port permits immediate continuation', async () => {
     isReleased: async () => true,
     wait: async () => assert.fail('an available port must not delay startup'),
   });
+});
+
+test('parallel workspace instance discovery matches target workspace across ports', async () => {
+  const probed = [];
+  const found = await findWorkspaceInstance('/tmp/target-ws', {
+    preferredPort: 4173,
+    request: async url => {
+      probed.push(url);
+      if (url.includes(':4174/')) {
+        return { ok: true, json: async () => ({ ok: true, workspaceRoot: '/tmp/target-ws', pid: 999 }) };
+      }
+      return { ok: true, json: async () => ({ ok: true, workspaceRoot: '/tmp/other-ws', pid: 111 }) };
+    },
+  });
+  assert.equal(found?.port, 4174);
+  assert.equal(found?.health.pid, 999);
+  assert.equal(probed.length, 31);
 });

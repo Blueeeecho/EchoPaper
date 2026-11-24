@@ -21,7 +21,7 @@ def safe_name(name, directory=False):
     parts = name.split('/')
     if any(p in ('', '.', '..') or ':' in p or any(ord(c) < 32 for c in p) for p in parts):
         raise ValueError('unsafe archive path')
-    if parts[0] not in ('papers', 'shared', 'archive', 'workspace') and name not in ('_system', '_system/runtime', '_system/runtime/ai-settings.json', '_system/runtime/model-providers.json'):
+    if parts[0] not in ('papers', 'shared', 'archive', 'workspace', 'materials') and name not in ('_system', '_system/runtime', '_system/runtime/ai-settings.json', '_system/runtime/model-providers.json'):
         raise ValueError('archive path outside backup scope')
     return name
 

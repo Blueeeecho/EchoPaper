@@ -4,6 +4,7 @@ import {readingPosition,readingPageInput} from '../src/academic/readingPosition'
 test('阅读位置保留有效值，源版本变化使用默认值',()=>{
  const raw=JSON.stringify({hash:'h',page:7,zoom:1.5,top:125});
  assert.deepEqual(readingPosition(raw,'h'),{page:7,zoom:1.5,top:125});
+ for(const zoom of [.5,.8,1.7,2.5,3])assert.equal(readingPosition(JSON.stringify({hash:'h',zoom}),'h').zoom,zoom);
  assert.deepEqual(readingPosition(raw,'new'),{page:1,zoom:1,top:0});
 });
 test('损坏存储及非法字段不能进入PDF渲染参数',()=>{

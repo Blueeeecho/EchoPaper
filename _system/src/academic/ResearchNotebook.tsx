@@ -21,6 +21,17 @@ export default function ResearchNotebook({section,overview,topicId,day,entryId,e
  const entryState=useRef({dirty:false,busy:false});const setEntryState=useCallback((value:{dirty:boolean;busy:boolean})=>{entryState.current=value;},[]);
  const [view,setView]=useState<'doc'|'entries'>(entryId?'entries':'doc');
  useEffect(()=>{if(entryId)setView('entries');},[entryId]);
+ const switchView=useCallback(async(next:'doc'|'entries')=>{
+  if(next===view)return;
+  if(view==='doc'&&noteGuard.current){
+   const ok=await noteGuard.current();
+   if(!ok)return;
+  }
+  if(view==='entries'&&(entryState.current.busy||entryState.current.dirty)){
+   if(entryState.current.busy||!window.confirm('记录尚未保存。离开并放弃本次编辑？'))return;
+  }
+  setView(next);
+ },[view]);
  const noteGuard=useRef<(()=>Promise<boolean>)|undefined>(undefined);
  const setNoteGuard=useCallback((guard:(()=>Promise<boolean>)|undefined)=>{noteGuard.current=guard;},[]);
  const [calendarDirty,setCalendarDirty]=useState(false),[calendarBusy,setCalendarBusy]=useState(false);
@@ -44,9 +55,9 @@ export default function ResearchNotebook({section,overview,topicId,day,entryId,e
  {!overview?<p role="status">正在读取课题…</p>:!topic?section==='progress'&&!topicId?null:<div className="academic-empty"><BookOpen size={30}/><h2>{topicId?'未找到指定课题':topics.length?'先选择要继续的课题':'先明确一个研究问题'}</h2><p>{topics.length?'在上方选择当前课题；系统不会自动切到另一课题。':'建立课题后，方案、证据和进度会保存在同一课题中，并可关联已有论文与资料。'}</p><button className="academic-primary" onClick={()=>onNavigate('/topics')}>进入问题与选题<ArrowUpRight size={14}/></button></div>:<>
  {section==='progress'&&<ProgressCalendar onNavigate={onNavigate} selectedDay={day} onSelectDay={value=>onNavigate(`/progress?${new URLSearchParams({... (topicId?{topic:topicId}:{}),day:value})}`)} onSavingChange={setCalendarBusy} topics={[topic]} onRefresh={onRefresh} onEditingChange={setCalendarDirty}/>}
  {section==='progress'?<details className="research-history-records"><summary>逐条记录与历史更正</summary><div className="research-log">{topic.progressEntries?.length?[...topic.progressEntries].reverse().map(entry=><article key={entry.id} id={`progress-${entry.id}`}><time dateTime={entry.createdAt}>{prettyDate(entry.createdAt)}</time>{entry.amendsId&&<p>更正记录（不计为新增实验） · <a href={`#progress-${entry.amendsId}`} onClick={e=>{e.preventDefault();const node=document.getElementById(`progress-${entry.amendsId}`);node?.querySelector('details')?.setAttribute('open','');node?.scrollIntoView({block:'center'});}}>查看原记录</a></p>}{entry.supersededBy?<><p>已更正 · <a href={`#progress-${entry.supersededBy}`} onClick={e=>{e.preventDefault();document.getElementById(`progress-${entry.supersededBy}`)?.scrollIntoView({block:'center'});}}>查看后续版本</a></p><details><summary>查看保留的原文</summary><p>{entry.content}</p>{entry.nextStep&&<p>下一步：{entry.nextStep}</p>}</details></>:<><p>{entry.content}</p>{entry.nextStep&&<div><strong>下一步</strong><p>{entry.nextStep}</p></div>}<button className="academic-secondary" onClick={()=>amend(entry)}>更正记录</button></>}</article>):<div className="research-record-empty"><h2>{page.empty}</h2><p>{page.hint}</p><button className="academic-secondary" onClick={edit}>记录第一次进展</button></div>}</div></details>:<div className="notebook-layout">
-  <nav className="notebook-tabs" role="tablist"><button role="tab" aria-selected={view==='doc'} onClick={()=>setView('doc')}><FileText size={14}/>{section==='experiments'?'方案与实验记录':'证据与结论整理'}</button><button role="tab" aria-selected={view==='entries'} onClick={()=>setView('entries')}><ListChecks size={14}/>{section==='experiments'?'实验条目':'证据条目'}</button></nav>
-  <div hidden={view!=='doc'}><ResearchNotes key={`${topic.id}:${section}`} topicId={topic.id} section={section} onGuardChange={setNoteGuard} onRefresh={onRefresh}/></div>
-  <div hidden={view!=='entries'}><ResearchEntries key={`${topic.id}:${section}`} kind={section==='experiments'?'experiment':'evidence'} topic={topic} entryId={entryId} entryRevision={entryRevision} onNavigate={onNavigate} onRefresh={onRefresh} onStatus={setEntryState}/></div>
+  <nav className="notebook-tabs" role="tablist"><button role="tab" aria-selected={view==='doc'} onClick={()=>void switchView('doc')}><FileText size={14}/>{section==='experiments'?'方案与实验记录':'证据与结论整理'}</button><button role="tab" aria-selected={view==='entries'} onClick={()=>void switchView('entries')}><ListChecks size={14}/>{section==='experiments'?'实验条目':'证据条目'}</button></nav>
+  {view==='doc'&&<div><ResearchNotes key={`${topic.id}:${section}`} topicId={topic.id} section={section} onGuardChange={setNoteGuard} onRefresh={onRefresh}/></div>}
+  {view==='entries'&&<div><ResearchEntries key={`${topic.id}:${section}`} kind={section==='experiments'?'experiment':'evidence'} topic={topic} entryId={entryId} entryRevision={entryRevision} onNavigate={onNavigate} onRefresh={onRefresh} onStatus={setEntryState}/></div>}
  </div>}
  </>}
  {editing&&<HubDialog title={`${amending?'更正记录':page.action} · ${editing.title}`} onClose={close} wide>

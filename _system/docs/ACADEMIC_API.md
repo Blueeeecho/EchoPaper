@@ -7,7 +7,7 @@
 - `POST /api/workspace/bilingual/processing` 接受 `{resourceIds: string[]}`，用于已有文献补齐与失败重试。每段译文完成后原子保存，暂停或重启可复用已有进度。
 - OCR 与翻译初始均为2路，按连续成功逐步增加，OCR 上限4路、翻译上限6路。在途文献数随当前并发动态变化。`parallelism` 返回有效并发和活动槽位。遇到限流或服务繁忙时对应阶段并发减半，最低1路；冷却两分钟后按成功反馈逐步回升。正常阶段每30秒且至少4次成功后增加1路；失败重试复用已保存的版面和译文。
 - `workspace/reading-layout/<资源ID>.json` 保存原始 OCR 版面与图表数据，`.translations.json` 保存按来源、模型、语种和原文指纹索引的译文。`.analysis.json` 保存原文版本、解析与翻译来源、分区、页码、坐标、合并来源 ID 和译文键，供后续分析关联。图像保存在版面文件中，分析文件通过块 ID 和坐标关联。
-- 原文版本改变后，旧版缓存保留在 `workspace/reading-layout/history/<资源ID>/`。队列与设置保存在 `_processing.json`。以上文件随工作区完整备份保存。
+- 原文版本改变后，旧版缓存保留在 `workspace/reading-layout/history/<资源ID>/`。队列与设置保存在 `_processing.json`。后台 OCR 按原文版本和引擎记录各分块的上游任务号，续跑先查询已接单任务。接单状态未知时停止自动提交，可核对供应商任务后在阅读页手动解析。队列损坏时后台停用该队列并保留原文件与已完成缓存。以上文件随工作区完整备份保存。
 - OCR 和译文保存后同步更新 `workspace/reading-search/<资源ID>.json` 文字索引，保留原文、已有中文译文及页码。旧缓存启动后自动补建。资料检索复用本地索引，原文版本变化后排除旧缓存内容。
 
 开源依赖与复用边界见 [ACADEMIC_REUSE.md](ACADEMIC_REUSE.md)。
@@ -179,7 +179,7 @@ HTTP `path` 缺省时不限定父目录，`path=""` 列来源顶层，其他值�
 | HTTP 接口 | 请求/响应 | CLI |
 |---|---|---|
 | `GET /api/presentation-styles` | `{styles:StylePack[]}` | `styles list` |
-| `GET /api/presentations` | `{presentations:PresentationSummary[]}` | `presentations list` |
+| `GET /api/presentations` | `{presentations:PresentationSummary[],unavailable?:string[]}`，不可读文稿或任务记录报告工程 ID | `presentations list` |
 | `POST /api/presentations` | `{title,language?,notesLanguage?,preserveExamples?,styleId?,styleVersion?,paperId?}` → `201 PresentationFile` | `presentations create --input create.json` |
 | `GET /api/presentations/:id` | `PresentationFile` | `presentations get <ID>` |
 | `PUT /api/presentations/:id` | `{document:PresentationDocument,expectedHash}` → 新 `PresentationFile` | `presentations save <ID> --input save.json` |
@@ -221,7 +221,7 @@ HTTP `path` 缺省时不限定父目录，`path=""` 列来源顶层，其他值�
 
 ## 备份边界
 
-完整备份包含 `workspace/` 中的目录索引、课题/标签/关联/整理日志、PPT 工程、显式冻结资产、任务与产物，以及 `shared/` 中的版本化样式包。外部来源目录原件及其 `.echopaper-trash` 均不包含在工作区备份内，不能靠恢复工作区备份找回已经在外部永久删除的原件。仅在明确添加为 PPT 材料时创建的工程内快照随工程备份。
+完整备份包含 `workspace/` 中的目录索引、课题/标签/关联/整理日志、PPT 工程、显式冻结资产、任务与产物，以及 `shared/` 中的版本化样式包和 `materials/` 中的托管材料原件。恢复未包含 `materials/` 的旧包时，现有托管材料保留。外部来源目录原件及其 `.echopaper-trash` 均不包含在工作区备份内，不能靠恢复工作区备份找回已经在外部永久删除的原件。仅在明确添加为 PPT 材料时创建的工程内快照随工程备份。
 
 备份/恢复期间使用工作区维护屏障，活动编译、AI 或演示任务及目录写入会阻止不一致快照。恢复工作区数据不移动外部原件，不自动重做整理日志；完成后按恢复接口要求重启。密钥仍留在本机凭据管理中，备份只包含允许的非密钥配置。
 
@@ -249,11 +249,15 @@ HTTP `path` 缺省时不限定父目录，`path=""` 列来源顶层，其他值�
 - 输出保存为 `materials/<课题ID>/文献分析/analysis.json`。每篇包含源文件 hash、模型、分析时间、结构化事实及候选研究方向。事实的 `verified` 只表示引用文字在所标 PDF 页中匹配，不代表该论文主张已通过独立验证；不匹配的引用应在 UI 标为待核对。研究方向通过 factIds 关联推断依据。
 - 逐篇分析只替换当前文献的结果，保留其他文献；处理前后核验原文版本及课题关联，409 不自动覆盖。当前课题已有阅读任务时拒绝第二次并行分析。阅读期间备份维护检查将其视为忙碌状态。
 
-`GET /api/workspace/topics/:id/analysis/status` 返回 `{running:false}` 或 `{running:true,resourceId,filename,startedAt,phase}`，phase 为 extracting / reading / saving。阅读与图谱页每 5 秒检查一次状态并加载已完成分析；离开该页停止检查，不中断另一个窗口或后台已发起的阅读。文献选择列表按文件名自然数字顺序排列。
+`GET /api/workspace/topics/:id/analysis/status` 返回 `{running:false}` 或 `{running:true,resourceId,filename,startedAt,phase}`，phase 为 extracting / reading / saving。文献分析页每 5 秒检查一次状态并加载已完成分析。离开该页停止检查，后台任务继续运行。文献选择列表按文件名自然数字顺序排列。
 
-知识关系图采用固定画布上的弹簧网络布局，论文、模型、数据集和方法以类型色区分。支持围绕鼠标滚轮缩放、拖动画布、拖动单个节点、双击或按钮适应全图、标签显示及节点搜索。网络覆盖当前筛选的全部已读文献（不受表格分页限制），首批最多显示关联最强的 40 个知识实体，可按需继续加载；只连引用已匹配的事实。文本分析页保持每页 5 篇，表格每格默认 3 条，研究方向默认 3 个。
+### 知识关系图
 
-实体条目可含 `entity` 规范短名称，与 `value` 的详细说明分离。图谱对旧分析只拆分明确的开头名称，不进行模糊语义合并，保留模型与数据集版本。模型返回的附加字段忽略；短的精确原文名称可作为引用，但匹配仍不代表事实语义已被核实。格式失败返回 422，并在 `materials/<课题ID>/文献分析/失败记录/` 保存诊断 JSON（可见模型输出及校验路径），原有分析保持不变。
+`GET /api/workspace/topics/:id/knowledge-graph` 返回 `{papers}`。每篇包含文献编号、标题、原文 SHA-256、全文来源（`ocr` 或 `pdf`）和关系。接口读取当前课题关联 PDF 的逐段 OCR 文本、已有段落译文，或已有逐页 PDF 文本缓存。相同原文版本只计一篇。处理在本机进行，按显式英文表述提取评测数据、评测模型、指标及对照关系。
+
+每条关系包含具名主体（原文明示时）、类型、目标实体、PDF 页码、原文句子及可用的段落译文。页面显示已入图、已有全文及待处理的文献数量，支持按关系类型和原文／译文检索。单篇与课题概览分别按 12、40 条关系分页。原文链接携带 `sourceHash`，若文件版本已变更则返回 409。自动抽取范围受规则覆盖影响，需要用原文核对关系。
+
+文献分析的事实条目可含 `entity` 规范短名称，与 `value` 的详细说明分离。短的精确原文名称可作为引用。格式失败返回 422，并在 `materials/<课题ID>/文献分析/失败记录/` 保存诊断 JSON，记录模型输出及校验路径。
 
 ## 受限科研单请求推理（W6）
 

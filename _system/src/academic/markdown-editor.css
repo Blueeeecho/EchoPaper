@@ -25,8 +25,8 @@
 .markdown-live-widget h1{font-size:22px}.markdown-live-widget h2{font-size:19px}
 .markdown-live-widget :is(h3,h4){font-size:16px}
 .markdown-live-widget pre{white-space:pre-wrap;background:var(--ep-surface-2,#f3f4f6);padding:12px;border-radius:6px;font-size:13px;line-height:1.7}
-.markdown-live-widget table{width:auto;max-width:100%;min-width:240px;border-collapse:collapse;font-size:13px;line-height:1.65}
-.markdown-live-widget :is(th,td){border:1px solid var(--ep-border,#dce1e7);padding:7px 10px;text-align:left}
+.markdown-live-widget table{width:auto;max-width:100%;min-width:min(240px,100%);border-collapse:collapse;font-size:13px;line-height:1.65}
+.markdown-live-widget :is(th,td){border:1px solid var(--ep-border,#dce1e7);padding:7px 10px;text-align:left;overflow-wrap:anywhere}
 .markdown-live-widget th{font-weight:600;background:var(--ep-surface-2,#f3f4f6)}
 .markdown-live-widget .katex-display{margin:8px 0;overflow-x:auto;overflow-y:hidden}
 .markdown-editor .cm-selectionBackground{background:#d8e6f7!important}

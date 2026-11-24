@@ -42,7 +42,7 @@ export default function ResearchEntries({topic,kind,entryId,entryRevision,onNavi
  const filteredOptions=options.filter(o=>o.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
  const rows=(list:ResearchEntry[])=>list.map(e=><button key={e.id} type="button" aria-pressed={selected?.id===e.id} onClick={()=>onNavigate(entryPath(topic.id,e))}><strong>{e.title}</strong><small>{(entryStates(e.kind) as Record<string,string>)[e.state]} · v{e.revision}</small><span>{e.question||'尚未填写验证问题'}</span></button>);
  return <section className="research-entries" aria-label={`${name}条目`}>
-  <header className="academic-section-title"><h2>{name}条目 <span>{active.length}</span></h2><button type="button" className="academic-primary" disabled={busy} onClick={()=>void edit()}><Plus size={15}/>新增{name}</button></header>
+  <header className="academic-section-title"><h2>{name}条目 <span>{active.length}</span></h2>{(entries.length>0||entryId)&&<button type="button" className="academic-primary" disabled={busy} onClick={()=>void edit()}><Plus size={15}/>新增{name}</button>}</header>
   {notice&&<p role="status" className="academic-inline-error">{notice}</p>}
   {!entries.length&&!entryId?<div className="entry-empty"><strong>{kind==='experiment'?'还没有实验条目':'还没有证据条目'}</strong><p>{kind==='experiment'?'每次验证单独成条：问题、方案、观察与来源分开记录，便于复查。':'每条证据对应一个主张，关联实验、原始文件与结论边界。'}</p><button type="button" className="academic-primary" disabled={busy} onClick={()=>void edit()}><Plus size={15}/>新增{name}</button></div>:<div className="entry-workspace">
    <aside className="entry-list" aria-label={`${name}列表`}>{rows(active)}{archived.length>0&&<details><summary>已归档 · {archived.length}</summary>{rows(archived)}</details>}</aside>

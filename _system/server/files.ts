@@ -28,11 +28,16 @@ export async function document(root: string, value: string): Promise<FileDocumen
   if (stat.size > 3 * 1024 * 1024) throw new HttpError(413, '该文件较大，请下载或使用预览打开。');
   const bytes = await fs.readFile(filename);
   if (bytes.includes(0)) throw new HttpError(415, '二进制文件请使用预览或下载。');
-  return { path: file, content: bytes.toString('utf8'), hash: hash(bytes) };
+  let content: string;
+  try { content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+  catch { throw new HttpError(415, '此文件不是有效的 UTF-8 文本，请下载原文件。'); }
+  return { path: file, content, hash: hash(bytes) };
 }
 export async function saveDocument(root: string, value: string, content: unknown, expectedHash: unknown): Promise<FileDocument> {
   const file = editablePath(value);
-  if (typeof content !== 'string' || Buffer.byteLength(content) > 3 * 1024 * 1024) throw new HttpError(400, '文件内容无效或超过 3 MB。');
+  if (typeof content !== 'string' || content.includes('\0') || Buffer.byteLength(content) > 3 * 1024 * 1024) throw new HttpError(400, '文件内容无效或超过 3 MB。');
+  const bytes = Buffer.from(content, 'utf8');
+  if (bytes.toString('utf8') !== content) throw new HttpError(400, '文件内容无法完整编码为 UTF-8。');
   if (expectedHash !== null && (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash))) throw new HttpError(400, '保存时必须提供文件版本；新文件使用 null。');
   return withProjectMutation(root, () => withLock(`file:${root}:${file}`, async () => {
     const filename = await assertNoSymlinks(root, file, true);
@@ -43,8 +48,8 @@ export async function saveDocument(root: string, value: string, content: unknown
     await assertNoSymlinks(root, file, true);
     const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${randomUUID()}.tmp`);
     try {
-      await fs.writeFile(temporary, content, {flag:'wx'});
-      if (current) await preserveRecovery(root, file, current.content);
+      await fs.writeFile(temporary, bytes, {flag:'wx'});
+      if (current) await preserveRecovery(root, file, Buffer.from(current.content, 'utf8'));
       // Recheck after preparing the replacement so an external editor cannot be
       // overwritten merely because it saved while we were writing the temp file.
       let latest: FileDocument | null = null;

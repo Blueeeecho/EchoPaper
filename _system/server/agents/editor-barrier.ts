@@ -20,8 +20,16 @@ function stale(previous:Session|undefined,next:Snapshot):boolean{
  // same version a dirty observation wins over a conflicting clean one.
  return!!previous&&(next.bufferVersion<previous.bufferVersion||(next.bufferVersion===previous.bufferVersion&&previous.dirty&&!next.dirty));
 }
+function pruneStaleSessions(){
+ const now=Date.now();
+ for(const [id,s] of sessions){
+  if(!s.dirty&&now-s.seen>5*60_000&&![...pending.values()].some(entry=>entry.required.has(id)))sessions.delete(id);
+ }
+}
 function unregisterClean(root:string,id:string){
- let closed=closedSessions.get(root);if(!closed)closedSessions.set(root,closed=new Set());closed.add(id);
+ let closed=closedSessions.get(root);if(!closed)closedSessions.set(root,closed=new Set());
+ closed.delete(id);closed.add(id);
+ while(closed.size>500)closed.delete(closed.values().next().value!);
  const session=sessions.get(id);if(session?.root===root)sessions.delete(id);
  for(const entry of pending.values())if(entry.root===root&&entry.required.delete(id)){
   entry.acks.delete(id);
@@ -29,6 +37,7 @@ function unregisterClean(root:string,id:string){
  }
 }
 function remember(session:Session){
+ pruneStaleSessions();
  sessions.set(session.id,session);
  for(const entry of pending.values())if(entry.root===session.root){
   if(entry.required.has(session.id)){

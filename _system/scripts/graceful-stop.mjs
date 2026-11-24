@@ -1,4 +1,34 @@
 import net from 'node:net';
+import path from 'node:path';
+
+export const WORKBENCH_PORTS = Array.from({ length: 31 }, (_, i) => 4173 + i);
+
+const samePath = (a, b) => {
+  const left = path.resolve(a || ''), right = path.resolve(b || '');
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+};
+
+export async function probeWorkspacePort(port, workspaceRoot, { timeoutMs = 1000, request = fetch } = {}) {
+  try {
+    const response = await request(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data?.ok && samePath(data.workspaceRoot, workspaceRoot) ? { port, health: data } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function findWorkspaceInstance(workspaceRoot, { preferredPort, timeoutMs = 1000, request = fetch } = {}) {
+  if (Number.isInteger(preferredPort) && preferredPort >= 1024 && preferredPort <= 65535) {
+    const fast = await probeWorkspacePort(preferredPort, workspaceRoot, { timeoutMs, request });
+    if (fast) return fast;
+  }
+  const results = await Promise.all(WORKBENCH_PORTS.map(port =>
+    port === preferredPort ? null : probeWorkspacePort(port, workspaceRoot, { timeoutMs, request })
+  ));
+  return results.find(Boolean) || null;
+}
 
 // Fail closed: a failed shutdown must never authorize a forced kill or restart.
 export async function requestGracefulStop(port, request = fetch) {

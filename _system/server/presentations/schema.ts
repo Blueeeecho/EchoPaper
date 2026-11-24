@@ -26,11 +26,17 @@ export const outlineHash=(document:PresentationDocument)=>hash(JSON.stringify(do
 export function expectedHash(value:unknown):string {if(typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value))throw new HttpError(400,'请携带读取时的 expectedHash。');return value;}
 export function parseModelSlides(value:unknown,document:PresentationDocument):PresentationSlide[]{
  // The wire schema deliberately uses source_ids so evidence links cannot be silently omitted.
- const raw=z.object({slides:z.array(z.object({...slideSchema.shape,sourceIds:z.never().optional(),source_ids:z.array(id).max(200),blocks:z.array(z.object({...blockSchema.shape,sourceIds:z.never().optional(),source_ids:z.array(id).max(200)}).strict()).max(60)}).strict()).min(1).max(100)}).strict().safeParse(value);
+ const raw=z.object({slides:z.array(z.object({...slideSchema.shape,sourceIds:z.never().optional(),source_ids:z.array(id).max(200),blocks:z.array(z.object({...blockSchema.shape,captionEn:text.optional(),sourceIds:z.never().optional(),source_ids:z.array(id).max(200)}).strict()).max(60)}).strict()).min(1).max(100)}).strict().safeParse(value);
  if(!raw.success)throw Error('模型大纲未通过结构校验：'+raw.error.issues.slice(0,3).map(i=>i.path.join('.')+' '+i.message).join('；'));
- const slides=raw.data.slides.map(({source_ids,sourceIds:_,blocks,...s})=>({...s,sourceIds:source_ids,blocks:blocks.map(({source_ids,sourceIds:_,...b})=>({...b,sourceIds:source_ids}))})) as PresentationSlide[];
+ const slides=raw.data.slides.map(({source_ids,sourceIds:_,blocks,...s})=>({
+  ...s,sourceIds:source_ids,
+  blocks:blocks.map(({source_ids,sourceIds:_,caption,captionEn,...b})=>{
+   const displayCaption=document.language==='en'?captionEn||caption:
+    document.language==='zh-en'&&caption&&captionEn&&caption!==captionEn?[caption,captionEn].join('\n'):caption||captionEn;
+   return {...b,sourceIds:source_ids,...(displayCaption?{caption:displayCaption}:{})};
+  })
+ })) as PresentationSlide[];
  parseDocument({...document,slides});
  for(const s of slides){if(!['封面','目录','致谢'].includes(s.section)&&document.sources.length&&!s.sourceIds.length)throw Error('模型没有为正文页标注已选择的材料 source_ids。');for(const b of s.blocks)if((b.type==='chart'||b.type==='table'||b.type==='case')&&!b.sourceIds?.length)throw Error('模型生成的图表或案例缺少 source_ids，需作者补充材料。');}
- if(document.preserveExamples){for(const b of slides.flatMap(s=>s.blocks).filter(b=>b.type==='case'||b.verbatim)){if(b.text&&!document.sources.some(s=>s.text.includes(b.text!)))throw Error('要求保留原文的案例未与任何冻结材料逐字匹配。');}}
  return slides;
 }

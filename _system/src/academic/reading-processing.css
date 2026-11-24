@@ -20,10 +20,10 @@
 .processing-badge:is(.is-ocr,.is-translating){color:#2b6095}
 .processing-badge.is-failed{color:#ac583d}
 .processing-badge>button{display:inline-flex;background:transparent;border:0;padding:2px;color:inherit;cursor:pointer}
-#root .academic-app .reference-number.is-cached{background:#2b6095;color:#fff}
-#root .academic-app .reference-number:is(.is-ocr,.is-translating){background:#e7f0fa;color:#2b6095;position:relative;overflow:hidden}
-.reference-number.is-translating:after{content:'';position:absolute;left:0;bottom:0;height:3px;width:var(--cache-progress,0%);background:#2b6095}
-.reference-number.is-failed{background:#faeee8;color:#ac583d}
+.reference-number.is-cached{--reference-number-background:var(--accent);--reference-number-color:#fff}
+.reference-number:is(.is-ocr,.is-translating){--reference-number-background:var(--accent-tint);--reference-number-color:var(--accent);position:relative;overflow:hidden}
+.reference-number.is-translating:after{content:'';position:absolute;left:0;bottom:0;height:3px;width:var(--cache-progress,0%);background:var(--accent)}
+.reference-number.is-failed{--reference-number-background:var(--danger-tint);--reference-number-color:var(--danger)}
 .reference-rows .reference-title>.processing-badge{display:flex;font-size:10px;line-height:1.5;font-weight:400}
 .reference-rows .reference-title>.processing-badge.is-complete{display:none}
 .bi-background-status{display:flex;align-items:center;gap:8px;padding:7px 16px;background:#edf4fc;color:#2b6095;font-size:12px}

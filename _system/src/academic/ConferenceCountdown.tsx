@@ -48,7 +48,26 @@ export default function ConferenceCountdown({papers=[]}:{papers?:SubmissionPaper
   }catch(e:any){if(!controller.signal.aborted)setError(e.message||'会议来源暂不可用。');}
   finally{if(!controller.signal.aborted)setLoading(false);}
  }
- useEffect(()=>{void load();const timer=setInterval(()=>setNow(Date.now()),1000);const sync=(event:StorageEvent)=>{if(event.key===WATCH_STORAGE_KEY||event.key===null)setPreferences(readPreferences());};window.addEventListener('storage',sync);return()=>{request.current?.abort();clearInterval(timer);window.removeEventListener('storage',sync);};},[]);
+ useEffect(()=>{
+  void load();
+  let timer: number | undefined;
+  const update=()=>{ if(!document.hidden) setNow(Date.now()); };
+  const stop=()=>{ window.clearInterval(timer); timer=undefined; };
+  const start=()=>{ stop(); if(!document.hidden) timer=window.setInterval(update,1000); };
+  const wake=()=>{ if(document.hidden) stop(); else { update(); start(); } };
+  start();
+  const sync=(event:StorageEvent)=>{if(event.key===WATCH_STORAGE_KEY||event.key===null)setPreferences(readPreferences());};
+  window.addEventListener('storage',sync);
+  window.addEventListener('focus',wake);
+  document.addEventListener('visibilitychange',wake);
+  return()=>{
+   request.current?.abort();
+   stop();
+   window.removeEventListener('storage',sync);
+   window.removeEventListener('focus',wake);
+   document.removeEventListener('visibilitychange',wake);
+  };
+ },[]);
  function savePreferences(next:WatchPreferences){setPreferences(next);setPreferenceError('');try{localStorage.setItem(WATCH_STORAGE_KEY,JSON.stringify(next));}catch{setPreferenceError('浏览器未能保存偏好，本次筛选和置顶仍有效。');}}
  function toggleRank(rank:WatchRank){savePreferences({...preferences,ranks:preferences.ranks.includes(rank)?preferences.ranks.filter(r=>r!==rank):[...preferences.ranks,rank]});setExpanded(false);}
  function togglePin(entry:WatchEntry){const {edition,pinned}=entry;savePreferences({...preferences,pinned:pinned?preferences.pinned.filter(p=>p.id!==edition.id):[...preferences.pinned,{id:edition.id,label:`${edition.title} ${edition.year}`}]});}

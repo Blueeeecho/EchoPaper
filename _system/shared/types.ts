@@ -16,6 +16,7 @@ export interface Build { id: string; projectId: string; targetId: string; status
 export interface HistoryEntry { hash: string; message: string; date: string }
 export interface ReviewItem { id: string; reviewer: string; comment: string; response: string; location: string; status: 'open' | 'addressed' }
 export interface ReviewRound { id: string; label: string; createdAt: string; targetId: string; items: ReviewItem[] }
+export interface ReviewRoundDocument extends ReviewRound { hash: string; needsSourceSync?: boolean }
 export interface Submission { id: string; projectId: string; targetId: string; createdAt: string; buildId: string; sourceHash: string; verified: boolean; diagnostics: Diagnostic[]; archive: string }
 export type PdfAnnotationKind = 'highlight' | 'comment' | 'bold' | 'italic';
 export interface PdfAnnotationRect { x: number; y: number; width: number; height: number }

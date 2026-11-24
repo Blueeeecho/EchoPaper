@@ -82,6 +82,38 @@ test('frozen compilation preserves original source and reports stale last succes
   } finally { await f.cleanup(); }
 });
 
+test('build history scans a target once per read and notices a different main file', async t => {
+  const f = await fixture();
+  let restarted: BuildService | undefined;
+  try {
+    await fs.writeFile(path.join(f.directory, 'manuscript', 'alternate.tex'), 'Alternate main');
+    const first = await settled(f.service, (await f.service.request('test', 'main')).id);
+    const second = await settled(f.service, (await f.service.request('test', 'main')).id);
+    assert.equal(first.sourceHash, second.sourceHash);
+    const sourceDirectory = await fs.realpath(path.dirname(f.main));
+    let scans = 0;
+    const readDirectory = t.mock.method(fs, 'readdir', new Proxy(fs.readdir, {
+      apply(original, receiver, args) {
+        if (args[0] === sourceDirectory) scans++;
+        return Reflect.apply(original, receiver, args);
+      }
+    }));
+    try {
+      assert.deepEqual((await f.service.list('test')).map(build => build.stale), [false, false]);
+      assert.equal(scans, 1);
+      const manifestPath = path.join(f.directory, 'project.json');
+      const project: Project = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      project.targets[0].main = 'manuscript/alternate.tex';
+      await fs.writeFile(manifestPath, JSON.stringify(project));
+      assert.deepEqual((await f.service.list('test')).map(build => build.stale), [true, true]);
+      assert.equal(scans, 2);
+    } finally { readDirectory.mock.restore(); }
+    await f.service.close();
+    restarted = f.create();
+    assert.equal((await restarted.get(first.id)).stale, true);
+  } finally { await restarted?.close(); await f.cleanup(); }
+});
+
 test('global queue coalesces pending saves and cancellation allows newest source build', async () => {
   const f = await fixture('WAIT');
   try {
@@ -210,9 +242,11 @@ test('shared compiler mutex serializes direct compile calls', async () => {
     const lock = path.join(f.root, 'engine.lock');
     await fs.writeFile(f.compiler, `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('Fake Tectonic 1.0'); process.exit(0); }
 const lock = ${JSON.stringify(lock)};
 try { fs.writeFileSync(lock, 'busy', { flag: 'wx' }); } catch { console.error('concurrent engine detected'); process.exit(6); }
-setTimeout(() => { const args = process.argv.slice(2); const output = args[args.indexOf('--outdir') + 1]; fs.mkdirSync(output, { recursive: true }); fs.writeFileSync(path.join(output, 'main.pdf'), '%PDF-1.4'); fs.unlinkSync(lock); process.exit(0); }, 80);
+setTimeout(() => { const output = args[args.indexOf('--outdir') + 1]; fs.mkdirSync(output, { recursive: true }); fs.writeFileSync(path.join(output, 'main.pdf'), '%PDF-1.4'); fs.unlinkSync(lock); process.exit(0); }, 80);
 `);
     const options = { compiler: f.compiler, cwd: path.dirname(f.main), main: 'main.tex', timeoutMs: 2000 };
     const results = await Promise.all([runCompiler({ ...options, output: path.join(f.root, 'out-a') }), runCompiler({ ...options, output: path.join(f.root, 'out-b') })]);

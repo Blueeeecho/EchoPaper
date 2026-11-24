@@ -3,6 +3,8 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { pythonExecutable } from './platform';
 import { promisify } from 'node:util';
 import type { Build, Diagnostic, Submission } from '../shared/types.ts';
 import { atomicJSON, contained, fingerprint, runCompiler, sourceFiles, serviceError } from './compile-utils.ts';
@@ -56,7 +58,7 @@ export async function createSubmissionArchive(options: SubmissionOptions): Promi
   ].join('\n'));
   const zip = async () => {
     await fs.rm(archive, { force: true });
-    await execute('/usr/bin/zip', ['-q', '-r', archive, '.'], { cwd: packageDirectory, timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+    await execute(pythonExecutable(), [fileURLToPath(new URL('../scripts/submission-archive.py', import.meta.url)), 'create', packageDirectory, archive], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
   };
   await atomicJSON(path.join(packageDirectory, 'checks.json'), { compilationSucceeded: true, independentCompilationSucceeded: false, diagnostics: options.build.diagnostics, checkedAt: createdAt });
   await atomicJSON(path.join(packageDirectory, 'SHA256SUMS.json'), await checksumTree(packageDirectory));
@@ -66,7 +68,7 @@ export async function createSubmissionArchive(options: SubmissionOptions): Promi
   let verificationLog = '';
   let diagnostics: Diagnostic[] = [...options.build.diagnostics];
   try {
-    await execute('/usr/bin/unzip', ['-q', archive, '-d', extracted], { timeout: 120000 });
+    await execute(pythonExecutable(), [fileURLToPath(new URL('../scripts/submission-archive.py', import.meta.url)), 'extract', archive, extracted], { timeout: 120000 });
     const expected = JSON.parse(await fs.readFile(path.join(extracted, 'SHA256SUMS.json'), 'utf8')) as Record<string, string>;
     const actual = await checksumTree(extracted);
     if (JSON.stringify(expected) !== JSON.stringify(actual)) throw serviceError('投稿包解压后校验不一致', 422);

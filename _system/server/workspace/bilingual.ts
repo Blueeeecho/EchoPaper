@@ -7,14 +7,14 @@ import fs from 'node:fs/promises';
 import type {FastifyInstance} from 'fastify';
 import {HttpError} from '../security';
 import {workspaceMaintenance} from '../agents/maintenance';
-import {withLock} from '../storage';
+import {hash,withLock} from '../storage';
 import {layoutTitle} from './pdf-title';
 import type {WorkspaceService} from './index';
-import {inlineImages,layoutStore,parseDocument,parseEngine,parsingKeychain,probeCredential,readCredential,usageStore,usageDay,usageMonth,AISTUDIO_BASE_URL,AISTUDIO_PROVIDER,PARSE_ENGINES,MAX_PARSE_PAGES,type ParseDeps,type UsageSettings} from './document-layout';
+import {inlineImages,layoutStore,parseDocument,parseEngine,parsingKeychain,probeCredential,readCredential,usageStore,usageDay,usageMonth,AISTUDIO_BASE_URL,AISTUDIO_PROVIDER,PARSE_ENGINES,MAX_PARSE_PAGES,type OcrCheckpoint,type ParseDeps,type UsageSettings} from './document-layout';
 import type {DocumentLayout} from '../../shared/bilingual';
 import type {ReadingEngineChoice} from '../../shared/reading-processing';
 
-export interface EnsureLayoutOptions {force?:boolean;engine?:string;allowSwitch?:boolean;signal?:AbortSignal;onSwitch?:(message:string)=>void;onProgress?:(completedPages:number)=>void;onBackpressure?:()=>void}
+export interface EnsureLayoutOptions {force?:boolean;engine?:string;allowSwitch?:boolean;signal?:AbortSignal;expectedSourceHash?:string;checkpoint?:OcrCheckpoint;onSwitch?:(message:string)=>void;onProgress?:(completedPages:number)=>void;onBackpressure?:()=>void}
 
 export function registerBilingualRoutes(app:FastifyInstance,root:string,workspace:Pick<WorkspaceService,'resourceFile'>&Partial<Pick<WorkspaceService,'resources'>>, deps:ParseDeps={}){
  const store=layoutStore(root),usage=usageStore(root),upstream=deps.fetch??fetch;
@@ -33,10 +33,13 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
    read:()=>readCredential(engine,deps),
    write:(key:string)=>aistudio?parsingKeychain(key,AISTUDIO_PROVIDER,AISTUDIO_BASE_URL):parsingKeychain(key)};
  };
- let cachedEngines:Promise<ReadingEngineChoice[]>|undefined,enginesCheckedAt=0;
+ let cachedEngines:Promise<ReadingEngineChoice[]>|undefined;
  function engineOptions(){
-  if(!cachedEngines||Date.now()-enginesCheckedAt>5000){
-   enginesCheckedAt=Date.now();
+  if(deps.readKey){
+   return Promise.all(PARSE_ENGINES.map(async engine=>({id:engine.id,label:engine.label,
+    configured:!!(await credentialFor(engine.id).read().catch(()=>'')).trim()})));
+  }
+  if(!cachedEngines){
    cachedEngines=Promise.all(PARSE_ENGINES.map(async engine=>({id:engine.id,label:engine.label,
     configured:!!(await credentialFor(engine.id).read().catch(()=>'')).trim()})));
   }
@@ -70,18 +73,25 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
   return usage.saveSettings({quota,threshold:Math.floor(threshold),autoSwitch:body.autoSwitch!==false});
  });
 
+ function credentialEngine(value:unknown){
+  if(value===undefined||value==='')return parseEngine();
+  const engine=PARSE_ENGINES.find(candidate=>candidate.id===value);
+  if(!engine)throw new HttpError(400,'请选择受支持的 OCR 引擎。');
+  return engine;
+ }
  /** 只验证凭据，不解析文档，因此不消耗页数额度。 */
  app.post<{Body:{engine?:unknown}}>('/api/workspace/bilingual/credential/test',async request=>{
+  const engine=credentialEngine(request.body?.engine);
   const controller=new AbortController();active.add(controller);
-  const engine=typeof request.body?.engine==='string'?request.body.engine:undefined;
-  try{return {engine:parseEngine(engine).id,...await probeCredential(deps,controller.signal,engine)};}
-  finally{active.delete(controller);}
+  const timer=setTimeout(()=>controller.abort(),20_000);timer.unref();
+  try{return {engine:engine.id,...await probeCredential(deps,controller.signal,engine.id)};}
+  finally{clearTimeout(timer);active.delete(controller);}
  });
  app.put<{Body:{key?:unknown;engine?:unknown}}>('/api/workspace/bilingual/credential',async request=>{
   const key=request.body?.key;
   if(typeof key!=='string'||!key.trim()||key.length>8192||/[\x00-\x1f]/.test(key))throw new HttpError(400,'密钥格式无效。');
+  const engine=credentialEngine(request.body?.engine);
   if(deps.readKey)throw new HttpError(400,'测试环境不写入钥匙串。');
-  const engine=parseEngine(typeof request.body?.engine==='string'?request.body.engine:undefined);
   await credentialFor(engine.id).write(key.trim());
   cachedEngines=undefined;
   return {configured:true,engine:engine.id};
@@ -98,6 +108,7 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
  async function ensureLayout(id:string,options:EnsureLayoutOptions={}) {
   workspaceMaintenance(root).assertAvailable();
   const detail=await workspace.resourceFile(id);
+  if(options.expectedSourceHash&&detail.hash!==options.expectedSourceHash)throw new HttpError(409,'原文已更新，等待处理新版本。');
   if(!/\.pdf$/i.test(detail.resource.name))throw new HttpError(415,'全文对照目前只支持 PDF 资料。');
   const original=await store.readLayout(id);
   const existing=options.force?original:(await store.reuseLayout(id,detail.hash,(workspace.resources?.()||[]).filter(resource=>resource.hash===detail.hash).map(resource=>resource.id)))??original;
@@ -109,9 +120,11 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
   let engine=asked;
   const left=usage.remaining(current,asked.id);
   if(options.allowSwitch!==false&&current.settings.autoSwitch&&left!==null&&left<=current.settings.threshold){
+   const configured=await engineOptions();
    engine=PARSE_ENGINES.find(candidate=>{
     const remaining=usage.remaining(current,candidate.id);
-    return candidate.id!==asked.id&&(remaining===null||remaining>current.settings.threshold);
+    return candidate.id!==asked.id&&(remaining===null||remaining>current.settings.threshold)
+     &&configured.some(option=>option.id===candidate.id&&option.configured);
    })??asked;
   }
   if(engine.id!==asked.id)options.onSwitch?.(`${asked.label}${asked.period==='day'?'今日':'本月'}只剩 ${left} 页，已自动改用${engine.label}。`);
@@ -124,10 +137,10 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
   active.add(controller);
   const task=(async()=>{
    const file=await fs.readFile(detail.filename);
-   const {pages,costPages}=await parseDocument(file,detail.resource.name,{...parseDeps,onProgress:options.onProgress??deps.onProgress,onBackpressure:options.onBackpressure??deps.onBackpressure,log:message=>{
+   if(options.expectedSourceHash&&hash(file)!==options.expectedSourceHash)throw new HttpError(409,'原文已更新，等待处理新版本。');
+   const {pages,costPages}=await parseDocument(file,detail.resource.name,{...parseDeps,checkpoint:options.checkpoint,onProgress:options.onProgress??deps.onProgress,onBackpressure:options.onBackpressure??deps.onBackpressure,log:message=>{
     app.log.info({resourceId:id,engine:engine.id},message);
    }},controller.signal,engine.id);
-   await usage.record(engine.id,costPages).catch(()=>{});
    if(pages.length>MAX_PARSE_PAGES)throw new HttpError(413,'PDF 超过解析页数上限。');
    await inlineImages(pages,upstream,controller.signal,message=>app.log.warn({resourceId:id},message));
    const layout:DocumentLayout={version:1,resourceId:id,sourceHash:detail.hash,parsedAt:new Date().toISOString(),pageCount:pages.length,costPages,pages,engine:engine.id};
@@ -138,6 +151,7 @@ export function registerBilingualRoutes(app:FastifyInstance,root:string,workspac
     if(existing&&existing.sourceHash!==detail.hash)await store.archiveLayout(id,existing.sourceHash);
     await store.writeLayout(layout);
    });
+   await usage.record(engine.id,costPages).catch(()=>{});
    const title=layoutTitle(layout);
    if(title&&!latest.resource.title&&workspace.resources){
     const saved=await app.inject({method:'PATCH',url:`/api/workspace/resources/${id}`,payload:{title,expectedRevision:latest.resource.revision}});

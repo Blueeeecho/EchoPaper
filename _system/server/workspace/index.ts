@@ -2,6 +2,7 @@ import {registerResearchEntryRoutes} from './research-entries.ts';
 import {registerResearchNoteRoutes} from './research-notes.ts';
 import {readTopicNotebook} from './topic-notebook';
 import {createReadingSearch} from './reading-search';
+import {createPaperMetadataService} from './paper-metadata';
 import {layoutStore} from './document-layout';
 import {pdfTitle} from './pdf-title';
 import {isResourceGroup,resourceGroup} from '../../shared/resource-kind';
@@ -15,18 +16,19 @@ import {constants} from 'node:fs';
 import path from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
-import chokidar,{type FSWatcher} from 'chokidar';
 import type {FastifyInstance} from 'fastify';
 import type {FileOperationInput,ResearchTopic,Resource,SourceRoot,WorkspaceOverview,ResourcePage,PdfImportTarget,PdfImportResult} from '../../shared/workspace-types.ts';
 import {RESEARCH_STAGES,type ResearchStage} from '../../shared/workspace-types.ts';
+import type {TopicIdea} from '../../shared/topic-notebook.ts';
 import {workspaceMaintenance} from '../agents/maintenance.ts';
+import {watchDirectoryTree,type TreeWatcher} from '../fs-watch.ts';
 import {HttpError,assertNoSymlinks} from '../security.ts';
 import {withLock} from '../storage.ts';
 import {openCatalog,type IndexedResource} from './catalog.ts';
 import {parseTimelineConferences} from './conference-timeline.ts';
 import {createTimelineSourceService} from './timeline-sources.ts';
 import {createFileOperations,publicOperation,trashedResourceIds} from './operations.ts';
-import {canonicalRoot,fileError,overlaps,resourcePath,rootFile,snapshot,type Tree} from './paths.ts';
+import {canonicalRoot,fastFileSnapshot,fileError,overlaps,resourcePath,rootFile,snapshot,type Tree} from './paths.ts';
 
 const textExtensions=new Set(['.txt','.md','.markdown','.tex','.bib','.csv','.tsv','.json','.yaml','.yml','.xml','.html','.htm','.css','.js','.ts','.log','.rst']);
 const previewTypes:Record<string,string>={'.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.avif':'image/avif','.txt':'text/plain; charset=utf-8','.md':'text/plain; charset=utf-8','.tex':'text/plain; charset=utf-8','.bib':'text/plain; charset=utf-8','.csv':'text/plain; charset=utf-8','.tsv':'text/plain; charset=utf-8','.json':'text/plain; charset=utf-8'};
@@ -41,53 +43,197 @@ function progressDateFields(input:Record<string,unknown>,original?:{day?:string;
  if(kind!==undefined&&kind!=='progress'&&kind!=='task')throw new HttpError(400,'记录类型无效。');
  return {...(day?{day:day as string}:{}),...(kind?{kind:kind as 'progress'|'task'}:{})};
 }
-async function extractedText(filename:string):Promise<string|undefined>{
-  const ext=path.extname(filename).toLowerCase(),stat=await fs.stat(filename);
-  if(textExtensions.has(ext)&&stat.size<=2*1024*1024){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{const bytes=await handle.readFile();if(bytes.includes(0))return undefined;return bytes.toString('utf8');}finally{await handle.close();}}
-  if(ext!=='.pdf'||stat.size>32*1024*1024)return undefined;
-  const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);const bytes=await handle.readFile().finally(()=>handle.close());
+async function extractedText(filename:string,preloadedBytes?:Buffer):Promise<string|undefined>{
+  const ext=path.extname(filename).toLowerCase();
+  const size=preloadedBytes?preloadedBytes.length:(await fs.stat(filename)).size;
+  if(textExtensions.has(ext)&&size<=2*1024*1024){
+    let bytes=preloadedBytes;
+    if(!bytes){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{bytes=await handle.readFile();}finally{await handle.close();}}
+    if(bytes.includes(0))return undefined;
+    return bytes.toString('utf8');
+  }
+  if(ext!=='.pdf'||size>32*1024*1024)return undefined;
+  let bytes=preloadedBytes;
+  if(!bytes){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);bytes=await handle.readFile().finally(()=>handle.close());}
   const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),fonts=path.join(path.dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')),'standard_fonts')+path.sep;
-  const loading=getDocument({data:new Uint8Array(bytes),disableFontFace:true,useSystemFonts:false,standardFontDataUrl:fonts});try{const pdf=await loading.promise;let content='';for(let p=1;p<=Math.min(pdf.numPages,200)&&content.length<2*1024*1024;p++){const page=await pdf.getPage(p),text=await page.getTextContent();content+=text.items.map(item=>'str'in item?item.str:'').join(' ')+'\n';}return content.slice(0,2*1024*1024);}finally{await loading.destroy();}
+  const loading=getDocument({data:new Uint8Array(bytes),disableFontFace:true,useSystemFonts:false,standardFontDataUrl:fonts,verbosity:0});
+  try{
+    const pdf=await loading.promise;
+    let content='';
+    for(let p=1;p<=Math.min(pdf.numPages,200)&&content.length<2*1024*1024;p++){
+      const page=await pdf.getPage(p);
+      try{
+        const text=await page.getTextContent();
+        content+=text.items.map(item=>'str'in item?item.str:'').join(' ')+'\n';
+      }finally{page.cleanup();}
+    }
+    return content.slice(0,2*1024*1024);
+  }finally{await loading.destroy();}
 }
 
-export interface WorkspaceService {close():Promise<void>;busy():boolean;checkpoint():Promise<void>;resourceFile(id:string):Promise<{filename:string;resource:Resource;hash:string}>;overview():Promise<WorkspaceOverview>;resources():Resource[]}
-export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:string,options:{watch?:boolean}={}):Promise<WorkspaceService>{
+export interface WorkspaceService {
+  close():Promise<void>;
+  busy():boolean;
+  checkpoint():Promise<void>;
+  resourceFile(id:string):Promise<{filename:string;resource:Resource;hash:string}>;
+  overview():Promise<WorkspaceOverview>;
+  resources():Resource[];
+  resourcesRef():readonly Resource[];
+  onResourcesChanged(listener:()=>void):()=>void;
+  onEvent?:(event:any)=>void;
+  readingText:ReturnType<typeof createReadingSearch>['readText'];
+}
+export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:string,options:{watch?:boolean;onEvent?:(event:any)=>void}={}):Promise<WorkspaceService>{
   const catalog=await openCatalog(workspaceRoot),state=catalog.state,maintenance=workspaceMaintenance(workspaceRoot),lock=`workspace-catalog:${path.resolve(workspaceRoot)}`;
-  const readingSearch=createReadingSearch(workspaceRoot);
+  const paperMeta=createPaperMetadataService(workspaceRoot);
+  const readingSearch=createReadingSearch(workspaceRoot,{getText:catalog.getText,getMeta:item=>paperMeta.computeMeta(item)});
   const readingCache=layoutStore(workspaceRoot);
   const timelineSources=createTimelineSourceService(workspaceRoot);
-  let active=0,closing=false,closed:Promise<void>|undefined;const scans=new Map<string,Promise<void>>(),watchers=new Map<string,FSWatcher>(),timers=new Map<string,ReturnType<typeof setTimeout>>();
-  async function mutate<T>(work:()=>Promise<T>):Promise<T>{active++;try{return await withLock(lock,async()=>{maintenance.assertAvailable();if(closing)throw new HttpError(503,'工作区目录服务正在停止。');return work();});}finally{active--;}}
+  let active=0,closing=false,closed:Promise<void>|undefined;
+  const scans=new Map<string,Promise<void>>(),rescan=new Set<string>(),scanProgress=new Map<string,number>(),watchers=new Map<string,TreeWatcher>();
+  const resourceListeners=new Set<()=>void>();
+  const notifyResources=()=>{for(const listener of resourceListeners)try{listener();}catch{}};
+  const notebookSummaryCache=new Map<string,{stamp:string;summary:{latestIdea:TopicIdea|null;openCount:number;openIdeaCount:number;keyRefCount:number}}>();
+  async function topicNotebookSummary(topicId:string){
+    if(!/^[a-zA-Z0-9_-]{1,100}$/.test(topicId))return undefined;
+    try{
+      const filename=await assertNoSymlinks(workspaceRoot,`workspace/topic-notebooks/${topicId}.json`,true);
+      const stat=await fs.stat(filename).catch(error=>{if((error as NodeJS.ErrnoException).code==='ENOENT')return null;throw error;});
+      const stamp=stat?`${stat.mtimeMs}:${stat.size}`:'missing';
+      const cached=notebookSummaryCache.get(topicId);
+      if(cached&&cached.stamp===stamp)return cached.summary;
+      const {notebook}=await readTopicNotebook(workspaceRoot,topicId);
+      const openCount=notebook.ideas.filter(idea=>(idea.kind==='question'||idea.kind==='hypothesis'||idea.kind==='todo')&&!idea.done).length;
+      const summary={
+        latestIdea:notebook.ideas[0]??null,
+        openCount,
+        openIdeaCount:openCount,
+        keyRefCount:notebook.keyRefs.length,
+      };
+      notebookSummaryCache.set(topicId,{stamp,summary});
+      if(notebookSummaryCache.size>500)notebookSummaryCache.delete(notebookSummaryCache.keys().next().value!);
+      return summary;
+    }catch{return undefined;}
+  }
+  async function mutate<T>(work:()=>Promise<T>,acceptedScan=false):Promise<T>{active++;try{return await withLock(lock,async()=>{maintenance.assertAvailable();if(closing&&!acceptedScan)throw new HttpError(503,'工作区目录服务正在停止。');return work();});}finally{active--;}}
   const operations=createFileOperations(workspaceRoot,state,()=>catalog.save());await operations.recover();
   const root=(id:string)=>{const item=state.roots.find(r=>r.id===id);if(!item)throw new HttpError(404,'来源目录不存在。');return item;};
   const resource=(id:string)=>{const item=state.resources.find(r=>r.id===id);if(!item)throw new HttpError(404,'资源不存在。');return item;};
+  const publicRoot=(item:SourceRoot)=>({...item,scannedFiles:item.status==='scanning'?scanProgress.get(item.id)??item.scannedFiles:item.scannedFiles});
   async function scanRoot(item:SourceRoot){
-    let count=0;const found:IndexedResource[]=[],existing=new Map<string,IndexedResource>();for(const entry of state.resources.filter(r=>r.rootId===item.id).sort((a,b)=>Number(a.missing)-Number(b.missing)))if(!existing.has(entry.path))existing.set(entry.path,entry);
-    try{
-      const source=await rootFile(workspaceRoot,item,'');
+    for(let pass=0;pass<6;pass++){
+      const {baseline,titles}=await mutate(async()=>{
+        rescan.delete(item.id);
+        scanProgress.set(item.id,0);
+        const baseline=new Map<string,IndexedResource>(),titles=new Map<string,string>();
+        for(const entry of state.resources){
+          if(entry.rootId===item.id)baseline.set(entry.id,{...entry});
+          if(entry.hash&&entry.title&&!titles.has(entry.hash))titles.set(entry.hash,entry.title);
+        }
+        return {baseline,titles};
+      },true);
+      let count=0;
+      const found=new Map<string,IndexedResource>(),existing=new Map<string,IndexedResource>();
+      for(const entry of baseline.values()){
+        const previous=existing.get(entry.path);
+        if(!previous||previous.missing&&!entry.missing)existing.set(entry.path,entry);
+      }
       async function walk(relative:string):Promise<Tree>{
         maintenance.assertAvailable();if(count>=100000)throw new HttpError(413,'来源超过 10 万个文件和目录，请连接更小的目录。');
         const filename=await rootFile(workspaceRoot,item,relative),stat=await fs.lstat(filename);let tree:Tree;
+        const old=relative?existing.get(relative):undefined;
         if(stat.isDirectory()){
           const children=new Map<string,Tree>();for(const entry of (await fs.readdir(filename,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){if(entry.name.startsWith('.')||entry.isSymbolicLink()||(!entry.isDirectory()&&!entry.isFile()))continue;try{children.set(entry.name,await walk(relative?relative+'/'+entry.name:entry.name));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'||(error as HttpError).statusCode===404)continue;throw error;}}
           const digest=createHash('sha256');let size=0;for(const[name,child]of [...children].sort(([a],[b])=>a<b?-1:a>b?1:0)){digest.update(JSON.stringify([name,child.kind,child.hash]));size+=child.size;}tree={kind:'directory',children,hash:digest.digest('hex'),size,modifiedAt:stat.mtime.toISOString(),mode:stat.mode&0o777};
-        }else tree=await snapshot(filename);
-        if(relative){count++;const old=existing.get(relative),record:IndexedResource={id:old?.id||randomUUID(),rootId:item.id,path:relative,name:path.posix.basename(relative),kind:tree.kind,size:tree.size,modifiedAt:tree.modifiedAt,tags:old?.tags||[],...(old?.title&&old.hash===tree.hash?{title:old.title}:{}),missing:false,revision:old?.revision||1,hash:tree.hash};if(old&&(old.hash!==record.hash||old.missing||old.kind!==record.kind||old.modifiedAt!==record.modifiedAt))record.revision++;
-          if(tree.kind==='file'){if(old&&old.hash===record.hash)record.text=old.text;else record.text=await extractedText(filename).catch(()=>undefined);if(!record.title&&/\.pdf$/i.test(record.name)){
-            record.title=state.resources.find(item=>item.hash===record.hash&&item.title)?.title;
-            if(!record.title){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{record.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}}
-          }if(record.text)record.snippet=record.text.replace(/\s+/g,' ').slice(0,240);}if(old&&record.title!==old.title&&record.revision===old.revision)record.revision++;found.push(record);
-          if(count%100===0){item.scannedFiles=count;await catalog.save();}}
+        }else tree=await fastFileSnapshot(filename,old&&old.kind==='file'?old:undefined);
+        if(relative){count++;const record:IndexedResource={id:old?.id||randomUUID(),rootId:item.id,path:relative,name:path.posix.basename(relative),kind:tree.kind,size:tree.size,modifiedAt:tree.modifiedAt,tags:old?.tags||[],...(old?.title&&old.hash===tree.hash?{title:old.title}:{}),...(old?.snippet&&old.hash===tree.hash?{snippet:old.snippet}:{}),missing:false,revision:old?.revision||1,hash:tree.hash};if(old&&(old.hash!==record.hash||old.missing||old.kind!==record.kind||old.modifiedAt!==record.modifiedAt))record.revision++;
+          if(tree.kind==='file'){
+            const contentChanged=!old||old.hash!==record.hash;
+            const needsPdfTitle=!record.title&&/\.pdf$/i.test(record.name)&&!titles.has(tree.hash);
+            let preloaded:Buffer|undefined;
+            if(contentChanged||needsPdfTitle){
+              if(/\.pdf$/i.test(record.name)&&tree.size<=32*1024*1024){
+                const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);
+                try{preloaded=await handle.readFile();}finally{await handle.close();}
+              }
+            }
+            if(contentChanged){
+              const text=await extractedText(filename,preloaded).catch(()=>undefined);
+              if(text!==undefined){record.text=text;record.snippet=text.replace(/\s+/g,' ').slice(0,240);}
+              else{record.text=undefined;delete record.snippet;}
+            }
+            if(!record.title&&/\.pdf$/i.test(record.name)){
+              record.title=titles.get(tree.hash);
+              if(!record.title){
+                if(preloaded)record.title=await pdfTitle(preloaded);
+                else{const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{record.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}}
+              }
+            }
+          }
+          if(old&&record.title!==old.title&&record.revision===old.revision)record.revision++;found.set(record.id,record);
+          if(count%100===0)scanProgress.set(item.id,count);}
         return tree;
       }
-      await walk('');void source;
-      const ids=new Set(found.map(r=>r.id));for(const entry of state.resources)if(entry.rootId===item.id&&!ids.has(entry.id)&&!entry.missing){entry.missing=true;entry.revision++;}
-      for(const entry of found){const index=state.resources.findIndex(r=>r.id===entry.id);if(index<0)state.resources.push(entry);else state.resources[index]=entry;}
-      item.status='ready';item.scannedFiles=count;item.indexedAt=new Date().toISOString();item.revision++;delete item.error;await catalog.save();
-    }catch(error){const code=(error as NodeJS.ErrnoException).code;item.status=(error as HttpError).statusCode===503||code==='ENOENT'||code==='ENOTDIR'?'offline':'error';item.error=(error as Error).message;item.scannedFiles=count;item.revision++;await catalog.save();}
+      let failure:Error|undefined;
+      try{await walk('');}catch(error){failure=error as Error;}
+      const published=await mutate(async()=>{
+        const current=state.resources.filter(entry=>entry.rootId===item.id);
+        // A concurrent edit or watcher event invalidates this snapshot before publication.
+        if(rescan.has(item.id)||current.length!==baseline.size||current.some(entry=>{
+          const old=baseline.get(entry.id);
+          return !old||old.revision!==entry.revision;
+        }))return false;
+        const previous=state.resources;
+        if(failure){
+          const code=(failure as NodeJS.ErrnoException).code;
+          item.status=(failure as HttpError).statusCode===503||code==='ENOENT'||code==='ENOTDIR'?'offline':'error';
+          item.error=failure.message;
+        }else{
+          state.resources=previous.map(entry=>{
+            if(entry.rootId!==item.id)return entry;
+            const scanned=found.get(entry.id);
+            if(scanned){found.delete(entry.id);return scanned;}
+            return entry.missing?entry:{...entry,missing:true,revision:entry.revision+1};
+          });
+          for(const entry of found.values())state.resources.push(entry);
+          item.status='ready';
+          item.indexedAt=new Date().toISOString();
+          delete item.error;
+        }
+        item.scannedFiles=count;
+        item.revision++;
+        try{await catalog.save();}catch(error){state.resources=previous;throw error;}
+        return true;
+      },true);
+      if(published){notifyResources();return;}
+    }
+    rescan.add(item.id);
   }
-  async function requestScan(id:string){return mutate(async()=>{const item=root(id);if(scans.has(id))return clone(item);item.status='scanning';item.scannedFiles=0;item.revision++;delete item.error;await catalog.save();const job=Promise.resolve().then(()=>mutate(()=>scanRoot(item))).catch(async error=>{if(!closing){item.status='error';item.error=(error as Error).message;}}).finally(()=>scans.delete(id));scans.set(id,job);return clone(item);});}
-  function watch(item:SourceRoot){if(options.watch===false||watchers.has(item.id)||closing)return;const watcher=chokidar.watch(item.path,{ignoreInitial:true,followSymlinks:false,awaitWriteFinish:{stabilityThreshold:250,pollInterval:100},ignored:(filename)=>path.relative(item.path,filename).split(path.sep).some(part=>part.startsWith('.'))});watchers.set(item.id,watcher);watcher.on('all',()=>{const timer=timers.get(item.id);if(timer)clearTimeout(timer);timers.set(item.id,setTimeout(()=>{timers.delete(item.id);void requestScan(item.id).catch(()=>{});},300));});watcher.on('error',()=>{void requestScan(item.id).catch(()=>{});});}
+  async function requestScan(id:string,changedWhileScanning=false){return mutate(async()=>{
+    const item=root(id);
+    if(scans.has(id)){if(changedWhileScanning)rescan.add(id);return publicRoot(item);}
+    item.status='scanning';item.scannedFiles=0;item.revision++;delete item.error;
+    await catalog.save();
+    const job=withLock(`${lock}:scan`,()=>scanRoot(item)).catch(error=>{
+      if(!closing){item.status='error';item.error=(error as Error).message;}
+    }).finally(()=>{
+      scans.delete(id);
+      scanProgress.delete(id);
+      if(rescan.delete(id)&&!closing)void requestScan(id,true).catch(()=>{});
+    });
+    scans.set(id,job);
+    return clone(item);
+  });}
+  function watch(item:SourceRoot){
+    if(options.watch===false||watchers.has(item.id)||closing)return;
+    const watcher=watchDirectoryTree(item.path,{
+      debounceMs:250,
+      ignore:relative=>relative.split('/').some(part=>part.startsWith('.')),
+      onChange:()=>{if(!closing)void requestScan(item.id,true).catch(()=>{});},
+      onError:()=>{if(!closing)void requestScan(item.id,true).catch(()=>{});},
+    });
+    watchers.set(item.id,watcher);
+  }
   async function associationIds(value:unknown,kind:'paperIds'|'presentationIds'|'resourceIds'){
     if(!Array.isArray(value)||value.length>5000||value.some(v=>typeof v!=='string'||!v||v.length>200))throw new HttpError(400,'主题关联列表无效。');const ids=[...new Set(value as string[])];
     for(const id of ids){if(kind==='resourceIds'){if(!state.resources.some(r=>r.id===id))throw new HttpError(400,`资源关联不存在：${id}`);}
@@ -101,9 +247,71 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     for(const key of ['experimentPlan','resultSummary','researchBasis'] as const)if(input[key]!==undefined)research[key]=stringValue(input[key],key==='experimentPlan'?'实验记录':key==='researchBasis'?'研究依据':'结果整理',100000);
     if(input.archived!==undefined&&typeof input.archived!=='boolean')throw new HttpError(400,'归档状态无效。');return{title,description,...associations,...research,archived:input.archived===undefined?old?.archived||false:input.archived as boolean};
   }
-  async function resourceFile(id:string){return mutate(async()=>{const item=resource(id);if(item.missing)throw new HttpError(404,'资源原位置已不存在，索引和关联仍保留。');const filename=await rootFile(workspaceRoot,root(item.rootId),item.path);const actual=await snapshot(filename);if(item.hash!==actual.hash||item.modifiedAt!==actual.modifiedAt||item.size!==actual.size){const contentChanged=item.hash!==actual.hash;Object.assign(item,{hash:actual.hash,size:actual.size,modifiedAt:actual.modifiedAt,revision:item.revision+1});if(item.kind==='file'){if(contentChanged&&/\.pdf$/i.test(item.name)){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{item.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}}item.text=await extractedText(filename).catch(()=>undefined);item.snippet=item.text?.replace(/\s+/g,' ').slice(0,240);}await catalog.save();}return{filename,resource:publicResource(item),hash:actual.hash};});}
-  async function overview():Promise<WorkspaceOverview>{const trashed=trashedResourceIds(state);return{topics:clone(state.topics),roots:clone(state.roots),resources:state.resources.filter(item=>!item.missing||!trashed.has(item.id)).sort((a,b)=>Number(b.kind==='file'&&!b.missing)-Number(a.kind==='file'&&!a.missing)||b.modifiedAt.localeCompare(a.modifiedAt)).slice(0,200).map(publicResource),operations:state.operations.slice(-50).reverse().map(publicOperation),externalOriginalsIncludedInBackup:false};}
-  const service:WorkspaceService={overview,resourceFile,resources:()=>state.resources.map(publicResource),busy:()=>active>0||scans.size>0,async checkpoint(){await Promise.all([...scans.values()]);await withLock(lock,async()=>{await catalog.save();catalog.checkpoint();});},async close(){if(closed)return closed;closing=true;closed=(async()=>{for(const timer of timers.values())clearTimeout(timer);timers.clear();await Promise.all([...watchers.values()].map(w=>w.close()));await Promise.allSettled([...scans.values()]);await withLock(lock,async()=>{await catalog.save();catalog.close();});})();return closed;}};
+  async function resourceFile(id:string){
+    maintenance.assertAvailable();
+    const initial=resource(id);
+    if(initial.missing)throw new HttpError(404,'资源原位置已不存在，索引和关联仍保留。');
+    const source=root(initial.rootId);
+    const filename=await rootFile(workspaceRoot,source,initial.path);
+    const actual=initial.kind==='file'?await fastFileSnapshot(filename,initial):await snapshot(filename);
+    if(initial.hash===actual.hash&&initial.modifiedAt===actual.modifiedAt&&initial.size===actual.size){
+      return {filename,resource:publicResource(initial),hash:actual.hash};
+    }
+    return mutate(async()=>{
+      const item=resource(id);
+      if(item.missing)throw new HttpError(404,'资源原位置已不存在，索引和关联仍保留。');
+      const checkedFilename=await rootFile(workspaceRoot,root(item.rootId),item.path);
+      const checked=item.kind==='file'?await fastFileSnapshot(checkedFilename,item):await snapshot(checkedFilename);
+      if(item.hash!==checked.hash||item.modifiedAt!==checked.modifiedAt||item.size!==checked.size){
+        const contentChanged=item.hash!==checked.hash;
+        Object.assign(item,{hash:checked.hash,size:checked.size,modifiedAt:checked.modifiedAt,revision:item.revision+1});
+        if(item.kind==='file'){
+          let preloaded:Buffer|undefined;
+          if(contentChanged&&/\.pdf$/i.test(item.name)&&checked.size<=32*1024*1024){
+            const handle=await fs.open(checkedFilename,constants.O_RDONLY|constants.O_NOFOLLOW);
+            try{preloaded=await handle.readFile();}finally{await handle.close();}
+            item.title=await pdfTitle(preloaded);
+          }else if(contentChanged&&/\.pdf$/i.test(item.name)){
+            const handle=await fs.open(checkedFilename,constants.O_RDONLY|constants.O_NOFOLLOW);
+            try{item.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}
+          }
+          if(contentChanged){
+            const text=await extractedText(checkedFilename,preloaded).catch(()=>undefined);
+            item.text=text;
+            item.snippet=text?.replace(/\s+/g,' ').slice(0,240);
+          }
+        }
+        await catalog.save();
+        notifyResources();
+      }
+      return {filename:checkedFilename,resource:publicResource(item),hash:checked.hash};
+    });
+  }
+  async function overview():Promise<WorkspaceOverview>{
+    const trashed=trashedResourceIds(state);
+    const topics=await Promise.all(state.topics.map(async topic=>{
+      const cloned=clone(topic);
+      const summary=await topicNotebookSummary(topic.id);
+      return summary?Object.assign(cloned,summary):cloned;
+    }));
+    const recent=state.resources.filter(item=>!item.missing||!trashed.has(item.id)).sort((a,b)=>Number(b.kind==='file'&&!b.missing)-Number(a.kind==='file'&&!a.missing)||b.modifiedAt.localeCompare(a.modifiedAt)).slice(0,200).map(publicResource);
+    const enriched=await paperMeta.enrich(recent,state.resources);
+    return{topics,roots:state.roots.map(publicRoot),resources:enriched,operations:state.operations.slice(-50).reverse().map(publicOperation),externalOriginalsIncludedInBackup:false};
+  }
+  const service:WorkspaceService={overview,resourceFile,readingText:readingSearch.readText,resources:()=>state.resources.map(publicResource),resourcesRef:()=>state.resources,onResourcesChanged:listener=>{resourceListeners.add(listener);return()=>resourceListeners.delete(listener);},onEvent:options.onEvent,busy:()=>active>0||scans.size>0,async checkpoint(){await Promise.all([...scans.values()]);await withLock(lock,async()=>{await catalog.save();catalog.checkpoint();});},async close(){
+    if(closed)return closed;
+    closing=true;
+    closed=(async()=>{
+      paperMeta.close();
+      await Promise.all([...watchers.values()].map(w=>w.close()));
+      watchers.clear();
+      // Let a request already persisting a scan publish its job before draining.
+      await withLock(lock,async()=>{});
+      await Promise.allSettled([...scans.values()]);
+      await withLock(lock,async()=>{await catalog.save();catalog.close();});
+    })();
+    return closed;
+  }};
   registerResearchEntryRoutes(app,{root:workspaceRoot,state,mutate,save:()=>catalog.save()});
   registerResearchNoteRoutes(app,{root:workspaceRoot,state,mutate,save:()=>catalog.save(),watch,operations});
   app.get('/api/workspace/overview',()=>overview());
@@ -203,6 +411,7 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
       throw error;
     }
     watch(source);
+    notifyResources();
     return {topic:topic?clone(topic):undefined,resource:publicResource(item),root:clone(source),reused:false,alreadyLinked:false};
   });}
   app.post<{Params:{id:string};Querystring:{expectedRevision:string}}>('/api/workspace/topics/:id/upload',async(request,reply)=>{
@@ -293,10 +502,10 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     const resolved=await resolveWorkTarget({root:workspaceRoot,topic:task.topic,resources:state.resources,roots:state.roots},task.target);
     return{...resolved,path:resolvedTargetPath({root:workspaceRoot,topic:task.topic,resources:state.resources,roots:state.roots},resolved.target),revision:task.topic.revision};
   }));
-  app.get('/api/workspace/roots',async()=>({roots:clone(state.roots)}));
+  app.get('/api/workspace/roots',async()=>({roots:state.roots.map(publicRoot)}));
   app.post('/api/workspace/roots',async(request,reply)=>{
     const item=await mutate(async()=>{const input=bodyObject(request.body),filename=await canonicalRoot(workspaceRoot,input.path);if(state.roots.some(r=>overlaps(r.path,filename)))throw new HttpError(409,'此目录已连接或与已有来源重叠。');if(input.permission!==undefined&&!['read','write'].includes(input.permission as string))throw new HttpError(400,'来源权限无效。');const item:SourceRoot={id:randomUUID(),label:input.label===undefined?path.basename(filename):stringValue(input.label,'来源名称',200,true),path:filename,permission:input.permission==='write'?'write':'read',status:'scanning',scannedFiles:0,revision:1,createdAt:new Date().toISOString()};state.roots.push(item);await catalog.save();return item;});
-    const pending=await requestScan(item.id);watch(item);return reply.code(201).send(pending);
+    watch(item);const pending=await requestScan(item.id);return reply.code(201).send(pending);
   });
   app.patch<{Params:{id:string}}>('/api/workspace/roots/:id',async request=>mutate(async()=>{const input=bodyObject(request.body),item=root(request.params.id);revision(input.expectedRevision,item.revision);if(input.label!==undefined)item.label=stringValue(input.label,'来源名称',200,true);if(input.permission!==undefined){if(!['read','write'].includes(input.permission as string))throw new HttpError(400,'来源权限无效。');item.permission=input.permission as 'read'|'write';}item.revision++;await catalog.save();return clone(item);}));
   app.post<{Params:{id:string}}>('/api/workspace/roots/:id/scan',async(request,reply)=>reply.code(202).send(await requestScan(request.params.id)));
@@ -306,18 +515,28 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     if(query.starredFirst!==undefined&&!['true','false'].includes(query.starredFirst)||query.sort!==undefined&&!['name','recent'].includes(query.sort))throw new HttpError(400,'资料排序参数无效。');
     const topic=query.topicId?state.topics.find(t=>t.id===query.topicId):undefined;if(query.topicId&&!topic)throw new HttpError(404,'研究主题不存在。');const offset=query.offset===undefined?0:Number(query.offset),limit=query.limit===undefined?200:Number(query.limit);if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>1000)throw new HttpError(400,'分页参数无效。');
     const trashed=trashedResourceIds(state);
-    const candidates=state.resources.filter(item=>(!item.missing||!trashed.has(item.id))&&(!query.rootId||item.rootId===query.rootId)&&(parent===undefined||(path.posix.dirname(item.path)==='.'?'':path.posix.dirname(item.path))===parent)&&(!topic||topic.resourceIds.includes(item.id)));
+    const topicResources=topic&&new Set(topic.resourceIds);
+    const candidates=state.resources.filter(item=>(!item.missing||!trashed.has(item.id))&&(!query.rootId||item.rootId===query.rootId)&&(parent===undefined||(path.posix.dirname(item.path)==='.'?'':path.posix.dirname(item.path))===parent)&&(!topicResources||topicResources.has(item.id)));
     const matches=q?await readingSearch.find(candidates,q):undefined;
     if(query.deduplicate!==undefined&&!['true','false'].includes(query.deduplicate))throw new HttpError(400,'去重参数无效。');
-    const priority=topic&&query.starredFirst==='true'?new Set((await readTopicNotebook(workspaceRoot,topic.id)).notebook.keyRefs.map(reference=>reference.resourceId)):new Set<string>();
+    const priority=new Set<string>();
+    let priorityUnavailable=false;
+    if(topic&&query.starredFirst==='true'){
+      try{
+        const {notebook}=await readTopicNotebook(workspaceRoot,topic.id);
+        for(const reference of notebook.keyRefs)priority.add(reference.resourceId);
+      }catch{priorityUnavailable=true;}
+    }
     const found=matches?candidates.filter(item=>matches.has(item.id)):candidates;
     const matching=query.deduplicate==='true'?uniquePaperResources(found,priority):found;
     const groupCounts={paper:0,note:0,summary:0,other:0};
     for(const item of matching)if(item.kind==='file')groupCounts[resourceGroup(item.name)]++;
     const items=matching.filter(item=>!group||(item.kind==='file'&&resourceGroup(item.name)===group)).sort((first,second)=>Number(priority.has(second.id))-Number(priority.has(first.id))||(query.sort==='recent'?second.modifiedAt.localeCompare(first.modifiedAt):0)||compareResourceNames(first,second));
-    return{resources:items.slice(offset,offset+limit).map(item=>({...publicResource(item),...(matches?.has(item.id)?{searchMatch:matches.get(item.id)}:{})})),total:items.length,groupCounts,roots:clone(state.roots),indexing:state.roots.some(r=>r.status==='scanning')}satisfies ResourcePage;
+    const pageItems=items.slice(offset,offset+limit).map(item=>({...publicResource(item),...(matches?.has(item.id)?{searchMatch:matches.get(item.id)}:{})}));
+    const enriched=await paperMeta.enrich(pageItems,state.resources);
+    return{resources:enriched,total:items.length,groupCounts,roots:state.roots.map(publicRoot),indexing:state.roots.some(r=>r.status==='scanning'),...(priorityUnavailable?{priorityUnavailable}: {})}satisfies ResourcePage;
   });
-  app.get<{Params:{id:string}}>('/api/workspace/resources/:id',async request=>{const item=resource(request.params.id);return item.missing?publicResource(item):(await resourceFile(item.id)).resource;});
+  app.get<{Params:{id:string}}>('/api/workspace/resources/:id',async request=>{const item=resource(request.params.id);const base=item.missing?publicResource(item):(await resourceFile(item.id)).resource;return paperMeta.enrichOne(base,state.resources);});
   app.patch<{Params:{id:string}}>('/api/workspace/resources/:id',async request=>mutate(async()=>{
     const input=bodyObject(request.body),item=resource(request.params.id);revision(input.expectedRevision,item.revision);
     if(input.tags===undefined&&!Object.hasOwn(input,'title'))throw new HttpError(400,'请提供资源标题或标签。');
@@ -350,12 +569,43 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     state.resources=state.resources.filter(r=>!remove.has(r.id));if(item.kind==='file'){item.text=await extractedText(filename).catch(()=>undefined);item.snippet=item.text?.replace(/\s+/g,' ').slice(0,240);}await catalog.save();return publicResource(item);
   }));
   app.get<{Params:{id:string}}>('/api/workspace/resources/:id/text',async request=>{const detail=await resourceFile(request.params.id);if(detail.resource.kind!=='file')throw new HttpError(415,'目录不能读取为文本。');const content=await extractedText(detail.filename);if(content===undefined)throw new HttpError(415,'此文件暂不支持文本读取，或超过文本预览大小限制。');return{content,hash:detail.hash};});
-  app.get<{Params:{id:string}}>('/api/workspace/resources/:id/raw',async(request,reply)=>{const detail=await resourceFile(request.params.id);if(detail.resource.kind!=='file')throw new HttpError(415,'目录不支持原始文件预览。');const filename=await rootFile(workspaceRoot,root(detail.resource.rootId),detail.resource.path),ext=path.extname(filename).toLowerCase(),type=previewTypes[ext],handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);reply.header('X-Content-Type-Options','nosniff').header('Content-Security-Policy',"default-src 'none'; sandbox").header('Content-Disposition',`${type?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(detail.resource.name)}`).type(type||'application/octet-stream');return reply.send(handle.createReadStream());});
+  app.get<{Params:{id:string};Querystring:{sourceHash?:string}}>('/api/workspace/resources/:id/raw',async(request,reply)=>{
+    const detail=await resourceFile(request.params.id);
+    if(request.query.sourceHash!==undefined&&request.query.sourceHash!==detail.hash)throw new HttpError(409,'原文已变更，请更新知识关系图后重新打开。');
+    if(detail.resource.kind!=='file')throw new HttpError(415,'目录不支持原始文件预览。');
+    const filename=await rootFile(workspaceRoot,root(detail.resource.rootId),detail.resource.path),ext=path.extname(filename).toLowerCase(),type=previewTypes[ext],handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);
+    try{
+      const stat=await handle.stat();
+      const total=stat.size;
+      reply.header('Accept-Ranges','bytes').header('X-Content-Type-Options','nosniff').header('Content-Security-Policy',"default-src 'none'; sandbox").header('Content-Disposition',`${type?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(detail.resource.name)}`).type(type||'application/octet-stream');
+      const rangeHeader=request.headers.range;
+      if(rangeHeader&&total>0){
+        const match=/^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+        if(!match||(!match[1]&&!match[2])){await handle.close();return reply.code(416).header('Content-Range',`bytes */${total}`).send();}
+        let start=match[1]?Number(match[1]):Math.max(0,total-Number(match[2]));
+        let end=match[2]&&match[1]?Math.min(total-1,Number(match[2])):total-1;
+        if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=total||end<start){
+          await handle.close();
+          return reply.code(416).header('Content-Range',`bytes */${total}`).send();
+        }
+        reply.code(206).header('Content-Range',`bytes ${start}-${end}/${total}`).header('Content-Length',String(end-start+1));
+        return reply.send(handle.createReadStream({start,end}));
+      }
+      reply.header('Content-Length',String(total));
+      return reply.send(handle.createReadStream());
+    }catch(error){
+      await handle.close().catch(()=>{});
+      throw error;
+    }
+  });
   app.get('/api/workspace/operations',async()=>({operations:state.operations.slice().reverse().map(publicOperation)}));
   app.get<{Params:{id:string}}>('/api/workspace/operations/:id/recovery',async(request,reply)=>mutate(async()=>{try{const result=await operations.recoveryDownload(request.params.id);return reply.header('X-Content-Type-Options','nosniff').header('Content-Security-Policy',"default-src 'none'; sandbox").header('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(result.name)}`).type('application/octet-stream').send(result.content);}catch(error){return fileError(error);}}));
   app.post<{Body:FileOperationInput}>('/api/workspace/operations',async(request,reply)=>mutate(async()=>{try{return reply.code(201).send(await operations.apply(request.body));}catch(error){return fileError(error);}}));
   app.post<{Params:{id:string}}>('/api/workspace/operations/:id/undo',async request=>mutate(async()=>{try{return await operations.undo(request.params.id);}catch(error){return fileError(error);}}));
-  app.addHook('onClose',async()=>{await readingSearch.close();await service.close();});for(const item of state.roots)watch(item);
-  readingSearch.warm(state.resources.filter(item=>!item.missing&&/\.pdf$/i.test(item.name)).map(item=>({...item})));
+  app.addHook('onClose',async()=>{await readingSearch.close();await service.close();});
+  for(const item of state.roots){
+    watch(item);
+    if(item.status==='scanning')await requestScan(item.id).catch(()=>{});
+  }
   return service;
 }

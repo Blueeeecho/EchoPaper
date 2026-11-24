@@ -1,5 +1,5 @@
 import {visibleChat,shouldFollowChat,type VisibleChat} from '../chat-follow';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Archive, ArchiveRestore, Check, ChevronDown, Copy, FileText, History, Info, ListChecks, LoaderCircle, Settings2, Plus, Paperclip, RefreshCw, RotateCcw, SendHorizontal, SlidersHorizontal, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { api, downloadText, json } from '../api';
 import { useProjectChats } from '../useProjectChats';
@@ -37,7 +37,7 @@ interface ConversationUi { includeContext: boolean; starting: boolean; taskScope
 const freshUi = (): ConversationUi => ({ includeContext: false, starting: false, taskScope: 'file', writingTask: { kind: 'focused', outputMode: 'suggest', verification: 'none' }, phase: '', error: '' });
 export type TaskStartInput = Omit<AgentCreateInput, 'requestId' | 'targetId' | 'history' | 'compactionId' | 'expectedLastRunId'> & { requestId?: string; expectedLastRunId?: string | null; writingTask?: WritingContract; targetId?:string };
 export type AssistantSend = (input: TaskStartInput) => Promise<void>;
-interface Props { incomingQuote?: WritingQuote; onReadSelection: () => EditSelection | undefined; projectId: string; targetId:string; currentPath: string; currentContent: string; tasks: ProjectTasks; builds: Build[]; onStartTask: (input: TaskStartInput) => Promise<AgentRun>; onOpenFile: (path: string) => void; onViewBuild: (id: string) => void; onClose: () => void; onFlushReady?: (flush: (() => Promise<void>) | undefined) => void; onSendReady?: (send: AssistantSend | undefined) => void }
+interface Props { incomingQuote?: WritingQuote; onReadSelection: () => EditSelection | undefined; projectId: string; targetId:string; currentPath: string; currentContent?: string; getCurrentContent?: () => string; tasks: ProjectTasks; builds: Build[]; onStartTask: (input: TaskStartInput) => Promise<AgentRun>; onOpenFile: (path: string) => void; onViewBuild: (id: string) => void; onClose: () => void; onFlushReady?: (flush: (() => Promise<void>) | undefined) => void; onSendReady?: (send: AssistantSend | undefined) => void }
 const DEFAULT_MODEL = '';
 const EFFORTS: { id: Effort; label: string }[] = [{ id: 'low', label: '快速' }, { id: 'medium', label: '均衡' }, { id: 'high', label: '深入' }, { id: 'xhigh', label: '更深入' }, { id: 'max', label: '最高' }];
 const storageKey = (projectId: string) => `echopaper:ai:${projectId}:v1`;
@@ -58,7 +58,8 @@ async function copyText(text: string) {
   catch { const element = document.createElement('textarea'); element.value = text; element.style.position = 'fixed'; element.style.opacity = '0'; document.body.appendChild(element); element.select(); const copied = document.execCommand('copy'); element.remove(); if (!copied) throw new Error('无法复制，请选中文字后手动复制。'); }
 }
 
-export default function AiPanel({ incomingQuote, onReadSelection, projectId, targetId, currentPath, currentContent, tasks, builds, onStartTask, onOpenFile, onViewBuild, onClose, onFlushReady, onSendReady }: Props) {
+export default memo(function AiPanel({ incomingQuote, onReadSelection, projectId, targetId, currentPath, currentContent = '', getCurrentContent, tasks, builds, onStartTask, onOpenFile, onViewBuild, onClose, onFlushReady, onSendReady }: Props) {
+  const readContent = () => getCurrentContent ? getCurrentContent() : currentContent;
   const [stored, setStored] = useState<StoredChat>(() => restore(projectId));
   const storedRef = useRef(stored);
   // baseRef is the persisted form; storedRef/stored is the display view rebuilt from durable runs.
@@ -154,7 +155,7 @@ export default function AiPanel({ incomingQuote, onReadSelection, projectId, tar
   const willQueue=busy||queuedTurns.some(turn=>turn.conversationId===conversation.id);
   const pendingAttachments=conversation.pendingAttachments||[],currentUploads=uploads[conversation.id]||[],attachmentsBlocked=currentUploads.length>0;
   const taskError = conversation.messages.some(message => message.taskId && message.taskId === tasks.selectedId) ? tasks.error : '';
-  const legacyMeter = useMemo(() => contextMeter(chatMessages(conversation.messages), conversation.contextState, conversation.contextUsage, conversation.model, conversation.input + (includeContext ? currentContent : '')), [conversation, includeContext, currentContent]);
+  const legacyMeter = useMemo(() => contextMeter(chatMessages(conversation.messages), conversation.contextState, conversation.contextUsage, conversation.model, conversation.input + (includeContext ? readContent() : '')), [conversation, includeContext, currentContent]);
   const contextRun = tasks.runs.filter(run=>run.conversationId===conversation.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
   const requestContext = contextRun?.context?.modelId===conversation.model ? contextRun.context : undefined;
   const meter = requestContext ? {tokens:requestContext.tokens,estimated:requestContext.estimated} : legacyMeter;
@@ -234,20 +235,20 @@ export default function AiPanel({ incomingQuote, onReadSelection, projectId, tar
   useEffect(() => {
     // Display only: rebuild from durable runs without queueing a save.
     const shown = chatView(baseRef.current);
-    if (JSON.stringify(shown) !== JSON.stringify(storedRef.current)) { storedRef.current = shown; if (mounted.current) setStored(shown); }
+    if (shown !== storedRef.current && JSON.stringify(shown) !== JSON.stringify(storedRef.current)) { storedRef.current = shown; if (mounted.current) setStored(shown); }
     for (const [id, before] of acceptedRuns.current) acceptedRuns.current.set(id, tasks.runs.find(run => run.id === before.id) || before);
-  }, [tasks.runs, tasks.details, stored]);
+  }, [tasks.runs, tasks.details]);
   useEffect(() => {
     const ids = new Set(conversation.messages.map(message => message.taskId).filter((id): id is string => !!id));
     for (const id of ids) { const run = tasks.runs.find(item => item.id === id), detail = tasks.details[id]; if (run && (!detail || run.version > detail.run.version)) void tasks.load(id).catch(() => {}); }
   }, [conversation.id, conversation.messages, tasks.runs, tasks.details, tasks.load]);
-  useEffect(() => { if (recordsOpen) for (const run of tasks.runs) if (!tasks.details[run.id]) void tasks.load(run.id).catch(() => {}); }, [recordsOpen, tasks.runs, tasks.details, tasks.load]);
+  useEffect(() => { if (recordsOpen) for (const run of tasks.runs.slice(0, 10)) if (!tasks.details[run.id]) void tasks.load(run.id).catch(() => {}); }, [recordsOpen, tasks.runs, tasks.details, tasks.load]);
 
   async function changeModel(model: string) {
     const efforts = config?.models.find(m => m.id === model)?.efforts || [];
     editConversation(conversation.id, item => ({ ...item, model, ...(efforts.length && !efforts.includes(item.effort) ? { effort: (efforts.includes('medium') ? 'medium' : efforts[0]) as Effort } : {}) })); setModelSaving(true); setError('');
     try { const result = await api<AiConfig>('/api/ai/config', json('PUT', { defaultModel: model, expectedRevision: config?.revision })); if (mounted.current) setConfig(result); }
-    catch (e: any) { if (mounted.current) setError(`默认模型未能保存：${e.message}`, conversation.id); }
+    catch (e: any) { if (mounted.current) { setError(`默认模型未能保存：${e.message}`, conversation.id); if (e?.status === 409) void loadConfig(); } }
     finally { if (mounted.current) setModelSaving(false); }
   }
 
@@ -293,12 +294,13 @@ export default function AiPanel({ incomingQuote, onReadSelection, projectId, tar
       return;
     }
     let inferred: ReturnType<typeof writingRequest> | undefined;
+    const activeContent = readContent();
     if (!quick) {
       try {
-        inferred = writingRequest(active.input, { projectId, path: draft.fileTarget || currentPath, content: currentContent, selection: draft.selection, pdfReference: !draft.fileTarget && draft.reference?.path.startsWith('PDF'), fileReference: !!draft.fileTarget });
+        inferred = writingRequest(active.input, { projectId, path: draft.fileTarget || currentPath, content: activeContent, selection: draft.selection, pdfReference: !draft.fileTarget && draft.reference?.path.startsWith('PDF'), fileReference: !!draft.fileTarget });
       } catch (error: any) { setError(error.message, active.id); return; }
     }
-    const reference=queued?.reference||(!quick&&draft.reference?draft.reference:!quick&&draft.taskScope==='selection'&&draft.selection?{path:draft.selection.path,content:draft.selection.text}:!quick&&draft.includeContext&&currentPath?{path:currentPath,content:currentContent}:undefined);
+    const reference=queued?.reference||(!quick&&draft.reference?draft.reference:!quick&&draft.taskScope==='selection'&&draft.selection?{path:draft.selection.path,content:draft.selection.text}:!quick&&draft.includeContext&&currentPath?{path:currentPath,content:activeContent}:undefined);
     if(!queued&&(sending.current.has(active.id)||queuedRef.current.some(item=>item.conversationId===active.id))){
       const request={...quick,...(!quick?inferred:{}),requestId:quick?.requestId||crypto.randomUUID(),input:prompt,modelId:active.model,...(activeModel.efforts?.includes(active.effort)?{effort:active.effort}:{}),...(attachedFiles.length?{attachments:attachedFiles.map(item=>item.id)}:{})};
       updateQueue(items=>[...items,{conversationId:active.id,createdAt:new Date().toISOString(),state:'waiting',mode:'followup',request,reference,...(attachedFiles.length?{attachments:attachedFiles}:{})}]);
@@ -321,7 +323,9 @@ export default function AiPanel({ incomingQuote, onReadSelection, projectId, tar
       if (!mounted.current) throw new Error('论文已切换，本轮消息未执行；原会话内容已保留。');
       const latestConversation = storedRef.current.conversations.find(item => item.id === active.id);
       if (!latestConversation || conversationState(latestConversation) !== 'active') throw new Error('此对话已在其他窗口归档或删除，请恢复后再继续。');
-      const expectedLastRunId = conversationHead(storedRef.current.conversations.find(item => item.id === active.id)?.messages || active.messages);
+      const msgHead = conversationHead(latestConversation.messages);
+      const runHead = tasks.runs.filter(run => run.conversationId === active.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id ?? null;
+      const expectedLastRunId = runHead || msgHead;
       editConversation(active.id, item => ({ ...item, input: quick||item.input!==active.input ? item.input : '', ...(!quick?{pendingAttachments:(item.pendingAttachments||[]).filter(attachment=>!attachedFiles.some(sent=>sent.id===attachment.id))}:{}), title: item.messages.length ? item.title : prompt.slice(0, 28), messages: [...item.messages.filter(message=>message.id!==user.id&&message.id!==assistant.id), user, assistant] }));
       submitted = true; setPhase(ongoing?'正在按新要求调整…':'', active.id);
       submittedPayload ||= structuredClone({targetId,...{ requestId: user.id, input, ...(quick?.attachments?.length?{attachments:quick.attachments}:attachedFiles.length?{attachments:attachedFiles.map(attachment=>attachment.id)}:{}), conversationId: active.id, expectedLastRunId, ...(ongoing&&ongoing.id===expectedLastRunId?{followUpOf:ongoing.id}:{}), modelId: requestedModel, ...(activeModel.efforts?.includes(queued?.request.effort||active.effort) ? { effort: queued?.request.effort||active.effort } : {}), ...(quick?.roleId ? { roleId: quick.roleId } : {}), ...(quick?.scope ? { scope: quick.scope } : {}), ...(quick?.buildId ? { buildId: quick.buildId } : {}), ...(quick?.diagnostic ? { diagnostic: quick.diagnostic } : {}), ...(!quick ? inferred : quick.writingTask ? { writingTask: quick.writingTask } : {}) }});
@@ -464,7 +468,7 @@ export default function AiPanel({ incomingQuote, onReadSelection, projectId, tar
       <ComposerAttachments projectId={projectId} attachments={pendingAttachments} uploads={currentUploads} onRemove={id=>editConversation(conversation.id,item=>({...item,pendingAttachments:(item.pendingAttachments||[]).filter(attachment=>attachment.id!==id)}))} onRemoveUpload={id=>removeUpload(conversation.id,id)} onRetry={upload=>void uploadAttachment(upload.file,conversation.id,upload)} onPreview={setPreview}/>
       <input type="file" hidden multiple accept={ATTACHMENT_ACCEPT} ref={fileInput} aria-label="选择 AI 附件" onChange={event=>{addFiles(Array.from(event.currentTarget.files||[]));event.currentTarget.value='';}}/>
       {queuedTurns.filter(turn=>turn.conversationId===conversation.id).map(turn=><section key={turn.request.requestId} className="ai-queued-turn" aria-label="待发送消息"><div role="status"><strong>{turn.state==='held'?'发送待核对':turn.mode==='followup'?'准备跟进':'已排队'}</strong><span>{turn.state==='held'?turn.error:turn.mode==='followup'?'正在同步上一条消息，随后立即按新要求调整。':currentRun?.status==='waiting_confirmation'?'上一轮等待审阅，请先接受或停止建议。':'上一轮结束后自动发送。'}</span><p>{turn.request.input}</p></div>{turn.state==='held'&&<button onClick={()=>{void tasks.refresh().then(()=>updateQueue(items=>items.map(item=>item.request.requestId===turn.request.requestId?{...item,state:'waiting',error:undefined}:item)));}}>核对后重试</button>}<button onClick={()=>{editConversation(conversation.id,item=>({...item,input:item.input.trim()?turn.request.input+'\n\n'+item.input:turn.request.input,pendingAttachments:uniqueAttachments([...(item.pendingAttachments||[]),...(turn.attachments||[])])}));updateQueue(items=>items.filter(item=>item.request.requestId!==turn.request.requestId));}} disabled={drainingTurns.current.has(conversation.id)}>取消排队</button></section>)}
-      <textarea aria-label="AI 消息" onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter((file):file is File=>!!file);if(files.length){event.preventDefault();addFiles(files);}}} placeholder={isConfigured ? '提问，或粘贴、拖入图片与文件…' : '配置模型与 API 后可在此发送消息'} value={conversation.input} onChange={e => editConversation(conversation.id, item => ({ ...item, input: e.target.value }))} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); } }} rows={3}/><div className="ai-composer-toolbar"><button type="button" className="ai-composer-attach" aria-label="添加图片或文件" title="添加图片或文件，也可拖入或粘贴图片" disabled={!remoteChats.ready||starting} onClick={()=>fileInput.current?.click()}><Paperclip size={15}/></button><span className="ai-composer-hint">图片 / 文件 · Enter 发送</span>{currentRun && <button className="ai-stop" aria-label="停止当前操作" onClick={() => void tasks.action('cancel', {}, currentRun.id)}><Square size={12}/>停止</button>}<button className="ai-send" disabled={!isConfigured || !taskModelAllowed || (!conversation.input.trim()&&!pendingAttachments.length) || attachmentsBlocked || contextLoading || configLoading || modelSaving || !remoteChats.ready} aria-label={willQueue?'跟进当前任务':'发送 AI 消息'} onClick={() => void send()}><SendHorizontal size={15}/>{willQueue&&<span>立即跟进</span>}</button></div></div>
+      <textarea aria-label="AI 消息" onPaste={event=>{const files=Array.from(event.clipboardData.items).filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter((file):file is File=>!!file);if(files.length){event.preventDefault();addFiles(files);}}} placeholder={isConfigured ? '提问，或粘贴、拖入图片与文件…' : '配置模型与 API 后可在此发送消息'} value={conversation.input} onChange={e => editConversation(conversation.id, item => ({ ...item, input: e.target.value }), false)} onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !composing.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); } }} rows={3}/><div className="ai-composer-toolbar"><button type="button" className="ai-composer-attach" aria-label="添加图片或文件" title="添加图片或文件，也可拖入或粘贴图片" disabled={!remoteChats.ready||starting} onClick={()=>fileInput.current?.click()}><Paperclip size={15}/></button><span className="ai-composer-hint">图片 / 文件 · Enter 发送</span>{currentRun && <button className="ai-stop" aria-label="停止当前操作" onClick={() => void tasks.action('cancel', {}, currentRun.id)}><Square size={12}/>停止</button>}<button className="ai-send" disabled={!isConfigured || !taskModelAllowed || (!conversation.input.trim()&&!pendingAttachments.length) || attachmentsBlocked || contextLoading || configLoading || modelSaving || !remoteChats.ready} aria-label={willQueue?'跟进当前任务':'发送 AI 消息'} onClick={() => void send()}><SendHorizontal size={15}/>{willQueue&&<span>立即跟进</span>}</button></div></div>
     {preview&&<AttachmentPreviewDialog preview={preview} onClose={()=>setPreview(undefined)}/>}
   </aside>;
-}
+});

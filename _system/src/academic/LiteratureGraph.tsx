@@ -1,40 +1,407 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
-import {Minus,Plus,Maximize,Search} from 'lucide-react';
-import type {ArticleAnalysis,LiteratureFact} from '../../shared/literature-analysis';
-import {ANALYSIS_FIELDS} from '../../shared/literature-analysis';
-import {literatureEntities,layoutLiteratureNetwork} from '../../shared/literature-graph';
-import './TopicWorkspace.css';
-import {graphLabelLines} from './graph-label';
-const colors={paper:'#315c48',model:'#6489ad',dataset:'#b18a43',method:'#8e78a5'};
-export default function LiteratureGraph({articles,onEvidence}:{articles:ArticleAnalysis[];onEvidence:(refs:{article:ArticleAnalysis;fact:LiteratureFact}[])=>void}){
- const [field,setField]=useState<'all'|'model'|'dataset'|'method'>('all'),[query,setQuery]=useState(''),[labels,setLabels]=useState(true),[highlight,setHighlight]=useState(''),[hover,setHover]=useState(''),[limit,setLimit]=useState(8),[scope,setScope]=useState<'focus'|'all'>('focus'),[focus,setFocus]=useState('');
- const svg=useRef<SVGSVGElement>(null),drag=useRef<{id?:string;x:number;y:number;moved:boolean}|undefined>(undefined),[camera,setCamera]=useState({x:480,y:260,k:1}),[positions,setPositions]=useState<Record<string,{x:number;y:number}>>({});
- const [viewport,setViewport]=useState({width:960,height:520});
- useEffect(()=>{const element=svg.current;if(!element)return;const update=()=>{const rect=element.getBoundingClientRect();setViewport({width:Math.max(1,rect.width),height:Math.max(1,rect.height)});};update();if(typeof ResizeObserver==='undefined')return;const observer=new ResizeObserver(update);observer.observe(element);return()=>observer.disconnect();},[]);
- const viewportScale=Math.min(viewport.width/960,viewport.height/520),labelSize=14/Math.max(.01,camera.k*viewportScale);
- const minimumZoom=scope==='focus'?.8:.015;
- const fingerprint=articles.map(a=>a.resourceId+':'+a.sourceHash+':'+a.analyzedAt).join('|');
- const eligible=useMemo(()=>literatureEntities(articles,field).filter(e=>!query||e.label.toLowerCase().includes(query.toLowerCase())),[fingerprint,field,query]);
- const focalId=articles.find(a=>a.resourceId===focus)?.resourceId||articles.find(a=>eligible.some(e=>e.references.some(r=>r.article.resourceId===a.resourceId)))?.resourceId||articles[0]?.resourceId;
- const network=useMemo(()=>{const all=scope==='focus'?eligible.filter(e=>e.references.some(r=>r.article.resourceId===focalId)):eligible,entities=all.slice(0,limit),paperIds=new Set(scope==='focus'?[focalId]:entities.flatMap(e=>e.references.map(r=>r.article.resourceId))),papers=articles.filter(a=>paperIds.has(a.resourceId));
- const nodes=[...papers.map(a=>({id:`paper:${a.resourceId}`,label:a.title,kind:'paper' as const,refs:a.facts.map(fact=>({article:a,fact})),count:1})),...entities.map(e=>({id:e.id,label:e.label,kind:e.field as 'model'|'dataset'|'method',refs:e.references,count:new Set(e.references.map(r=>r.article.resourceId)).size}))];const edges=entities.flatMap(e=>[...new Set(e.references.map(r=>r.article.resourceId))].filter(id=>paperIds.has(id)).map(id=>({source:`paper:${id}`,target:e.id})));return{nodes,edges,total:all.length};},[fingerprint,eligible,scope,focalId,limit]);
- function fit(points=positions){const values=Object.values(points);if(!values.length){setCamera({x:480,y:260,k:1});return;}const xs=values.map(p=>p.x),ys=values.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),k=Math.max(minimumZoom,Math.min(1.7,760/Math.max(150,maxX-minX),360/Math.max(150,maxY-minY)));setCamera({x:480-(minX+maxX)/2*k,y:260-(minY+maxY)/2*k,k});}
- useEffect(()=>{const layout=scope==='focus'?network.nodes.map((n,i)=>({id:n.id,x:i===0?0:Math.cos((i-1)*2*Math.PI/Math.max(1,network.nodes.length-1))*300,y:i===0?0:Math.sin((i-1)*2*Math.PI/Math.max(1,network.nodes.length-1))*170})):layoutLiteratureNetwork(network.nodes.map(n=>n.id),network.edges);const points=Object.fromEntries(layout.map(p=>[p.id,{x:p.x,y:p.y}]));setPositions(points);setHighlight('');fit(points);},[network,scope]);
- const point=(clientX:number,clientY:number)=>{const element=svg.current!;const p=element.createSVGPoint();p.x=clientX;p.y=clientY;return p.matrixTransform(element.getScreenCTM()!.inverse());};
- function zoom(factor:number,at={x:480,y:260}){setCamera(c=>{const k=Math.max(minimumZoom,Math.min(8,c.k*factor)),ratio=k/c.k;return{x:at.x-(at.x-c.x)*ratio,y:at.y-(at.y-c.y)*ratio,k};});}
- useEffect(()=>{const element=svg.current;if(!element)return;const wheel=(event:WheelEvent)=>{event.preventDefault();zoom(Math.exp(-Math.max(-80,Math.min(80,event.deltaY))*.006),point(event.clientX,event.clientY));};element.addEventListener('wheel',wheel,{passive:false});return()=>element.removeEventListener('wheel',wheel);},[minimumZoom]);
- const selected=highlight||hover,neighbours=new Set(network.edges.filter(e=>e.source===selected||e.target===selected).flatMap(e=>[e.source,e.target]));
- return <div className="lit-network"><div className="lit-network-toolbar"><div className="lit-segments" aria-label="关系类型">{(['all','model','dataset','method'] as const).map(f=><button key={f} aria-pressed={field===f} onClick={()=>{setField(f);setLimit(8);}}>{f==='all'?'全部':ANALYSIS_FIELDS[f]}</button>)}</div><label className="lit-network-search"><Search size={13}/><input aria-label="搜索知识节点" placeholder="查找节点…" value={query} onChange={e=>setQuery(e.target.value)}/></label><label className="lit-network-label-toggle"><input type="checkbox" disabled={scope==='all'} checked={labels} onChange={e=>setLabels(e.target.checked)}/> {scope==='all'?'概览标注选中项':'标签'}</label></div>
- <div className="lit-network-scope"><button aria-pressed={scope==='focus'} onClick={()=>{setScope('focus');setLimit(8);}}>单篇一跳</button><button aria-pressed={scope==='all'} onClick={()=>{setScope('all');setLimit(Math.max(40,eligible.length));}}>全图</button><label>焦点论文 <select aria-label="焦点论文" value={focalId||''} onChange={e=>{setFocus(e.target.value);setScope('focus');setLimit(8);}}>{articles.map(a=><option key={a.resourceId} value={a.resourceId}>{a.title}</option>)}</select></label><button onClick={()=>{setField('all');setQuery('');setFocus('');setScope('focus');setLimit(8);}}>重置局部视图</button><button onClick={()=>{const list=document.getElementById('lit-network-relations') as HTMLDetailsElement|null;if(list){list.open=true;list.scrollIntoView({block:'nearest'});list.querySelector('summary')?.focus();}}}>文字关系列表</button></div>
- <p role="status">{scope==='focus'?'当前范围：焦点论文及其模型、数据集、方法（前 '+limit+' 项）':'全图概览：显示筛选后的全部关系，自动适配；选中节点可查看完整名称和原文。细读请切换单篇一跳'}。</p>
- <div className="lit-network-stage"><svg ref={svg} viewBox="0 0 960 520" aria-label="可自由缩放和拖动的文献知识网络" role="group" onPointerDown={e=>{const p=point(e.clientX,e.clientY);drag.current={x:p.x,y:p.y,moved:false};e.currentTarget.setPointerCapture(e.pointerId);setHighlight('');}} onPointerMove={e=>{const d=drag.current;if(!d)return;const p=point(e.clientX,e.clientY),dx=p.x-d.x,dy=p.y-d.y;if(Math.hypot(dx,dy)>1)d.moved=true;d.x=p.x;d.y=p.y;if(d.id){const id=d.id;setPositions(v=>({...v,[id]:{x:v[id].x+dx/camera.k,y:v[id].y+dy/camera.k}}));}else setCamera(c=>({...c,x:c.x+dx,y:c.y+dy}));}} onPointerUp={e=>{const d=drag.current;if(d?.id&&!d.moved){const n=network.nodes.find(n=>n.id===d.id);if(n){setHighlight(n.id);onEvidence(n.refs);}}drag.current=undefined;if(e.currentTarget.hasPointerCapture(e.pointerId))e.currentTarget.releasePointerCapture(e.pointerId);}} onPointerCancel={()=>{drag.current=undefined;}} onDoubleClick={()=>fit()}>
- <defs><pattern id="lit-network-grid" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#b9c6b1"/></pattern></defs><rect width="960" height="520" fill="url(#lit-network-grid)"/>
- <g transform={`translate(${camera.x} ${camera.y}) scale(${camera.k})`}>
- {network.edges.map(e=>{const a=positions[e.source],b=positions[e.target];return a&&b?<line key={e.source+e.target} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={selected&&neighbours.has(e.source)&&neighbours.has(e.target)?'#446a47':'#b6c7ae'} strokeWidth={selected&&neighbours.has(e.source)&&neighbours.has(e.target)?1.8:1} opacity={!selected||e.source===selected||e.target===selected? .8:.12}/>:null;})}
- {network.nodes.map(n=>{const p=positions[n.id];if(!p)return null;const r=n.kind==='paper'?12:6+Math.min(5,n.count),active=!selected||selected===n.id||neighbours.has(n.id);return <g key={n.id} transform={`translate(${p.x} ${p.y})`} tabIndex={0} role="button" aria-label={`${n.kind==='paper'?'论文':ANALYSIS_FIELDS[n.kind]}：${n.label}`} opacity={active?1:.2} className="lit-network-node" onPointerEnter={()=>setHover(n.id)} onPointerLeave={()=>setHover('')} onPointerDown={e=>{e.stopPropagation();const p=point(e.clientX,e.clientY);drag.current={id:n.id,x:p.x,y:p.y,moved:false};svg.current?.setPointerCapture(e.pointerId);}} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setHighlight(n.id);onEvidence(n.refs);}}}><title>{n.label}</title><circle r={r+5} fill={colors[n.kind]} opacity={selected===n.id? .2:.07}/><circle r={r} fill={colors[n.kind]} stroke="#fffefa" strokeWidth="2"/>{((labels&&scope==='focus')||selected===n.id)&&<text y={r+labelSize*1.25} textAnchor="middle" fill="#3a4936" style={{fontSize:labelSize}} paintOrder="stroke" stroke="#f5f7ef" strokeWidth={labelSize*.18}>{graphLabelLines(n.label).map((line,i)=><tspan key={i} x={0} dy={i?labelSize*1.2:0}>{line}</tspan>)}</text>}</g>;})}
- </g></svg>
- {!network.nodes.length&&<div className="lit-network-empty">暂无匹配的知识关系</div>}
- <div className="lit-network-controls"><button aria-label="放大知识网络" onClick={()=>zoom(1.25)}><Plus size={17}/></button><span>{Math.round(camera.k*100)}%</span><button aria-label="缩小知识网络" onClick={()=>zoom(.8)}><Minus size={17}/></button><button aria-label="重置当前范围视角" onClick={()=>fit()}><Maximize size={17}/></button></div><span className="lit-network-hint">滚轮缩放 · 拖动画布或节点 · 双击重置当前视角</span></div>
- {selected&&network.nodes.find(n=>n.id===selected)&&<div className="lit-network-selected-label">{network.nodes.find(n=>n.id===selected)!.label}<button onClick={()=>onEvidence(network.nodes.find(n=>n.id===selected)!.refs)}>查看原文依据</button></div>}<footer className="lit-network-footer"><div>{Object.entries(colors).map(([key,color])=><span key={key}><i style={{background:color}}/>{key==='paper'?'论文':ANALYSIS_FIELDS[key as 'model'|'dataset'|'method']}</span>)}</div><span>{network.nodes.length} 节点 · {network.edges.length} 关系</span>{network.total>limit&&<button onClick={()=>setLimit(n=>n+8)}>加载更多节点</button>}</footer><details id="lit-network-relations" className="lit-network-relations"><summary>文字关系列表（{network.edges.length}）与原文依据</summary><ul>{network.edges.map(edge=>{const paper=network.nodes.find(n=>n.id===edge.source)!,entity=network.nodes.find(n=>n.id===edge.target)!;return <li key={edge.source+edge.target}><button onClick={()=>onEvidence(entity.refs.filter(r=>`paper:${r.article.resourceId}`===paper.id))}>{paper.label} → {entity.kind==='paper'?'论文':ANALYSIS_FIELDS[entity.kind]}：{entity.label} · 查看来源</button></li>;})}</ul></details><p className="lit-footnote">仅呈现引用文字与页码已匹配的实体关系；匹配不代表科学结论已验证。连线表示论文中的模型、数据集或方法实体，并非论文互引或因果关系。点击节点或文字关系查看原文依据。</p>
+import {Columns3,Crosshair,Maximize,Minus,Network,Plus,Search,Tag,X} from 'lucide-react';
+import {
+ KNOWLEDGE_ENTITIES,
+ KNOWLEDGE_RELATIONS,
+ knowledgeEdges,
+ knowledgeName,
+ type KnowledgeEdge,
+ type KnowledgeEntityKind,
+ type KnowledgePaper,
+ type KnowledgePredicate,
+ type KnowledgeReference,
+} from '../../shared/literature-graph';
+import {
+ ENTITY_COLORS,
+ GraphEngine,
+ type GraphEngineNode,
+ type LayoutMode,
+} from './graphEngine';
+
+export interface EvidenceSelection {
+ title:string;
+ subtitle:string;
+ kind?:KnowledgeEntityKind;
+ refs:KnowledgeReference[];
+}
+
+const ALL_KINDS=Object.keys(KNOWLEDGE_ENTITIES) as KnowledgeEntityKind[];
+const ALL_PREDICATES=Object.keys(KNOWLEDGE_RELATIONS) as KnowledgePredicate[];
+const SOFT_EDGE_CAP=400;
+
+export default function LiteratureGraph({
+ papers,
+ onEvidence,
+ onClearEvidence,
+}:{
+ papers:KnowledgePaper[];
+ onEvidence:(selection:EvidenceSelection,trigger?:HTMLElement|null)=>void;
+ onClearEvidence:()=>void;
+}){
+ const [layoutMode,setLayoutMode]=useState<LayoutMode>('layered');
+ const [predicate,setPredicate]=useState<KnowledgePredicate|'all'>('all');
+ const [hiddenKinds,setHiddenKinds]=useState<Set<KnowledgeEntityKind>>(()=>new Set());
+ const [scope,setScope]=useState<'all'|'focus'>('all');
+ const [focus,setFocus]=useState('');
+ const [query,setQuery]=useState('');
+ const [showLabels,setShowLabels]=useState(true);
+ const [showAllEdges,setShowAllEdges]=useState(false);
+ const [zoomPct,setZoomPct]=useState(100);
+ const [selectedSummary,setSelectedSummary]=useState<{id:string;type:'node'|'edge';label:string;refs:KnowledgeReference[]} | null>(null);
+
+ const canvasRef=useRef<HTMLCanvasElement>(null);
+ const engineRef=useRef<GraphEngine|null>(null);
+ const relationListRef=useRef<HTMLDetailsElement>(null);
+
+ const allEdges=useMemo(()=>knowledgeEdges(papers),[papers]);
+ const focalPapers=useMemo(()=>papers.filter(paper=>paper.relations.length>0),[papers]);
+ const focalId=(focalPapers.find(paper=>paper.resourceId===focus)
+  ??focalPapers.find(paper=>paper.relations.some(relation=>relation.subject))
+  ??focalPapers[0])?.resourceId;
+
+ // Edges scoped by paper focus (used to compute predicate & kind counts cleanly)
+ const scopedEdges=useMemo(()=>{
+  if(scope==='all')return allEdges;
+  return allEdges.flatMap(edge=>{
+   const refs=edge.refs.filter(ref=>ref.paper.resourceId===focalId);
+   return refs.length?[{...edge,refs}]:[];
+  });
+ },[allEdges,scope,focalId]);
+
+ const predicateCounts=useMemo(()=>{
+  const counts:Partial<Record<KnowledgePredicate,number>>={};
+  for(const edge of scopedEdges){
+   counts[edge.predicate]=(counts[edge.predicate]||0)+1;
+  }
+  return counts;
+ },[scopedEdges]);
+
+ // Filtered edges by predicate, hidden entity kinds, and search query
+ const matchingEdges=useMemo(()=>{
+  const term=knowledgeName(query);
+  return scopedEdges.flatMap(edge=>{
+   if(predicate!=='all'&&edge.predicate!==predicate)return [];
+   if(hiddenKinds.has(edge.source.kind)||hiddenKinds.has(edge.target.kind))return [];
+   if(!term)return [edge];
+   const labelsMatch=knowledgeName([edge.source.label,edge.target.label,KNOWLEDGE_RELATIONS[edge.predicate]].join(' ')).includes(term);
+   if(labelsMatch)return [edge];
+   const refs=edge.refs.filter(({paper,relation})=>
+    knowledgeName([paper.title,relation.quote,relation.translation||''].join(' ')).includes(term),
+   );
+   return refs.length?[{...edge,refs}]:[];
+  });
+ },[scopedEdges,predicate,hiddenKinds,query]);
+
+ const displayedEdges=useMemo(()=>{
+  if(showAllEdges||matchingEdges.length<=SOFT_EDGE_CAP)return matchingEdges;
+  return matchingEdges.slice(0,SOFT_EDGE_CAP);
+ },[matchingEdges,showAllEdges]);
+
+ const network=useMemo(()=>{
+  const nodeMap=new Map<string,GraphEngineNode>();
+  const degreeMap=new Map<string,number>();
+  for(const edge of displayedEdges){
+   degreeMap.set(edge.source.id,(degreeMap.get(edge.source.id)||0)+1);
+   degreeMap.set(edge.target.id,(degreeMap.get(edge.target.id)||0)+1);
+   for(const endpoint of [edge.source,edge.target]){
+    const existing=nodeMap.get(endpoint.id)??{...endpoint,refs:[],degree:0};
+    for(const ref of edge.refs){
+     if(!existing.refs.includes(ref))existing.refs.push(ref);
+    }
+    nodeMap.set(endpoint.id,existing);
+   }
+  }
+  const nodes=[...nodeMap.values()].map(node=>({...node,degree:degreeMap.get(node.id)||1}));
+  const edgeMap=new Map(displayedEdges.map(edge=>[edge.id,edge]));
+  return {nodes,edges:displayedEdges,nodeMap,edgeMap};
+ },[displayedEdges]);
+
+ // Entity kind counts across current scoped edges (so toggled-off kinds still show their counts!)
+ const kindCounts=useMemo(()=>{
+  const seen=new Map<KnowledgeEntityKind,Set<string>>();
+  for(const kind of ALL_KINDS)seen.set(kind,new Set());
+  for(const edge of scopedEdges){
+   if(predicate!=='all'&&edge.predicate!==predicate)continue;
+   seen.get(edge.source.kind)?.add(edge.source.id);
+   seen.get(edge.target.kind)?.add(edge.target.id);
+  }
+  const result:Record<KnowledgeEntityKind,number>={paper:0,method:0,problem:0,model:0,dataset:0,metric:0};
+  for(const kind of ALL_KINDS)result[kind]=seen.get(kind)?.size||0;
+  return result;
+ },[scopedEdges,predicate]);
+
+ // Quick fly-to search matches among visible nodes
+ const flyMatches=useMemo(()=>{
+  const term=knowledgeName(query);
+  if(!term)return [];
+  return network.nodes
+   .filter(node=>knowledgeName(node.label).includes(term))
+   .sort((a,b)=>b.degree-a.degree||a.label.localeCompare(b.label))
+   .slice(0,6);
+ },[network.nodes,query]);
+
+ // Refs to latest handlers for GraphEngine callbacks (prevents engine teardown on state updates)
+ const networkRef=useRef(network);
+ networkRef.current=network;
+ const onEvidenceRef=useRef(onEvidence);
+ onEvidenceRef.current=onEvidence;
+ const onClearRef=useRef(onClearEvidence);
+ onClearRef.current=onClearEvidence;
+
+ const relationText=(edge:KnowledgeEdge)=>
+  `${edge.source.label} · ${KNOWLEDGE_RELATIONS[edge.predicate]} · ${edge.target.label}`;
+
+ function emitNodeSelection(nodeId:string|null){
+  if(!nodeId){
+   setSelectedSummary(null);
+   onClearRef.current();
+   return;
+  }
+  const node=networkRef.current.nodeMap.get(nodeId);
+  if(!node)return;
+  const paperCount=new Set(node.refs.map(r=>r.paper.resourceId)).size;
+  setSelectedSummary({id:node.id,type:'node',label:node.label,refs:node.refs});
+  onEvidenceRef.current({
+   title:node.label,
+   subtitle:`${KNOWLEDGE_ENTITIES[node.kind]} · 关联 ${paperCount} 篇文献 · ${node.refs.length} 条依据`,
+   kind:node.kind,
+   refs:node.refs,
+  },canvasRef.current);
+ }
+
+ function emitEdgeSelection(edgeId:string|null){
+  if(!edgeId){
+   setSelectedSummary(null);
+   onClearRef.current();
+   return;
+  }
+  const edge=networkRef.current.edgeMap.get(edgeId);
+  if(!edge)return;
+  const paperCount=new Set(edge.refs.map(r=>r.paper.resourceId)).size;
+  const label=relationText(edge);
+  setSelectedSummary({id:edge.id,type:'edge',label,refs:edge.refs});
+  onEvidenceRef.current({
+   title:label,
+   subtitle:`${KNOWLEDGE_RELATIONS[edge.predicate]} · ${paperCount} 篇文献 · ${edge.refs.length} 条原文依据`,
+   kind:edge.target.kind,
+   refs:edge.refs,
+  },canvasRef.current);
+ }
+
+ // Initialize GraphEngine once
+ useEffect(()=>{
+  const canvas=canvasRef.current;
+  if(!canvas)return;
+  const engine=new GraphEngine(canvas,{
+   onSelectNode:emitNodeSelection,
+   onSelectEdge:emitEdgeSelection,
+   onZoomChange:setZoomPct,
+  });
+  engineRef.current=engine;
+  return()=>{
+   engine.destroy();
+   engineRef.current=null;
+  };
+ },[]);
+
+ // Push graph updates into GraphEngine
+ useEffect(()=>{
+  const engine=engineRef.current;
+  if(!engine)return;
+  engine.setGraph(network.nodes,network.edges,false);
+  setSelectedSummary(null);
+  onClearRef.current();
+ },[network]);
+
+ useEffect(()=>{
+  engineRef.current?.setLayoutMode(layoutMode);
+ },[layoutMode]);
+
+ useEffect(()=>{
+  engineRef.current?.setShowLabels(showLabels);
+ },[showLabels]);
+
+ function toggleEntityKind(kind:KnowledgeEntityKind){
+  setHiddenKinds(prev=>{
+   const next=new Set(prev);
+   if(next.has(kind))next.delete(kind);
+   else next.add(kind);
+   // Never leave every kind hidden
+   if(next.size>=ALL_KINDS.length)return new Set();
+   return next;
+  });
+ }
+
+ function flyToNode(node:GraphEngineNode){
+  engineRef.current?.focusNode(node.id);
+  emitNodeSelection(node.id);
+ }
+
+ function selectEdgeFromList(edge:KnowledgeEdge,trigger:HTMLElement){
+  engineRef.current?.setSelection(null,edge.id);
+  const paperCount=new Set(edge.refs.map(r=>r.paper.resourceId)).size;
+  const label=relationText(edge);
+  setSelectedSummary({id:edge.id,type:'edge',label,refs:edge.refs});
+  onEvidence({
+   title:label,
+   subtitle:`${KNOWLEDGE_RELATIONS[edge.predicate]} · ${paperCount} 篇文献 · ${edge.refs.length} 条原文依据`,
+   kind:edge.target.kind,
+   refs:edge.refs,
+  },trigger);
+ }
+
+ return <div className="lit-network">
+  <div className="lit-network-toolbar">
+   <div className="lit-segments" role="group" aria-label="布局模式">
+    <button type="button" aria-pressed={layoutMode==='layered'} onClick={()=>setLayoutMode('layered')}>
+     <Columns3 size={13}/>分层结构图
+    </button>
+    <button type="button" aria-pressed={layoutMode==='force'} onClick={()=>setLayoutMode('force')}>
+     <Network size={13}/>聚类力导图
+    </button>
+   </div>
+   <div className="lit-segments" role="group" aria-label="视图范围">
+    <button type="button" aria-pressed={scope==='all'} onClick={()=>setScope('all')}>课题全景</button>
+    <button type="button" aria-pressed={scope==='focus'} onClick={()=>setScope('focus')}>单篇聚焦</button>
+   </div>
+   {scope==='focus'&&focalPapers.length>0&&<label className="lit-network-focus-select">
+    <span>焦点论文</span>
+    <select aria-label="焦点论文" value={focalId||''} onChange={event=>setFocus(event.target.value)}>
+     {focalPapers.map(paper=><option key={paper.resourceId} value={paper.resourceId}>{paper.title}</option>)}
+    </select>
+   </label>}
+   <div className="lit-network-search-wrap">
+    <label className="lit-network-search">
+     <Search size={13}/>
+     <input
+      aria-label="搜索节点、关系或原文"
+      placeholder="搜索节点或原文，回车定位…"
+      value={query}
+      onChange={event=>setQuery(event.target.value)}
+      onKeyDown={event=>{
+       if(event.key==='Enter'&&flyMatches.length){
+        event.preventDefault();
+        flyToNode(flyMatches[0]);
+       }
+      }}
+     />
+     {query&&<button type="button" className="lit-network-search-clear" aria-label="清空搜索" onClick={()=>setQuery('')}><X size={12}/></button>}
+    </label>
+    {query.trim()&&flyMatches.length>0&&<div className="lit-network-fly-bar" role="listbox" aria-label="快速定位节点">
+     {flyMatches.map(node=><button key={node.id} type="button" onClick={()=>flyToNode(node)}>
+      <i style={{background:ENTITY_COLORS[node.kind]}}/>
+      <span>{node.label}</span>
+      <Crosshair size={11}/>
+     </button>)}
+    </div>}
+   </div>
+  </div>
+
+  <div className="lit-network-predicates" role="group" aria-label="关系类型筛选">
+   <button type="button" className="lit-predicate-chip" aria-pressed={predicate==='all'} onClick={()=>setPredicate('all')}>
+    全部关系 <span>{scopedEdges.length}</span>
+   </button>
+   {ALL_PREDICATES.map(pred=>{
+    const count=predicateCounts[pred]||0;
+    return <button
+     key={pred}
+     type="button"
+     className={`lit-predicate-chip${count===0?' is-empty':''}`}
+     aria-pressed={predicate===pred}
+     disabled={count===0&&predicate!==pred}
+     onClick={()=>setPredicate(predicate===pred?'all':pred)}
+    >
+     {KNOWLEDGE_RELATIONS[pred]} <span>{count}</span>
+    </button>;
+   })}
+  </div>
+
+  <div className="lit-network-meta" role="status">
+   <span>{network.nodes.length} 个实体 · {network.edges.length} 条关系{matchingEdges.length>displayedEdges.length?`（共 ${matchingEdges.length} 条）`:''}</span>
+   {matchingEdges.length>displayedEdges.length&&<button type="button" className="lit-network-link-btn" onClick={()=>setShowAllEdges(true)}>显示全部 {matchingEdges.length} 条</button>}
+   <button
+    type="button"
+    className="lit-network-link-btn"
+    onClick={()=>{
+     const details=relationListRef.current;
+     if(details){
+      details.open=true;
+      details.scrollIntoView({block:'nearest'});
+      details.querySelector('summary')?.focus();
+     }
+    }}
+   >文字关系列表</button>
+  </div>
+
+  <div className="lit-network-stage">
+   <canvas
+    ref={canvasRef}
+    tabIndex={0}
+    aria-label="文献知识关系网络画布"
+    role="application"
+   />
+   {!network.edges.length&&<div className="lit-network-empty">
+    <div>{scope==='focus'?'当前聚焦论文没有匹配的关系。':'当前筛选条件下没有匹配的关系。'}</div>
+    <div className="lit-network-empty-actions">
+     {scope==='focus'&&<button type="button" className="academic-secondary" onClick={()=>setScope('all')}>查看课题全景</button>}
+     {(predicate!=='all'||hiddenKinds.size>0||query)&&<button type="button" className="academic-secondary" onClick={()=>{setPredicate('all');setHiddenKinds(new Set());setQuery('');}}>重置筛选</button>}
+    </div>
+   </div>}
+   {network.edges.length>0&&<>
+    <div className="lit-network-controls" role="toolbar" aria-label="画布视图控制">
+     <button type="button" aria-label="放大知识网络" title="放大 (+)" onClick={()=>engineRef.current?.zoomBy(1.25)}><Plus size={15}/></button>
+     <span>{zoomPct}%</span>
+     <button type="button" aria-label="缩小知识网络" title="缩小 (-)" onClick={()=>engineRef.current?.zoomBy(0.8)}><Minus size={15}/></button>
+     <button type="button" aria-label="适应当前图谱" title="适应视图 (0)" onClick={()=>engineRef.current?.fitToView(true)}><Maximize size={15}/></button>
+     <button
+      type="button"
+      aria-label={showLabels?'隐藏常驻标签':'显示常驻标签'}
+      aria-pressed={showLabels}
+      title={showLabels?'隐藏常驻标签':'显示常驻标签'}
+      onClick={()=>setShowLabels(v=>!v)}
+     ><Tag size={15}/></button>
+    </div>
+    <div className="lit-network-hint">滚轮缩放 · 拖拽平移或固定节点 · 双击适应视图</div>
+   </>}
+  </div>
+
+  {selectedSummary&&<div className="lit-network-selected-bar">
+   <span>已选中：{selectedSummary.label}</span>
+   <button type="button" onClick={()=>{engineRef.current?.setSelection(null,null);setSelectedSummary(null);onClearEvidence();}}>取消选中</button>
+  </div>}
+
+  <footer className="lit-network-footer" aria-label="实体类型图例筛选">
+   <div className="lit-network-legend-chips">
+    {ALL_KINDS.map(kind=>{
+     const active=!hiddenKinds.has(kind);
+     const count=kindCounts[kind];
+     return <button
+      key={kind}
+      type="button"
+      className={`lit-legend-chip${active?' is-active':' is-muted'}`}
+      aria-pressed={active}
+      onClick={()=>toggleEntityKind(kind)}
+      title={active?`隐藏「${KNOWLEDGE_ENTITIES[kind]}」`:`显示「${KNOWLEDGE_ENTITIES[kind]}」`}
+     >
+      <i style={{background:ENTITY_COLORS[kind]}}/>
+      <span>{KNOWLEDGE_ENTITIES[kind]}</span>
+      <small>{count}</small>
+     </button>;
+    })}
+   </div>
+   {hiddenKinds.size>0&&<button type="button" className="lit-network-link-btn" onClick={()=>setHiddenKinds(new Set())}>显示全部类型</button>}
+  </footer>
+
+  <details ref={relationListRef} className="lit-network-relations">
+   <summary>文字关系列表（共 {network.edges.length} 条）</summary>
+   <ul>
+    {network.edges.map(edge=><li key={edge.id}>
+     <button type="button" onClick={event=>selectEdgeFromList(edge,event.currentTarget)}>
+      <span className="lit-rel-text">{relationText(edge)}</span>
+      <small>{edge.refs.length} 条依据</small>
+     </button>
+    </li>)}
+   </ul>
+  </details>
  </div>;
 }

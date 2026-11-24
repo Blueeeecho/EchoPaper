@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { loadImage } from '@napi-rs/canvas';
 import type { PresentationDocument, PresentationSource } from '../../shared/presentation-types';
 import type { Resource } from '../../shared/workspace-types';
 import { HttpError, assertNoSymlinks, registeredRoot } from '../security';
@@ -14,7 +13,7 @@ const textExtensions=new Set(['.txt','.md','.tex','.bib','.json','.csv','.tsv','
 export const assetMime=(name:string)=>({'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.pdf':'application/pdf'}[path.extname(name).toLowerCase()]??'application/octet-stream');
 async function decodePdf(buffer:Buffer){const{getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs');const task=getDocument({data:new Uint8Array(buffer),useSystemFonts:true,stopAtErrors:true});try{const pdf=await task.promise;if(pdf.numPages>1500)throw new HttpError(413,'PDF 超过 1500 页，请选择相关章节。');const pages:string[]=[];let total=0;for(let page=1;page<=pdf.numPages;page++){const p=await pdf.getPage(page),content=await p.getTextContent(),text=content.items.map((item:any)=>item.str??'').join(' ');total+=text.length;if(total>2_000_000)throw new HttpError(413,'PDF 可提取正文超过 200 万字符，请选择相关章节。');pages.push(`[Page ${page}]\n${text}`);p.cleanup();}if(!pages.some(p=>p.replace(/^\[Page \d+\]\n/,'').trim()))throw new HttpError(400,'该 PDF 未提取到文字；请补充文字材料或清晰图片。');return pages.join('\n\n');}finally{await task.destroy();}}
 export async function snapshotBuffer(directory:string,name:string,buffer:Buffer,kind?:PresentationSource['kind']):Promise<PresentationSource>{if(buffer.length>50*1024*1024)throw new HttpError(413,'单个材料不能超过 50 MB。');name=path.basename(name).slice(0,500);const extension=path.extname(name).toLowerCase(),source:PresentationSource={id:'src-'+randomUUID(),name,kind:kind??'text',text:'',hash:hash(buffer)};
- if(['.png','.jpg','.jpeg','.webp'].includes(extension)){try{const image=await loadImage(buffer);if(!image.width||!image.height||image.width*image.height>100_000_000)throw Error('size');}catch{throw new HttpError(400,'图片无法解码，或像素数过大。');}source.kind=kind??'image';}
+ if(['.png','.jpg','.jpeg','.webp'].includes(extension)){try{const {loadImage}=await import('@napi-rs/canvas');const image=await loadImage(buffer);if(!image.width||!image.height||image.width*image.height>100_000_000)throw Error('size');}catch{throw new HttpError(400,'图片无法解码，或像素数过大。');}source.kind=kind??'image';}
  else if(extension==='.pdf'){if(!buffer.subarray(0,5).equals(Buffer.from('%PDF-')))throw new HttpError(400,'上传内容不是有效 PDF。');source.kind=kind??'pdf';source.text=await decodePdf(buffer);}
  else {if(!textExtensions.has(extension))throw new HttpError(400,'支持 PDF、TXT/Markdown/TeX/Bib/CSV/JSON 与 PNG/JPEG/WebP 图片。');try{source.text=new TextDecoder('utf-8',{fatal:true}).decode(buffer);}catch{throw new HttpError(400,'文字材料需要 UTF-8 编码。');}if(!source.text.trim())throw new HttpError(400,'文字材料为空。');if(source.text.length>2_000_000)throw new HttpError(413,'文字材料超过 200 万字符。');source.hash=hash(source.text);return source;}
  source.assetId='asset-'+randomUUID()+extension;await fs.mkdir(await assertNoSymlinks(directory,'assets',true),{recursive:true});await fs.writeFile(await assertNoSymlinks(directory,'assets/'+source.assetId,true),buffer,{flag:'wx'});return source;

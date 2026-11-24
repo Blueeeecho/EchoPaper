@@ -1,29 +1,26 @@
 /* Full-window reading workspace. The source gets the space; notes stay one glance away. */
 .reader-shell{
-  --r-bg:#f6f6f3;--r-surface:#fff;--r-surface-2:#f1f0ec;--r-border:#e4e2dc;--r-border-strong:#d3d0c8;
-  --r-text:#1d2127;--r-text-2:#555b64;--r-text-3:#8b9098;--r-accent:#2b5a8c;--r-accent-hover:#224a75;--r-accent-soft:#ebf1f8;
-  --r-canvas:#e7e6e1;--r-warn:#a8670f;--r-warn-soft:#fbf1e1;--r-danger:#b4402b;
   position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;background:var(--r-bg);color:var(--r-text);
-  font-family:var(--ep-font,"Times New Roman","PingFang SC",serif);font-size:14px;line-height:1.6;
+  font-family:var(--font-sans);font-size:14px;line-height:1.6;
 }
 :where(.reader-shell) button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;white-space:nowrap}
-:where(.reader-shell) button:disabled{opacity:.4;cursor:default}
-.reader-shell :is(button,a,input,select,textarea):focus-visible{outline:none;box-shadow:0 0 0 3px rgba(43,90,140,.2);border-radius:6px}
+:where(.reader-shell) button:disabled{opacity:.48;cursor:not-allowed}
+.reader-shell :is(button,a,input,select,textarea):focus-visible{outline:2px solid var(--r-accent);outline-offset:2px;box-shadow:var(--focus-ring);border-radius:var(--radius-sm)}
 
 /* ---- top bar ---- */
 .reader-bar{height:48px;flex-shrink:0;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:16px;padding:0 12px;background:var(--r-surface);border-bottom:1px solid var(--r-border)}
 .reader-bar-start{display:flex;align-items:center;gap:10px;min-width:0}
-.reader-back{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px 0 8px;border-radius:7px;color:var(--r-text-2);font-size:13px;flex-shrink:0}
+.reader-back{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px 0 8px;border-radius:var(--radius-md);color:var(--r-text-2);font-size:13px;flex-shrink:0}
 .reader-back:hover{background:var(--r-surface-2);color:var(--r-text)}
 .reader-bar h1{margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:10px;border-left:1px solid var(--r-border)}
 .reader-bar-center{display:flex;align-items:center;gap:10px}
-.reader-pager,.reader-zoom{display:flex;align-items:center;gap:2px;height:32px;padding:0 3px;border:1px solid var(--r-border);border-radius:8px;background:var(--r-surface)}
-.reader-pager button,.reader-zoom button{height:26px;min-width:26px;display:grid;place-items:center;border-radius:6px;color:var(--r-text-2)}
+.reader-pager,.reader-zoom{display:flex;align-items:center;gap:2px;height:32px;padding:0 3px;border:1px solid var(--r-border);border-radius:var(--radius-md);background:var(--r-surface)}
+.reader-pager button,.reader-zoom button{height:26px;min-width:26px;display:grid;place-items:center;border-radius:var(--radius-sm);color:var(--r-text-2)}
 .reader-pager button:hover:not(:disabled),.reader-zoom button:hover{background:var(--r-surface-2);color:var(--r-text)}
-.reader-pager input{width:38px;height:26px;text-align:center;border:0;background:var(--r-surface-2);border-radius:5px;font:inherit;font-size:13px;color:var(--r-text)}
+.reader-pager input{width:38px;height:26px;text-align:center;border:0;background:var(--r-surface-2);border-radius:var(--radius-sm);font:inherit;font-size:13px;color:var(--r-text)}
 .reader-pager span,.reader-zoom span{font-size:12.5px;color:var(--r-text-3);padding:0 6px;font-variant-numeric:tabular-nums;min-width:44px;text-align:center}
 .reader-pager span{min-width:0;padding:0 4px 0 2px}
-.reader-zoom button:last-child{padding:0 8px;font-size:12.5px;margin-left:2px;border-left:1px solid var(--r-border);border-radius:0 6px 6px 0}
+.reader-zoom button:last-child{padding:0 8px;font-size:12.5px;margin-left:2px;border:0;background:var(--r-surface-2);border-radius:var(--radius-sm)}
 .reader-zoom button.on{color:var(--r-accent);font-weight:600}
 .reader-bar-end{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0}
 .reader-status{font-size:12px;color:var(--r-text-3);white-space:nowrap;margin-right:6px;display:inline-flex;align-items:center;gap:6px}
@@ -64,6 +61,8 @@
 .reader-source{overflow:auto;background:var(--r-canvas);padding:24px 28px 80px;outline:none;scroll-padding-top:16px}
 .reader-empty{height:100%;display:grid;place-content:center;justify-items:center;gap:6px;color:var(--r-text-2)}
 .reader-empty p{margin:0}
+.reader-empty[role="alert"]{padding:24px;text-align:center;overflow-wrap:anywhere}
+.reader-shell .reader-retry{margin-top:6px;padding:4px 12px;border-radius:7px;background:var(--r-surface);border:1px solid var(--r-border);color:var(--r-accent)}
 .reader-text{max-width:760px;margin:0 auto;background:#fff;padding:48px 56px;border-radius:4px;box-shadow:0 1px 3px rgba(0,0,0,.08);white-space:pre-wrap;line-height:1.85;font-family:"Iowan Old Style","Songti SC",Georgia,serif}
 
 /* PDF pages (rendered by ContinuousPdf). */
@@ -227,11 +226,16 @@
 .reader-panel[hidden]{display:none}
 .reader-panel-toggle span{display:inline}
 .reader-shell.embedded .reader-panel-toggle span{display:none}
-.reader-shell.is-immersive .reader-bar{display:flex;flex-wrap:wrap;min-height:40px;padding:4px 8px}
-.reader-shell.is-immersive .reader-bar-start{flex:1;min-width:170px}
-.reader-shell.is-immersive .reader-bar-center{display:flex;grid-column:auto;grid-row:auto;flex:none;justify-content:flex-start}
+.reader-shell.is-immersive .reader-bar{display:flex;flex-wrap:wrap;height:auto;min-height:40px;gap:6px 10px;padding:5px 8px}
+.reader-shell.is-immersive .reader-bar-start{flex:1 1 170px;min-width:min(170px,100%)}
+.reader-shell.is-immersive .reader-bar-center{display:flex;grid-column:auto;grid-row:auto;flex:0 1 auto;min-width:0;justify-content:flex-start;flex-wrap:wrap}
 .reader-shell.is-immersive .reader-bar-end{flex:none;margin-left:auto}
-@media(max-width:600px){.reader-shell:not(.embedded) .reader-status{display:none}}
+@media(max-width:600px) {
+ .reader-shell:not(.embedded) .reader-status,
+ .reader-shell:not(.embedded) .reader-panel-toggle > span {display:none}
+ .reader-shell.is-immersive:not(.embedded) .reader-bar-start {flex-basis:100%;min-width:0}
+ .reader-shell.is-immersive:not(.embedded) .reader-bar {gap:4px 6px}
+}
 
 .reader-bar{position:relative;z-index:4}
 .reader-bilingual-controls{display:flex;min-width:0;max-width:100%;flex:0 1 auto}

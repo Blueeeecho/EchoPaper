@@ -9,10 +9,19 @@ export async function api<T = any>(url: string, options: RequestInit & {timeoutM
   signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try{
     const response = await fetch(url, { ...request,signal:controller.signal,headers: { ...(options.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-    let data:any;try{data=await response.json();}catch(error){if(controller.signal.aborted)throw error;data={};}
-    if (!response.ok) throw new ApiError(data.error || `请求失败 (${response.status})`, response.status, data);
+    if (response.status === 204 || response.status === 205) return {} as T;
+    let data: any;
+    try { data = await response.json(); }
+    catch (error) {
+      if (controller.signal.aborted) throw error;
+      if (response.ok) throw new ApiError('工作台返回的数据无法读取，请重试。', 502, {});
+    }
+    if (!response.ok) throw new ApiError(data?.error || `请求失败 (${response.status})`, response.status, data ?? {});
     return data as T;
-  }catch(error){if(expired)throw new ApiError('请求等待超时，尚未确认是否完成；草稿仍保留，请先核对任务记录。',408,{uncertain:true});throw error;}
+  } catch (error) {
+    if (expired) throw new ApiError('请求等待超时，尚未确认是否完成。草稿仍保留，请先核对任务记录。', 408, { uncertain: true });
+    throw error;
+  }
   finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
 }
 export const json = (method: string, data: unknown): RequestInit => ({ method, body: JSON.stringify(data) });

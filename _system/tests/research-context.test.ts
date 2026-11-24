@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {ResearchTopic} from '../shared/workspace-types';
 import type {Project} from '../shared/types';
-import {currentResearchTopic,withResearchScope,continueResearch} from '../src/academic/researchContext';
+import {currentResearchTopic,withResearchScope,continueResearch,hubDataSources} from '../src/academic/researchContext';
 
 const topic=(id:string,extra:Partial<ResearchTopic>={}):ResearchTopic=>({id,title:id,description:'',paperIds:[],resourceIds:[],presentationIds:[],archived:false,revision:1,createdAt:'',updatedAt:'',...extra});
 const paper=(id:string,extra:Partial<Project>={})=>({id,...extra}) as Project;
@@ -21,6 +21,16 @@ test('scope follows research navigation without changing an explicit target or i
  assert.deepEqual(withResearchScope({section:'topics',topicId:'a'},'b'),{section:'topics',topicId:'a'});
  assert.deepEqual(withResearchScope({section:'papers',paperId:'standalone'},'b'),{section:'papers',paperId:'standalone'});
  assert.deepEqual(withResearchScope({section:'home'},'b'),{section:'home'});
+});
+
+test('the shell loads only the data used by the current section',()=>{
+ assert.deepEqual(hubDataSources({section:'home'}),{overview:true,papers:true,presentations:false});
+ assert.deepEqual(hubDataSources({section:'topics'}),{overview:true,papers:true,presentations:true});
+ assert.deepEqual(hubDataSources({section:'library'}),{overview:true,papers:false,presentations:false});
+ assert.deepEqual(hubDataSources({section:'papers',paperId:'sample'}),{overview:false,papers:true,presentations:false});
+ for(const route of [{section:'papers'} as const,{section:'presentations',presentationId:'sample'} as const]){
+  assert.deepEqual(hubDataSources(route),{overview:false,papers:false,presentations:false});
+ }
 });
 
 test('continue writing selects a sole active linked paper and never an unrelated or archived paper',()=>{

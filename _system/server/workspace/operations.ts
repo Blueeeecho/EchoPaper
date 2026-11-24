@@ -71,14 +71,13 @@ export function createFileOperations(workspaceRoot:string,state:CatalogState,sav
         const target=await trashTarget(sourceRoot,id);relative=target.relative;destination=target.filename;
       }
     }
-    const operation:JournalOperation={id,kind:input.kind,status:'interrupted',source:creates(input)?undefined:{rootId:sourceRoot.id,path:item!.path},destination:{rootId:destinationRoot.id,path:relative},resourceId:item!.id,createdAt,undoable:false,phase:'prepared',beforeHash,afterHash:beforeHash,records,...(context?{researchNote:context.researchNote}:{})};
+    const operation:JournalOperation={id,kind:input.kind,status:'interrupted',source:creates(input)?undefined:{rootId:sourceRoot.id,path:item!.path},destination:{rootId:destinationRoot.id,path:relative},resourceId:item!.id,createdAt,undoable:false,phase:'copying',beforeHash,afterHash:beforeHash,records,...(context?{researchNote:context.researchNote}:{})};
     state.operations.push(operation);await save();
     try{
-      operation.phase='copying';await save();
       if(input.kind==='mkdir'){await fs.mkdir(destination,{mode:0o755});const actual=await snapshot(destination);operation.records![0].modifiedAt=actual.modifiedAt;}
       else if(input.kind==='create-file'){
         const handle=await fs.open(destination,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o644);try{const stat=await handle.stat({bigint:true});operation.createdFileIdentity={device:stat.dev.toString(),inode:stat.ino.toString()};await save();await handle.writeFile(input.content!,'utf8');await handle.sync();}finally{await handle.close();}
-        const actual=await snapshot(destination);if(actual.hash!==beforeHash)throw new HttpError(409,'新建文件写入后内容发生变化，文件已保留。');Object.assign(operation.records![0],{size:actual.size,modifiedAt:actual.modifiedAt});operation.phase='copied';await save();
+        const actual=await snapshot(destination);if(actual.hash!==beforeHash)throw new HttpError(409,'新建文件写入后内容发生变化，文件已保留。');Object.assign(operation.records![0],{size:actual.size,modifiedAt:actual.modifiedAt});operation.phase='copied';
       }
       else await transfer(source!,destination,beforeHash,async()=>{operation.phase='copied';await save();});
       finishApply(operation);await save();return publicOperation(operation);

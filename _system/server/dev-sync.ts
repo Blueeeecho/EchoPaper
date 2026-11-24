@@ -46,7 +46,7 @@ export function registerDevSyncRoutes(app: FastifyInstance, workspaceRoot: strin
       result.ok = true;
       // Optional: restart the backend with the project's own control script, after the response is sent.
       if (body.restart === true) {
-        const script = 'sleep 1; node scripts/control.mjs stop; node scripts/control.mjs start --no-open';
+        const script = 'sleep 1; node scripts/control.mjs stop && node scripts/control.mjs start --no-open';
         const child = spawn('/bin/sh', ['-c', script], {cwd: system, env, detached: true, stdio: 'ignore'});
         child.unref();
         (result as typeof result & {restarting?: boolean}).restarting = true;

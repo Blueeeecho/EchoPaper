@@ -1,8 +1,8 @@
 import { createPortal } from 'react-dom';
 import type { WritingQuote } from '../selectionContext';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { getDocument, GlobalWorkerOptions, TextLayer, type PDFDocumentProxy, type PDFPageProxy } from 'pdfjs-dist';
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { TextLayer, type PDFDocumentProxy, type PDFPageProxy } from 'pdfjs-dist';
+import { openPdfDocument } from '../pdfDocument';
 import type { PageViewport } from 'pdfjs-dist/types/src/display/display_utils';
 import PdfLinks from './PdfLinks';
 import PdfLiveSelection from './PdfLiveSelection';
@@ -23,7 +23,6 @@ import type { PdfSyncLocation } from '../../shared/sync-types';
 import type { Build, Diagnostic, PdfAnnotation } from '../../shared/types';
 import { applyPdfEmphasis } from '../pdfEmphasis';
 import { PdfAnnotationMarks, usePdfAnnotations } from './PdfAnnotations';
-GlobalWorkerOptions.workerSrc = workerUrl;
 type PdfFocus = PdfSyncLocation & { destination?: boolean;word?:boolean;approximate?:boolean;rects?:PdfMarkerRect[] };
 
 function PdfPage({ pdf, pageNumber, width, zoom, pixelRatio, annotations, diagnostics, activeId, onOpen, focus, onNavigateDestination,forceRender=false }: { pdf: PDFDocumentProxy; pageNumber: number; width: number; zoom: number; pixelRatio: number; annotations: PdfAnnotation[]; diagnostics: Diagnostic[]; activeId?: string; onOpen: (annotation: PdfAnnotation) => void; focus?: PdfFocus;onNavigateDestination:(location:PdfDestinationLocation)=>void|Promise<void>;forceRender?:boolean }) {
@@ -44,12 +43,20 @@ function PdfPage({ pdf, pageNumber, width, zoom, pixelRatio, annotations, diagno
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
     const root = wrapper.current?.closest('.pdf-scroll') || null;
-    const observer = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) setVisible(true); }, { root, rootMargin: '700px' });
+    const observer = new IntersectionObserver(entries => { if (entries[0]) setVisible(entries[0].isIntersecting); }, { root, rootMargin: '900px' });
     if (wrapper.current) observer.observe(wrapper.current);
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if ((!visible&&!forceRender) || width < 40 || !layout) return;
+    if ((!visible&&!forceRender) || width < 40 || !layout) {
+      if (!visible && !forceRender) {
+        if (canvas.current) { canvas.current.width = 0; canvas.current.height = 0; }
+        text.current?.replaceChildren();
+        setIssueRects([]);
+        setRenderState(old => old === 'waiting' ? old : 'waiting');
+      }
+      return;
+    }
     setRenderError('');
     setRenderState('rendering');
     let cancelled = false;
@@ -112,7 +119,7 @@ function PdfPage({ pdf, pageNumber, width, zoom, pixelRatio, annotations, diagno
   </section>;
 }
 
-export default function PdfPreview({ headerContainer, url, stale, status, buildDate, projectId, targetId, buildId, issuesBuild, pdfDiagnostics, onShowIssues, hideAnnotationTools = false, historical = false, onReturnLatest, onNavigateSource, onViewBuild, onSourceLocate, syncJump, syncNotice, onAddToChat }: { headerContainer?: HTMLElement | null; url?: string; stale: boolean; status?: string; buildDate?: string; projectId: string; targetId: string; buildId?: string; issuesBuild?: Build; pdfDiagnostics?: Diagnostic[]; onShowIssues?: () => void; onAddToChat?: (quote: WritingQuote) => void; hideAnnotationTools?: boolean; historical?: boolean; onReturnLatest?: () => void; onNavigateSource?: (path:string,line?:number)=>void; onViewBuild?: (buildId:string)=>void; onSourceLocate?: (page:number,x:number,y:number,hint?:SyncWordHint)=>Promise<void>; syncJump?: {id:number;buildId:string;locations:PdfSyncLocation[];hint?:SyncWordHint};syncNotice?:string }) {
+export default memo(function PdfPreview({ headerContainer, url, stale, status, buildDate, projectId, targetId, buildId, issuesBuild, pdfDiagnostics, onShowIssues, hideAnnotationTools = false, historical = false, onReturnLatest, onNavigateSource, onViewBuild, onSourceLocate, syncJump, syncNotice, onAddToChat }: { headerContainer?: HTMLElement | null; url?: string; stale: boolean; status?: string; buildDate?: string; projectId: string; targetId: string; buildId?: string; issuesBuild?: Build; pdfDiagnostics?: Diagnostic[]; onShowIssues?: () => void; onAddToChat?: (quote: WritingQuote) => void; hideAnnotationTools?: boolean; historical?: boolean; onReturnLatest?: () => void; onNavigateSource?: (path:string,line?:number)=>void; onViewBuild?: (buildId:string)=>void; onSourceLocate?: (page:number,x:number,y:number,hint?:SyncWordHint)=>Promise<void>; syncJump?: {id:number;buildId:string;locations:PdfSyncLocation[];hint?:SyncWordHint};syncNotice?:string }) {
   const [pdf, setPdf] = useState<PDFDocumentProxy>();
   const [loadedUrl, setLoadedUrl] = useState<string>();
   const displayedPdf = loadedUrl === url ? pdf : undefined;
@@ -134,6 +141,7 @@ export default function PdfPreview({ headerContainer, url, stale, status, buildD
   const [pixelRatio, setPixelRatio] = useState(window.devicePixelRatio || 1);
   const area = useRef<HTMLDivElement>(null);
   const savedScroll = useRef(initialPosition?.top||0);
+  const scrollFrame = useRef(0), persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     let media: MediaQueryList;
     const update = () => {
@@ -149,30 +157,29 @@ export default function PdfPreview({ headerContainer, url, stale, status, buildD
   }, []);
   useEffect(() => {
     if (!area.current) return;
+    let timer: ReturnType<typeof setTimeout> | undefined, initialized = false;
     const observer = new ResizeObserver(entries => {
       const gutter = parseFloat(getComputedStyle(entries[0].target).getPropertyValue('--pdf-page-gutter')) || 6;
-      setWidth(Math.max(200, entries[0].contentRect.width - gutter * 2));
+      const next = Math.max(200, Math.round(entries[0].contentRect.width - gutter * 2));
+      if (!initialized) { initialized = true; setWidth(next); return; }
+      clearTimeout(timer);
+      timer = setTimeout(() => setWidth(old => old === next ? old : next), 120);
     });
-    observer.observe(area.current); return () => observer.disconnect();
+    observer.observe(area.current); return () => { clearTimeout(timer); observer.disconnect(); };
   }, []);
   useEffect(() => {
     resumePending.current=true;
     setPdf(undefined); setLoadedUrl(undefined); setError(''); setLocating(true); setSyncFocus(undefined);setReadingHistory([]);setWordRenderPages([]);matchingText.current=new Map();navigation.current++;
     if (!url) return;
     let active = true;
-    const loading = getDocument({
-      url,
-      cMapUrl: '/pdfjs/cmaps/',
-      cMapPacked: true,
-      standardFontDataUrl: '/pdfjs/standard_fonts/',
-      wasmUrl: '/pdfjs/wasm/',
-    });
+    const loading = openPdfDocument(url);
     loading.promise.then(doc => {
       if (active) { setPdf(doc); setLoadedUrl(url); setPage(value => Math.min(value, doc.numPages)); }
     }).catch(e => { if (active) setError(e.message || 'PDF 加载失败'); });
     return () => { active = false; void loading.destroy(); };
   }, [url]);
   const persistPosition=()=>{
+    clearTimeout(persistTimer.current);persistTimer.current=undefined;
     const scroll=area.current;if(!scroll||!displayedPdf||resumePending.current)return;
     const viewport=scroll.getBoundingClientRect(),elements=Array.from(scroll.querySelectorAll<HTMLElement>('[data-page]'));
     const n=mostVisiblePdfPage(elements.map(el=>{const r=el.getBoundingClientRect();return{page:Number(el.dataset.page),top:r.top,bottom:r.bottom};}),viewport.top,viewport.bottom)||page;
@@ -181,7 +188,7 @@ export default function PdfPreview({ headerContainer, url, stale, status, buildD
     resumeAnchor.current=position;writeSession(positionKey,position);
   };
   const persistReading=useRef(persistPosition);persistReading.current=persistPosition;
-  useEffect(()=>{const persist=()=>persistReading.current();window.addEventListener('pagehide',persist);return()=>{persist();window.removeEventListener('pagehide',persist);};},[positionKey]);
+  useEffect(()=>{const persist=()=>persistReading.current();window.addEventListener('pagehide',persist);return()=>{cancelAnimationFrame(scrollFrame.current);clearTimeout(persistTimer.current);persist();window.removeEventListener('pagehide',persist);};},[positionKey]);
   useEffect(()=>{persistReading.current();},[zoom]);
   useLayoutEffect(()=>{
     if(!displayedPdf||!resumePending.current)return;
@@ -303,10 +310,10 @@ export default function PdfPreview({ headerContainer, url, stale, status, buildD
     {headerContainer ? createPortal(previewHeading, headerContainer) : previewHeading}
     
     <div className="pdf-toolbar"><div className="page-input"><button className="icon-button" aria-label="返回上一阅读位置" disabled={!readingHistory.length} title="返回引用跳转前的位置" onClick={backToReading}><ArrowLeft size={14}/></button><input aria-label="跳转 PDF 页码" type="number" min="1" max={pdf?.numPages || 1} value={page} onChange={e => setPage(Number(e.target.value))} onKeyDown={e => { if (e.key === 'Enter') scrollToPage(page); }} onBlur={() => scrollToPage(page)}/><span>/ {pdf?.numPages || '—'}</span></div><div><button className="icon-button" onClick={() => setZoom(z => Math.max(.5, z - .1))} aria-label="缩小 PDF"><Minus size={14}/></button><span className="zoom-label" title="以适应栏宽为基准；点击右侧按钮恢复适宽">{Math.abs(zoom - 1) < .01 ? '适宽' : `适宽 ×${zoom.toFixed(1)}`}</span><button className="icon-button" onClick={() => setZoom(z => Math.min(3, z + .1))} aria-label="放大 PDF"><Plus size={14}/></button>{onSourceLocate && <button className={`icon-button ${locating ? 'active' : ''}`} aria-label="从 PDF 定位源码" aria-pressed={locating} title="双击 PDF 正文定位到源码对应词；单击或拖动只选择文字。点击此按钮开关双击定位" onClick={() => setLocating(!locating)}><Crosshair size={15}/></button>}<button className="icon-button" onClick={() => setZoom(1)} aria-label="适应宽度" title="适应宽度"><ScanLine size={15}/></button></div></div>
-    <div className="pdf-scroll" data-ai-selection-menu={onAddToChat && displayedPdf && buildId && !hideAnnotationTools ? "true" : undefined} ref={area} onPointerDown={e=>{gesture.current={x:e.clientX,y:e.clientY,id:e.pointerId,dragged:false};}} onPointerMove={e=>{const start=gesture.current;if(start&&e.buttons&&e.pointerId===start.id&&Math.hypot(e.clientX-start.x,e.clientY-start.y)>4)start.dragged=true;}} onPointerCancel={()=>{gesture.current=undefined;}} onDoubleClick={locateFromPdf} onContextMenu={hideAnnotationTools ? undefined : notes.onContextMenu} onScroll={e => { if(resumePending.current)return; savedScroll.current = e.currentTarget.scrollTop; const elements = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[data-page]')); const viewport=e.currentTarget.getBoundingClientRect();const nearest=mostVisiblePdfPage(elements.map(el=>{const box=el.getBoundingClientRect();return{page:Number(el.dataset.page),top:box.top,bottom:box.bottom};}),viewport.top,viewport.bottom);if(nearest)setPage(nearest); persistReading.current(); }}>
-      {error ? <div className="empty-state compact"><FileText size={32}/><h3>PDF 加载失败</h3><p>{error}</p></div> : displayedPdf ? Array.from({ length: displayedPdf.numPages }, (_, i) => <PdfPage key={`${url}-${i}`} pdf={displayedPdf} pageNumber={i + 1} width={width} zoom={zoom} pixelRatio={pixelRatio} focus={syncFocus?.page === i+1 ? syncFocus : undefined} annotations={hideAnnotationTools ? noMarks : notes.current} diagnostics={pdfDiagnostics || noDiagnostics} activeId={notes.activeId} onOpen={notes.show} onNavigateDestination={navigateDestination} forceRender={wordRenderPages.includes(i+1)||(syncJump?.buildId===buildId&&!!syncJump?.locations.some(location=>location.page===i+1))}/>) : <div className="empty-state"><div className="empty-document"><FileText size={35} strokeWidth={1}/></div><h3>{url ? '正在载入 PDF…' : '让文字成为论文'}</h3><p>{url ? '加载完成后即可选择文字添加批注。' : <>选择编译目标，点击「编译」<br/>成功后将在这里显示完整 PDF。</>}</p><span className="small-label">SOURCE → TECTONIC → PDF</span></div>}
+    <div className="pdf-scroll" data-ai-selection-menu={onAddToChat && displayedPdf && buildId && !hideAnnotationTools ? "true" : undefined} ref={area} onPointerDown={e=>{gesture.current={x:e.clientX,y:e.clientY,id:e.pointerId,dragged:false};}} onPointerMove={e=>{const start=gesture.current;if(start&&e.buttons&&e.pointerId===start.id&&Math.hypot(e.clientX-start.x,e.clientY-start.y)>4)start.dragged=true;}} onPointerCancel={()=>{gesture.current=undefined;}} onDoubleClick={locateFromPdf} onContextMenu={hideAnnotationTools ? undefined : notes.onContextMenu} onScroll={e => { if(resumePending.current)return; savedScroll.current = e.currentTarget.scrollTop; if(!scrollFrame.current)scrollFrame.current=requestAnimationFrame(()=>{scrollFrame.current=0;const scroll=area.current;if(!scroll||resumePending.current)return;const elements=Array.from(scroll.querySelectorAll<HTMLElement>('[data-page]')),viewport=scroll.getBoundingClientRect();const nearest=mostVisiblePdfPage(elements.map(el=>{const box=el.getBoundingClientRect();return{page:Number(el.dataset.page),top:box.top,bottom:box.bottom};}),viewport.top,viewport.bottom);if(nearest)setPage(old=>old===nearest?old:nearest);}); clearTimeout(persistTimer.current); persistTimer.current=setTimeout(()=>persistReading.current(),250); }}>
+      {error ? <div className="empty-state compact"><FileText size={32}/><h3>PDF 加载失败</h3><p>{error}</p></div> : displayedPdf ? Array.from({ length: displayedPdf.numPages }, (_, i) => <PdfPage key={`${url}-${i}`} pdf={displayedPdf} pageNumber={i + 1} width={width} zoom={zoom} pixelRatio={pixelRatio} focus={syncFocus?.page === i+1 ? syncFocus : undefined} annotations={hideAnnotationTools ? noMarks : notes.current} diagnostics={pdfDiagnostics || noDiagnostics} activeId={notes.activeId} onOpen={notes.show} onNavigateDestination={navigateDestination} forceRender={wordRenderPages.includes(i+1)||(syncJump?.buildId===buildId&&!!syncJump?.locations.some(location=>location.page===i+1))}/>) : <div className="empty-state" role="status"><FileText size={29} strokeWidth={1.5}/><h3>{url ? '正在载入 PDF…' : '尚无 PDF 预览'}</h3>{!url&&<p>选择目标后点击「编译」，生成的 PDF 会显示在这里。</p>}</div>}
     </div>
     {!hideAnnotationTools && <>{notes.panel}{notes.contextMenu}</>}
     <div className="preview-footer"><span className={url && !stale ? 'success-text' : 'quiet'}>{url ? stale ? '历史成功版本' : '最新编译版本' : '等待首次编译'}</span><span>{buildDate || '本地预览'}</span></div>
   </div>;
-}
+});

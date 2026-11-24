@@ -5,15 +5,18 @@ import path from 'node:path';
 import os from 'node:os';
 import Fastify from 'fastify';
 import {createHash} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
+import {openCatalog} from '../server/workspace/catalog';
+import {registerWorkspaceRoutes} from '../server/workspace/index';
+import {registerTopicNotebookRoutes} from '../server/workspace/topic-notebook';
 
 async function fixture(watch=false) {
   const directory=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'workspace-catalog-'));
   const root=path.join(directory,'app'),source=path.join(directory,'originals');
   await fs.mkdir(root);await fs.mkdir(source);await fs.mkdir(path.join(root,'papers'));
-  const module=await import('../server/workspace/index.ts').catch(()=>undefined);
-  assert.ok(module?.registerWorkspaceRoutes,'the workspace backend must be available');
   const app=Fastify();app.setErrorHandler((error,_request,reply)=>{const known=error as Error&{statusCode?:number};return reply.code(known.statusCode||500).send({error:known.message});});
-  const service=await module.registerWorkspaceRoutes(app,root,{watch});
+  const service=await registerWorkspaceRoutes(app,root,{watch});
+  registerTopicNotebookRoutes(app,root,async id=>(await service.overview()).topics.some(topic=>topic.id===id));
   async function call(method:'GET'|'POST'|'PATCH',url:string,payload?:unknown,expected=200) {const response=await app.inject({method,url,payload:payload as any});assert.equal(response.statusCode,expected,response.body);return response.json();}
   async function settle(id:string) {for(let i=0;i<300;i++){const {roots}=await call('GET','/api/workspace/roots');const item=roots.find((r:any)=>r.id===id);if(item.status!=='scanning')return item;await new Promise(resolve=>setTimeout(resolve,10));}throw new Error('scan did not finish');}
   async function connect(directoryPath=source,permission='write') {const item=await call('POST','/api/workspace/roots',{path:directoryPath,label:'Originals',permission},201);await settle(item.id);return item;}
@@ -30,7 +33,6 @@ test('catalog starts empty and persists topic CAS edits without scanning the wor
     await f.call('PATCH',`/api/workspace/topics/${topic.id}`,{resourceIds:['unknown'],expectedRevision:edited.revision},400);
     await f.service.checkpoint();assert.equal(f.service.busy(),false);
     assert.ok((await fs.readdir(path.join(f.root,'workspace'))).some(file=>file.startsWith('catalog.')));
-    const {registerWorkspaceRoutes}=await import('../server/workspace/index.ts');
     const other=Fastify();const reopened=await registerWorkspaceRoutes(other,f.root,{watch:false});
     try{assert.equal((await reopened.overview()).topics[0].title,'Controlled reasoning');}finally{await reopened.close();await other.close();}
   }finally{await f.close();}
@@ -52,6 +54,63 @@ test('resource index searches file names, text and tags, lists parents and valid
     assert.equal((await f.call('GET',`/api/workspace/resources/${nested.id}/text`)).content,'A falsifiable probability tree');
     assert.equal((await f.service.resourceFile(nested.id)).resource.revision,tagged.revision);
   }finally{await f.close();}
+});
+
+test('a blocked directory scan leaves saves responsive and drains during shutdown without publishing stale identities',async t=>{
+  const f=await fixture();
+  let release!:()=>void, entered!:()=>void;
+  const scanBlocked=new Promise<void>(resolve=>{entered=resolve;}),resume=new Promise<void>(resolve=>{release=resolve;});
+  try{
+    await fs.writeFile(path.join(f.source,'before.md'),'fixture');
+    const root=await f.connect();
+    const item=(await f.call('GET',`/api/workspace/resources?rootId=${root.id}`)).resources[0];
+    const readdir=fs.readdir;
+    let first=true;
+    t.mock.method(fs,'readdir',async(...args:Parameters<typeof readdir>)=>{
+      const names=await readdir(...args);
+      if(first&&args[0]===f.source){first=false;entered();await resume;}
+      return names;
+    });
+    await f.call('POST',`/api/workspace/roots/${root.id}/scan`,{},202);
+    await scanBlocked;
+    const rename=async()=>{
+      const topic=await f.call('POST','/api/workspace/topics',{title:'Save during scan',resourceIds:[item.id]},201);
+      const tagged=await f.call('PATCH',`/api/workspace/resources/${item.id}`,{tags:['edited while scanning'],expectedRevision:item.revision});
+      await f.call('POST','/api/workspace/operations',{kind:'move',rootId:root.id,resourceId:item.id,expectedRevision:tagged.revision,expectedHash:tagged.hash,destinationRootId:root.id,destinationPath:'after.md'},201);
+      return topic;
+    };
+    const topic=await Promise.race([rename(),delay(1500,undefined,{ref:false}).then(()=>assert.fail('saves waited on directory scan'))]);
+    assert.equal(f.service.busy(),true);
+    const closing=f.service.close();
+    await f.call('POST',`/api/workspace/roots/${root.id}/scan`,{},503);
+    release();
+    await closing;
+    const {resources}=await f.call('GET',`/api/workspace/resources?rootId=${root.id}&topicId=${topic.id}`);
+    assert.equal(resources.length,1);
+    assert.equal(resources[0].id,item.id);
+    assert.equal(resources[0].name,'after.md');
+    assert.equal(resources[0].missing,false);
+    assert.deepEqual(resources[0].tags,['edited while scanning']);
+  }finally{release();await f.close();}
+});
+
+test('startup resumes an interrupted folder scan',async()=>{
+ const f=await fixture(),other=Fastify();
+ try{
+  const root=await f.connect();
+  await f.service.close();
+  const catalog=await openCatalog(f.root);
+  try{
+   catalog.state.roots[0].status='scanning';
+   await catalog.save();
+  }finally{catalog.close();}
+  await fs.writeFile(path.join(f.source,'pending.md'),'resume fixture');
+  const reopened=await registerWorkspaceRoutes(other,f.root,{watch:false});
+  await reopened.checkpoint();
+  const info=await reopened.overview();
+  assert.equal(info.roots.find(item=>item.id===root.id)?.status,'ready');
+  assert.equal(info.resources[0].name,'pending.md');
+ }finally{await other.close();await f.close();}
 });
 
 test('library categories return separate files and scoped counts before pagination',async()=>{
@@ -194,6 +253,26 @@ test('library priorities are applied before pagination and keep original file na
  }finally{await f.close();}
 });
 
+test('broken topic priority records preserve originals and leave ordinary listing and search available',async()=>{
+ const f=await fixture();try{
+  await fs.writeFile(path.join(f.source,'paper.txt'),'falsifiable fixture');
+  await f.connect();
+  const item=(await f.call('GET','/api/workspace/resources')).resources[0];
+  const topic=await f.call('POST','/api/workspace/topics',{title:'Degraded priorities',resourceIds:[item.id]},201);
+  const directory=path.join(f.root,'workspace','topic-notebooks'),filename=path.join(directory,topic.id+'.json');
+  await fs.mkdir(directory,{recursive:true});
+  for(const invalid of ['{invalid',JSON.stringify({version:1,topicId:topic.id,ideas:[],keyRefs:null})]){
+   await fs.writeFile(filename,invalid);
+   const notebook=await f.call('GET',`/api/workspace/topics/${topic.id}/notebook`,undefined,409);
+   assert.match(notebook.error,/无法读取/);
+   const result=await f.call('GET',`/api/workspace/resources?topicId=${topic.id}&starredFirst=true&q=falsifiable`);
+   assert.equal(result.priorityUnavailable,true);
+   assert.equal(result.resources[0].id,item.id);
+   assert.equal(await fs.readFile(filename,'utf8'),invalid);
+  }
+ }finally{await f.close();}
+});
+
 test('library notes can sort newest first across pages and reject invalid sorting options',async()=>{
  const f=await fixture();try{
   await fs.writeFile(path.join(f.source,'a-old.md'),'older note');
@@ -206,4 +285,76 @@ test('library notes can sort newest first across pages and reject invalid sortin
   await f.call('GET','/api/workspace/resources?sort=unexpected',undefined,400);
   await f.call('GET','/api/workspace/resources?starredFirst=unexpected',undefined,400);
  }finally{await f.close();}
+});
+
+test('legacy single-row catalog migrates seamlessly to normalized SQLite tables',async()=>{
+  const directory=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'workspace-migrate-'));
+  const root=path.join(directory,'app');
+  await fs.mkdir(path.join(root,'workspace'),{recursive:true});
+  const {DatabaseSync}=await import('node:sqlite');
+  const dbPath=path.join(root,'workspace','catalog.sqlite');
+  const legacyDb=new DatabaseSync(dbPath);
+  legacyDb.exec('CREATE TABLE catalog(id INTEGER PRIMARY KEY CHECK (id = 1), payload TEXT NOT NULL, updated_at TEXT NOT NULL)');
+  const legacyState={version:1,revision:4,roots:[],topics:[{id:'t-legacy',title:'Legacy Topic',description:'Migrated',resourceIds:['r-legacy'],revision:2,createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'}],resources:[{id:'r-legacy',rootId:'root-1',path:'paper.txt',name:'paper.txt',kind:'file',size:18,modifiedAt:'2026-01-01T00:00:00Z',hash:'abc123',tags:['legacy'],missing:false,revision:1,text:'distinctive migrated evidence phrase'}],operations:[]};
+  legacyDb.prepare('INSERT INTO catalog(id,payload,updated_at) VALUES(1,?,?)').run(JSON.stringify(legacyState),'2026-01-01T00:00:00Z');
+  legacyDb.close();
+  const app=Fastify();
+  const service=await registerWorkspaceRoutes(app,root,{watch:false});
+  try{
+    const overview=await service.overview();
+    assert.equal(overview.topics.length,1);
+    assert.equal(overview.topics[0].title,'Legacy Topic');
+    const searched=(await app.inject('/api/workspace/resources?q=distinctive%20migrated')).json();
+    assert.equal(searched.total,1);
+    assert.equal(searched.resources[0].id,'r-legacy');
+    assert.equal('text' in searched.resources[0],false);
+    await service.close();
+    const checkDb=new DatabaseSync(dbPath);
+    try{
+      const tables=checkDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r:any)=>r.name);
+      assert.equal(tables.includes('catalog'),false);
+      assert.equal(tables.includes('resources'),true);
+      assert.equal(tables.includes('resource_text'),true);
+    }finally{checkDb.close();}
+  }finally{await service.close();await app.close();await fs.rm(directory,{recursive:true,force:true});}
+});
+
+test('raw resource streaming supports HTTP Range 206 and 416 responses',async()=>{
+  const f=await fixture();try{
+    await fs.writeFile(path.join(f.source,'bytes.pdf'),'0123456789ABCDEF');
+    await f.connect();
+    const item=(await f.call('GET','/api/workspace/resources')).resources[0];
+    const partial=await f.app.inject({method:'GET',url:`/api/workspace/resources/${item.id}/raw`,headers:{range:'bytes=2-5'}});
+    assert.equal(partial.statusCode,206,partial.body);
+    assert.equal(partial.headers['accept-ranges'],'bytes');
+    assert.equal(partial.headers['content-range'],'bytes 2-5/16');
+    assert.equal(partial.body,'2345');
+    const invalid=await f.app.inject({method:'GET',url:`/api/workspace/resources/${item.id}/raw`,headers:{range:'bytes=999-'}});
+    assert.equal(invalid.statusCode,416);
+    assert.equal(invalid.headers['content-range'],'bytes */16');
+  }finally{await f.close();}
+});
+
+test('overview enriches topics with cached notebook summary counts and latestIdea',async()=>{
+  const f=await fixture();try{
+    await fs.writeFile(path.join(f.source,'paper.pdf'),'%PDF-1.4');
+    await f.connect();
+    const item=(await f.call('GET','/api/workspace/resources')).resources[0];
+    const topic=await f.call('POST','/api/workspace/topics',{title:'Enriched Topic',resourceIds:[item.id]},201);
+    await fs.mkdir(path.join(f.root,'workspace/topic-notebooks'),{recursive:true});
+    await fs.writeFile(path.join(f.root,'workspace/topic-notebooks',topic.id+'.json'),JSON.stringify({
+      version:1,topicId:topic.id,
+      ideas:[
+        {id:'i1',kind:'question',text:'Latest open question',done:false,createdAt:'2026-02-01T00:00:00Z',updatedAt:'2026-02-05T00:00:00Z'},
+        {id:'i2',kind:'todo',text:'Open task',done:false,createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z'},
+        {id:'i3',kind:'todo',text:'Completed task',done:true,createdAt:'2026-02-02T00:00:00Z',updatedAt:'2026-02-03T00:00:00Z'},
+      ],
+      keyRefs:[{resourceId:item.id,note:'core',addedAt:'2026-02-01T00:00:00Z'}],
+    }));
+    const enriched=(await f.call('GET','/api/workspace/overview')).topics.find((t:any)=>t.id===topic.id);
+    assert.equal(enriched.openCount,2);
+    assert.equal(enriched.openIdeaCount,2);
+    assert.equal(enriched.keyRefCount,1);
+    assert.equal(enriched.latestIdea?.text,'Latest open question');
+  }finally{await f.close();}
 });

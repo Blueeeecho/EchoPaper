@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import type {LightMyRequestResponse} from 'fastify';
 import { createApp } from '../server/index.ts';
 import type { BuildService } from '../shared/types.ts';
 
@@ -20,6 +21,27 @@ async function fixture(watch=false) {
   const cleanup=async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});};
   return {root,app,create,cleanup};
 }
+test('the current app entry is uncached and missing browser bundles return 404',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'paper-workbench-entry-'));
+  const dist=path.join(root,'_system','dist');
+  let app:Awaited<ReturnType<typeof createApp>>|undefined;
+  try {
+    await fs.mkdir(path.join(dist,'assets'),{recursive:true});
+    await fs.writeFile(path.join(dist,'index.html'),'<title>EchoPaper</title>');
+    await fs.writeFile(path.join(dist,'assets','current.js'),'export {};');
+    app=await createApp({workspaceRoot:root,buildService:fakeBuilds,watch:false});
+    for(const url of ['/','/index.html','/workbench']) {
+      const entry:LightMyRequestResponse=await app.inject(url);
+      assert.equal(entry.statusCode,200,entry.body);
+      assert.equal(entry.headers['cache-control'],'no-store');
+      assert.equal(entry.body,'<title>EchoPaper</title>');
+    }
+    assert.equal((await app.inject('/assets/current.js')).body,'export {};');
+    assert.equal((await app.inject('/assets/previous.js')).statusCode,404);
+    assert.equal((await app.inject('/pdfjs/missing.mjs')).statusCode,404);
+    assert.equal((await app.inject('/api/absent')).statusCode,404);
+  } finally {await app?.close();await fs.rm(root,{recursive:true,force:true});}
+});
 test('optimistic saves reject stale clients and simultaneous writers preserve one complete version',async()=>{
   const {app,create,cleanup}=await fixture();
   try {
@@ -82,7 +104,7 @@ test('review rounds persist original comments and generate isolated compilable r
     await create('Alpha');const roundResponse=await app.inject({method:'POST',url:'/api/projects/Alpha/reviews',payload:{label:'First revision'}});assert.equal(roundResponse.statusCode,200,roundResponse.body);const round=roundResponse.json();
     const original=path.join(root,'papers/Alpha/reviews',round.id,'original/original.md');await fs.writeFile(original,'Verbatim reviewer message.');
     const main=path.join(root,'papers/Alpha/reviews',round.id,'response/main.tex');const before=await fs.readFile(main,'utf8');
-    const update=await app.inject({method:'PUT',url:`/api/projects/Alpha/reviews/${round.id}`,payload:{items:[{id:'R1-Q1',reviewer:'Reviewer 1',comment:'Explain A & B.',response:'Thank you. $100 and 50% are literal text.',location:'manuscript/main.tex:3',status:'addressed'}]}});assert.equal(update.statusCode,200,update.body);
+    const update=await app.inject({method:'PUT',url:`/api/projects/Alpha/reviews/${round.id}`,payload:{expectedHash:round.hash,items:[{id:'R1-Q1',reviewer:'Reviewer 1',comment:'Explain A & B.',response:'Thank you. $100 and 50% are literal text.',location:'manuscript/main.tex:3',status:'addressed'}]}});assert.equal(update.statusCode,200,update.body);
     assert.equal(await fs.readFile(original,'utf8'),'Verbatim reviewer message.');assert.equal(await fs.readFile(main,'utf8'),before);
     const generated=await fs.readFile(path.join(root,'papers/Alpha/reviews',round.id,'response/responses.tex'),'utf8');assert.ok(generated.includes('A \\& B.'));assert.ok(generated.includes('\\$100'));assert.ok(generated.includes('50\\%'));
     const project=(await app.inject('/api/projects')).json().projects[0];assert.ok(project.targets.some((target:{id:string})=>target.id===round.targetId));
@@ -114,22 +136,32 @@ test('a paths-limited checkpoint only commits the named files and skips empty af
     await create('Alpha');
     const project=path.join(root,'papers/Alpha');
     const main=(await app.inject('/api/projects/Alpha/file?path=manuscript/main.tex')).json();
-    await fs.writeFile(path.join(project,'notes/scratch.md'),'residual note\n');
-    await app.inject({method:'PUT',url:'/api/projects/Alpha/file',payload:{path:main.path,content:'AI body\n',expectedHash:main.hash}});
-    const rejected=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'bad',paths:'manuscript/main.tex'}});
-    assert.equal(rejected.statusCode,400);
-    const after=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'AI 修改后：应用 AI 建议 · manuscript/main.tex',paths:['manuscript/main.tex']}});
-    assert.equal(after.statusCode,200,after.body);
-    assert.equal(after.json().message,'AI 修改后：应用 AI 建议 · manuscript/main.tex');
-    assert.equal(after.json().committed,true);
     const {execFile}=await import('node:child_process');
     const {promisify}=await import('node:util');
     const run=promisify(execFile);
-    const files=(await run('/usr/bin/git',['--no-pager','-C',project,'show','--pretty=format:','--name-only','HEAD'],{encoding:'utf8'})).stdout.split('\n').map(s=>s.trim()).filter(Boolean);
-    assert.deepEqual(files,['manuscript/main.tex']);
+    const git=async (...args:string[]) => (await run('/usr/bin/git',['-C',project,...args],{encoding:'utf8'})).stdout;
+    await fs.writeFile(path.join(project,'notes/scratch.md'),'staged version\n');
+    await git('add','--','notes/scratch.md');
+    await fs.writeFile(path.join(project,'notes/scratch.md'),'residual note\n');
+    await fs.writeFile(path.join(project,'notes/selected.md'),'New selected file\n');
+    await app.inject({method:'PUT',url:'/api/projects/Alpha/file',payload:{path:main.path,content:'AI body\n',expectedHash:main.hash}});
+    const rejected=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'bad',paths:'manuscript/main.tex'}});
+    assert.equal(rejected.statusCode,400);
+    const after=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'AI 修改后：应用 AI 建议 · manuscript/main.tex',paths:['manuscript/main.tex','notes/selected.md']}});
+    assert.equal(after.statusCode,200,after.body);
+    assert.equal(after.json().message,'AI 修改后：应用 AI 建议 · manuscript/main.tex');
+    assert.equal(after.json().committed,true);
+    const files=(await git('show','--pretty=format:','--name-only','HEAD')).split('\n').filter(Boolean);
+    assert.deepEqual(files,['manuscript/main.tex','notes/selected.md']);
+    assert.equal(await git('show',':notes/scratch.md'),'staged version\n');
+    await fs.unlink(path.join(project,'notes/selected.md'));
+    const deleted=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'选中文件删除',paths:['notes/selected.md']}});
+    assert.equal(deleted.statusCode,200,deleted.body);
+    assert.equal(await git('show','--pretty=format:','--name-status','HEAD'),'D\tnotes/selected.md\n');
+    assert.equal(await git('show',':notes/scratch.md'),'staged version\n');
     const empty=await app.inject({method:'POST',url:'/api/projects/Alpha/checkpoints',payload:{message:'AI 修改后：空提交',paths:['manuscript/main.tex']}});
     assert.equal(empty.statusCode,200,empty.body);
-    assert.equal(empty.json().message,'AI 修改后：应用 AI 建议 · manuscript/main.tex');
+    assert.equal(empty.json().message,'选中文件删除');
     assert.equal(empty.json().committed,false);
     assert.equal(await fs.readFile(path.join(project,'notes/scratch.md'),'utf8'),'residual note\n');
     const dirty=(await run('/usr/bin/git',['--no-pager','-C',project,'status','--porcelain','--','notes/scratch.md'],{encoding:'utf8'})).stdout.trim();
@@ -164,4 +196,94 @@ test('checkpoints report committed true or false, and omit-paths responses stay 
     assert.equal(emptyPaths.json().committed,false);
     assert.equal(emptyPaths.json().hash,savedBody.hash);
   }finally{await cleanup();}
+});
+
+test('review saves compare round hashes and can regenerate a failed source write',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  try {
+    await create('Alpha');
+    const base='/api/projects/Alpha/reviews';
+    const round=(await app.inject({method:'POST',url:base,payload:{label:'Fixture'}})).json();
+    const url=base+'/'+round.id;
+    const put=(expectedHash:string,items:unknown)=>app.inject({method:'PUT',url,payload:{expectedHash,items}});
+    const initial=(await put(round.hash,[{id:'A',response:'old A'},{id:'B',response:'old B'}])).json();
+    const a=await put(initial.hash,[{id:'A',response:'new A'},{id:'B',response:'old B'}]);
+    assert.equal(a.statusCode,200,a.body);
+    const b=await put(initial.hash,[{id:'A',response:'old A'},{id:'B',response:'new B'}]);
+    assert.equal(b.statusCode,409,b.body);
+    assert.deepEqual(b.json().current.items.map((item:{response:string})=>item.response),['new A','old B']);
+    const tex=path.join(root,'papers/Alpha/reviews',round.id,'response/responses.tex');
+    await fs.unlink(tex);
+    await fs.mkdir(tex);
+    const saved=await put(a.json().hash,[{id:'A',response:'new A'},{id:'B',response:'new B'}]);
+    assert.equal(saved.statusCode,200,saved.body);
+    assert.equal(saved.json().needsSourceSync,true);
+    assert.equal((await app.inject(base)).json().rounds[0].needsSourceSync,true);
+    await fs.rmdir(tex);
+    const regenerated=await put(saved.json().hash,saved.json().items);
+    assert.equal(regenerated.statusCode,200,regenerated.body);
+    assert.equal(regenerated.json().hash,saved.json().hash);
+    assert.equal(regenerated.json().needsSourceSync,undefined);
+    assert.match(await fs.readFile(tex,'utf8'),/new A[\s\S]*new B/);
+  } finally {await cleanup();}
+});
+
+test('text editing rejects invalid UTF-8 and restores binary revisions by byte',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  try {
+    await create('Alpha');
+    const base='/api/projects/Alpha';
+    const p=path.join(root,'papers/Alpha');
+    const invalid='notes/legacy.tex', asset='manuscript/asset.bin';
+    const legacy=Buffer.from([0x61,0xe9,0x62,10]), binary=Buffer.from([0x89,0x50,0,0xff]);
+    await fs.writeFile(path.join(p,invalid),legacy);
+    await fs.writeFile(path.join(p,asset),binary);
+    const doc=(file:string)=>app.inject(base+'/file?path='+encodeURIComponent(file));
+    assert.equal((await doc(invalid)).statusCode,415);
+    const overwrite=await app.inject({method:'PUT',url:base+'/file',payload:{path:invalid,content:'test',expectedHash:'0'.repeat(64)}});
+    assert.equal(overwrite.statusCode,415);
+    assert.deepEqual(await fs.readFile(path.join(p,invalid)),legacy);
+    const bom='notes/valid.md', bomBytes=Buffer.from('\uFEFF中文\n');
+    await fs.writeFile(path.join(p,bom),bomBytes);
+    const shown=(await doc(bom)).json();
+    assert.equal((await app.inject({method:'PUT',url:base+'/file',payload:{path:bom,content:shown.content,expectedHash:shown.hash}})).statusCode,200);
+    assert.deepEqual(await fs.readFile(path.join(p,bom)),bomBytes);
+    const saved=await app.inject({method:'POST',url:base+'/checkpoints',payload:{message:'Binary baseline'}});
+    assert.equal(saved.statusCode,200,saved.body);
+    const replacement=Buffer.from([1,0,0x80]);
+    await fs.writeFile(path.join(p,asset),replacement);
+    const restored=await app.inject({method:'POST',url:base+'/restore',payload:{path:asset,ref:saved.json().hash}});
+    assert.equal(restored.statusCode,200,restored.body);
+    assert.deepEqual(restored.json(),{path:asset,restored:true});
+    assert.deepEqual(await fs.readFile(path.join(p,asset)),binary);
+    const recovery=path.join(p,'.workbench/recovery');
+    const copies=await Promise.all((await fs.readdir(recovery)).map(name=>fs.readFile(path.join(recovery,name))));
+    assert.ok(copies.some(copy=>copy.equals(replacement)));
+  } finally {await cleanup();}
+});
+
+test('invalid presentation and OCR queue data do not stop the workbench or overwrite original bytes',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  let reopened:Awaited<ReturnType<typeof createApp>>|undefined;
+  try {
+    await create('Alpha');
+    await app.close();
+    const malformed='{interrupted';
+    const presentation=path.join(root,'workspace/presentations/bad/presentation.json');
+    const queue=path.join(root,'workspace/reading-layout/_processing.json');
+    await fs.mkdir(path.dirname(presentation),{recursive:true});
+    await fs.writeFile(presentation,malformed);
+    await fs.writeFile(queue,malformed);
+    reopened=await createApp({workspaceRoot:root,watch:false,buildService:fakeBuilds});
+    assert.equal((await reopened.inject('/api/projects')).json().projects[0].id,'Alpha');
+    assert.deepEqual((await reopened.inject('/api/presentations')).json(),{presentations:[],unavailable:['bad']});
+    assert.equal((await reopened.inject('/api/presentations/bad')).statusCode,409);
+    assert.equal((await reopened.inject('/api/workspace/bilingual/processing')).statusCode,503);
+    assert.equal((await reopened.inject('/api/workspace/overview')).statusCode,200);
+    assert.equal((await reopened.inject('/api/backups')).statusCode,200);
+    await reopened.close();
+    reopened=undefined;
+    assert.equal(await fs.readFile(presentation,'utf8'),malformed);
+    assert.equal(await fs.readFile(queue,'utf8'),malformed);
+  }finally{await reopened?.close();await cleanup();}
 });

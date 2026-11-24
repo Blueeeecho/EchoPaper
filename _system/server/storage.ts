@@ -21,7 +21,22 @@ export const hash = (content: string | Buffer): string => createHash('sha256').u
 export async function atomicWrite(filename: string, content: string | Buffer): Promise<void> {
   await fs.mkdir(path.dirname(filename), { recursive: true });
   const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${randomUUID()}.tmp`);
-  try { await fs.writeFile(temporary, content, { flag: 'wx' }); await fs.rename(temporary, filename); }
+  try {
+    await fs.writeFile(temporary, content, { flag: 'wx' });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rename(temporary, filename);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (process.platform === 'win32' && (code === 'EPERM' || code === 'EBUSY') && attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
   finally { await fs.rm(temporary, { force: true }).catch(() => undefined); }
 }
 export async function readJson<T>(filename: string): Promise<T> { return JSON.parse(await fs.readFile(filename, 'utf8')) as T; }

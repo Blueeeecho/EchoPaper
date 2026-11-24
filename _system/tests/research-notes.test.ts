@@ -123,6 +123,25 @@ test('note API rejects malformed inputs, invalid logs, archived writes and cross
  }finally{await f.close();}
 });
 
+test('unreadable Markdown is isolated from healthy notes while its bytes and linked identity remain',async()=>{
+ const f=await fixture();try{
+  const broken=await f.create(),healthy=await f.create(),badBytes=Buffer.from([0x61,0xff,0x62]);
+  const filename=path.join(f.root,broken.path);
+  await fs.writeFile(filename,badBytes);
+  const result=await f.call('GET',f.url());
+  assert.deepEqual(result.notes.map((note:any)=>note.id),[healthy.id]);
+  assert.deepEqual(result.unavailable,[broken.filename]);
+  await f.call('GET',f.url('experiments',broken.id),undefined,415);
+  assert.equal((await f.call('GET',f.url('experiments',healthy.id))).hash,healthy.hash);
+  assert.equal((await f.service.overview()).resources.find(resource=>resource.id===broken.id)?.missing,false);
+  assert.deepEqual(await fs.readFile(filename),badBytes);
+  await fs.writeFile(filename,'repaired fixture');
+  const repaired=await f.call('GET',f.url());
+  assert.equal(repaired.unavailable,undefined);
+  assert.equal(repaired.notes.find((note:any)=>note.filename===broken.filename).id,broken.id);
+ }finally{await f.close();}
+});
+
 test('managed-root exception remains narrow and note reads never follow symbolic links',async()=>{
  const f=await fixture();try{
   const note=await f.create(),folder=path.dirname(path.join(f.root,note.path));

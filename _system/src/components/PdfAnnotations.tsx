@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Bold, Highlighter, Italic, MessageSquarePlus, MessageSquareText, X, Trash2, Check } from 'lucide-react';
-import type { PdfAnnotation, PdfAnnotationKind, PdfAnnotationSource, PdfAnnotationStatus, WorkspaceEvent } from '../../shared/types';
+import type { PdfAnnotation, PdfAnnotationKind, PdfAnnotationSource, PdfAnnotationStatus } from '../../shared/types';
+import { subscribeWorkspaceEvents } from '../workspaceEvents';
 import { api, ApiError, json, prettyDate } from '../api';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { findMigrationCandidates, type MigrationCandidate } from '../annotationMigration';
@@ -68,10 +69,10 @@ export function usePdfAnnotations({ projectId, targetId, buildId, root, goToPage
     } catch { setError('浏览器无法保存批注草稿，请先复制备注文字，避免刷新后丢失。'); }
   }, [draft, draftKey]);
   useEffect(() => {
-    const events = new EventSource('/api/events');
-    events.onmessage = e => { try { const event: WorkspaceEvent = JSON.parse(e.data); if (event.projectId === projectId && (event.type === 'annotation.changed' || event.type === 'file.changed' && event.path === 'notes/pdf-annotations.json')) void refresh(); } catch {} };
-    events.onopen = () => { void refresh(); };
-    return () => events.close();
+    return subscribeWorkspaceEvents({
+      message: event => { if (event.projectId === projectId && (event.type === 'annotation.changed' || event.type === 'file.changed' && event.path === 'notes/pdf-annotations.json')) void refresh(); },
+      reconnect: () => { void refresh(); },
+    });
   }, [projectId, refresh]);
   useEffect(() => {
     if (!menu) return;

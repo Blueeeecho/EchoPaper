@@ -14,18 +14,36 @@
 .paper-object-bar {display:flex;align-items:center;gap:12px;min-height:48px;padding:7px 18px;border-bottom:1px solid var(--line);background:var(--surface);flex-shrink:0;color:var(--ink)}
 .paper-object-title {min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:600}
 .paper-object-stage {white-space:nowrap;font-size:12px;color:var(--muted)}
+.paper-object-bar > * {flex-shrink:0}
+.paper-object-bar .paper-object-title {flex-shrink:1}
+.paper-object-bar .focus-project {min-width:0;max-width:min(180px,100%)}
+.paper-object-bar .focus-project strong {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .paper-object-bar .academic-secondary {white-space:nowrap;padding:6px 10px;font-size:12px}
-.paper-hub-shell .workspace-tabs {min-height:40px;padding:0 18px;border-color:var(--line);background:var(--surface);overflow-x:auto;flex-shrink:0}
+.paper-hub-shell .workspace-tabs {min-height:40px;height:auto;gap:10px;padding:0 18px;border-color:var(--line);background:var(--surface);overflow-x:auto;flex-shrink:0}
 .paper-hub-shell .workspace-tabs button {white-space:nowrap;flex-shrink:0;color:var(--muted);padding:10px 12px}
+.paper-hub-shell .workspace-tabs button {margin-top:0}
 .paper-hub-shell .workspace-tabs button.active {color:var(--accent);border-color:var(--accent)}
-.paper-hub-shell .build-bar {min-height:40px;padding:6px 18px;border-color:var(--line);background:var(--surface);flex-shrink:0}
+.paper-hub-shell .workspace-section :is(.settings-form,.review-grid) {grid-template-columns:repeat(2,minmax(0,1fr))}
+.paper-hub-shell .workspace-section :is(.settings-form,.review-grid,.target-row) label {min-width:0}
+.paper-hub-shell .workspace-section :is(.settings-form,.review-grid,.target-row) :is(input,select,textarea) {width:100%;min-width:0}
+.paper-hub-shell .workspace-section .review-card-top > input {min-width:0}
+.paper-hub-shell .workspace-section .environment code {white-space:normal;overflow-wrap:anywhere}
+.paper-hub-shell .build-bar {
+ min-height:44px;height:auto;gap:8px 14px;flex-wrap:wrap;padding:6px 18px;
+ border-color:var(--line);background:var(--ep-bg);flex-shrink:0;
+}
+.paper-hub-shell .build-bar .build-target select {max-width:min(180px,32vw);font-size:13px}
+.paper-hub-shell .build-bar .build-status {font-size:12px;white-space:normal;flex-wrap:wrap}
+.paper-hub-shell .build-bar > button {margin-left:auto;white-space:nowrap}
 .paper-hub-shell .section-page {padding:24px clamp(18px,3vw,42px);background:var(--canvas,var(--surface));color:var(--ink)}
 .paper-hub-shell .section-page .page-heading {margin-bottom:22px}
 .paper-hub-shell .section-page .page-heading h1,.paper-hub-shell .section-page .page-heading h2 {font-size:24px;line-height:1.35;color:var(--ink)}
 .paper-hub-shell .workspace-footer {color:var(--muted);border-color:var(--line);background:var(--surface)}
 .paper-hub-shell .workspace-section {padding:22px clamp(18px,3vw,42px);color:var(--ink);background:var(--surface)}
-.paper-hub-shell .section-heading {margin-bottom:22px}
+.paper-hub-shell .section-heading {margin-bottom:20px;align-items:flex-start;flex-wrap:wrap;gap:10px 18px}
 .paper-hub-shell .section-heading h2 {font-size:24px;line-height:1.35;color:var(--ink)}
+.target-row > label {display:grid;min-width:0;gap:4px}
+.target-row > label > span {display:none;color:var(--muted);font-size:12px}
 .review-evidence-summary {display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap;padding:12px 0;border-block:1px solid var(--line);font-size:12px;color:var(--ink)}
 .review-evidence-summary small {color:var(--muted);line-height:1.6}
 .review-filter-bar {display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:16px 0}
@@ -45,4 +63,32 @@
  .paper-object-bar {gap:8px;padding-inline:12px}
  .paper-object-stage {display:none}
  .paper-hub-shell .workspace-tabs,.paper-hub-shell .build-bar {padding-inline:12px}
+}
+
+@container paper-workspace (max-width: 570px) {
+ .paper-hub-shell .paper-object-bar {
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto auto;
+  gap:5px 6px;
+ }
+ .paper-hub-shell .paper-object-title {grid-column:1/-1;grid-row:2;padding:2px 1px}
+ .paper-hub-shell .paper-object-bar .project-stage-select {min-width:0;max-width:94px;padding-inline:6px 19px;font-size:13px}
+ .paper-hub-shell .paper-object-bar .academic-secondary {padding-inline:8px}
+ .paper-hub-shell .workspace-tabs {flex-wrap:wrap;gap:0 10px;padding-inline:12px}
+ .paper-hub-shell .workspace-tabs button {padding:8px 0;font-size:12px}
+ .paper-hub-shell .workspace-tabs button svg {display:none}
+ .paper-hub-shell .build-bar .toolbar-spacer {display:none}
+ .paper-hub-shell .review-filter-bar > input {min-width:min(220px,100%)}
+ .paper-hub-shell .workspace-section .settings-card {padding:16px}
+ .paper-hub-shell .workspace-section :is(.settings-form,.review-grid) {grid-template-columns:minmax(0,1fr);gap:14px}
+ .paper-hub-shell .workspace-section .target-head {display:none}
+ .paper-hub-shell .workspace-section .target-row {
+  grid-template-columns:repeat(2,minmax(0,1fr)) auto;
+  align-items:end;gap:7px;padding-block:10px;border-bottom:1px solid var(--line);
+ }
+ .paper-hub-shell .workspace-section .target-row > label > span {display:block}
+ .paper-hub-shell .workspace-section .target-row > label:nth-child(3) {grid-column:1/3}
+ .paper-hub-shell .workspace-section .target-row > button {grid-column:3}
+ .paper-hub-shell .workspace-section :is(.snapshot-card,.checkpoint-form) {flex-wrap:wrap}
+ .paper-hub-shell .workspace-section .checkpoint-form > input {min-width:min(180px,100%)}
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
+import { gitExecutable } from '../platform';
 import {promisify} from 'node:util';
 import type {AgentEditTarget,AgentRun,ChangeImage,ChangeOperation,ChangeSet} from '../../shared/agent-types';
 import type {Project} from '../../shared/types';
@@ -136,7 +137,7 @@ export async function applyChangeSet(root:string,run:AgentRun,change:ChangeSet,o
 async function mergeInverse(root:string,current:Buffer,after:Buffer,before:Buffer):Promise<Buffer>{
  if([current,after,before].some(b=>b.includes(0)))throw new HttpError(409,'二进制文件已有后续修改，不能自动撤销。');
  const folder=await assertNoSymlinks(root,'.workbench',true);await fs.mkdir(folder,{recursive:true});const dir=await fs.mkdtemp(path.join(folder,'merge-'));
- try{for(const[n,b]of [['current',current],['base',after],['inverse',before]]as const)await fs.writeFile(path.join(dir,n),b);try{const result=await execute('/usr/bin/git',['merge-file','-p',path.join(dir,'current'),path.join(dir,'base'),path.join(dir,'inverse')],{maxBuffer:12*1024*1024});return Buffer.from(result.stdout);}catch{throw new HttpError(409,'撤销与后续编辑重叠，已保留双方内容，请手动比较。');}}finally{await fs.rm(dir,{recursive:true,force:true});}
+ try{for(const[n,b]of [['current',current],['base',after],['inverse',before]]as const)await fs.writeFile(path.join(dir,n),b);try{const result=await execute(gitExecutable(),['merge-file','-p',path.join(dir,'current'),path.join(dir,'base'),path.join(dir,'inverse')],{maxBuffer:12*1024*1024});return Buffer.from(result.stdout);}catch{throw new HttpError(409,'撤销与后续编辑重叠，已保留双方内容，请手动比较。');}}finally{await fs.rm(dir,{recursive:true,force:true});}
 }
 export async function undoChangeSet(root:string,run:AgentRun,change:ChangeSet,options:{signal?:AbortSignal}={}):Promise<ChangeSet>{
  if(change.runId!==run.id||change.status!=='applied')throw new HttpError(409,'此变更集未应用或已经撤销。');
@@ -151,7 +152,7 @@ export async function undoChangeSet(root:string,run:AgentRun,change:ChangeSet,op
 }
 export async function recoverChangeSets(root:string):Promise<ChangeSet[]>{
  const folder=await assertNoSymlinks(root,'.workbench/agent-changes',true),recovered:ChangeSet[]=[];
- for(const name of await fs.readdir(folder).catch(()=>[])){if(!/^cs-[\w-]+\.json$/.test(name))continue;const change=JSON.parse(await fs.readFile(await assertNoSymlinks(root,'.workbench/agent-changes/'+name),'utf8'))as ChangeSet;if(change.status!=='applying'){recovered.push(change);continue;}
+ for(const name of await fs.readdir(folder).catch(()=>[])){if(!/^cs-[\w-]+\.json$/.test(name))continue;let change:ChangeSet;try{change=JSON.parse(await fs.readFile(await assertNoSymlinks(root,'.workbench/agent-changes/'+name),'utf8'))as ChangeSet;}catch{continue;}if(change.status!=='applying'){recovered.push(change);continue;}
   let conflict=false;await withProjectMutation(root,async()=>{for(const image of [...change.images].reverse()){const actual=digest(await readBytes(root,image.path));if(actual===image.afterHash&&actual!==image.beforeHash)await setImage(root,image,true).catch(()=>{conflict=true;});else if(actual!==image.beforeHash)conflict=true;}change.status=conflict?'conflicted':'failed';change.error=conflict?'中断提交遇到外部变化，恢复记录已保留。':'中断的提交已按日志补偿。';await journal(root,change);});recovered.push(change);
  }
  const originals=recovered.filter(change=>!change.undoOf);

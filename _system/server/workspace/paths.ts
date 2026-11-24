@@ -6,7 +6,16 @@ import {HttpError,relativePath} from '../security.ts';
 import type {SourceRoot} from '../../shared/workspace-types.ts';
 
 export const trashName='.echopaper-trash';
-export const contains=(parent:string,child:string)=>child===parent||child.startsWith(parent+path.sep);
+const NOFOLLOW=constants.O_NOFOLLOW??0;
+const isoMtime=(stat:{mtimeNs:bigint})=>new Date(Number(stat.mtimeNs/1_000_000n)+(stat.mtimeNs%1_000_000n>=500_000n?1:0)).toISOString();
+const normFsPath=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
+const sameFsPath=(a:string,b:string)=>normFsPath(a)===normFsPath(b);
+export const contains=(parent:string,child:string)=>{
+  const p=normFsPath(parent),c=normFsPath(child);
+  if(c===p)return true;
+  const prefix=p.endsWith(path.sep)?p:p+path.sep;
+  return c.startsWith(prefix);
+};
 export const overlaps=(a:string,b:string)=>contains(a,b)||contains(b,a);
 export function resourcePath(value:unknown){const relative=relativePath(value);if(relative.split('/').some(part=>part.startsWith('.')))throw new HttpError(403,'隐藏目录和回收区不通过文件管理器直接访问。');return relative;}
 export function protectedPath(workspaceRoot:string,candidate:string){
@@ -20,26 +29,53 @@ export async function canonicalRoot(workspaceRoot:string,value:unknown){
   const resolved=path.resolve(value);if(protectedPath(workspaceRoot,resolved))throw new HttpError(403,'来源目录与工作台管理目录重叠；请选择独立的原始资料目录。');
   const stat=await fs.lstat(resolved).catch(error=>{if(error.code==='ENOENT')throw new HttpError(404,'来源目录不存在。');throw error;});
   if(stat.isSymbolicLink()||!stat.isDirectory())throw new HttpError(403,'来源必须是实际目录，不能是符号链接。');
-  const canonical=await fs.realpath(resolved);if(canonical!==resolved)throw new HttpError(403,'来源路径不能经过符号链接。');
+  const canonical=await fs.realpath(resolved);if(!sameFsPath(canonical,resolved))throw new HttpError(403,'来源路径不能经过符号链接。');
   if(protectedPath(workspaceRoot,canonical))throw new HttpError(403,'来源目录与工作台管理目录重叠。');return canonical;
 }
 export async function rootFile(workspaceRoot:string,root:SourceRoot,relative:string,options:{missing?:boolean;internal?:boolean}={}){
   if(protectedPath(workspaceRoot,root.path))throw new HttpError(403,'来源目录与工作台管理目录重叠。');
   const rel=relative?(options.internal?relativePath(relative):resourcePath(relative)):'';
   const stat=await fs.lstat(root.path).catch(error=>{if(error.code==='ENOENT'||error.code==='ENOTDIR')throw new HttpError(503,'来源目录离线，文件和索引仍保留。');throw error;});
-  if(stat.isSymbolicLink()||!stat.isDirectory()||await fs.realpath(root.path)!==root.path)throw new HttpError(403,'来源目录不能经过符号链接。');
+  if(stat.isSymbolicLink()||!stat.isDirectory()||!sameFsPath(await fs.realpath(root.path),root.path))throw new HttpError(403,'来源目录不能经过符号链接。');
   let cursor=root.path;for(const part of rel.split('/').filter(Boolean)){
     cursor=path.join(cursor,part);const item=await fs.lstat(cursor).catch(error=>{if(error.code==='ENOENT'&&options.missing)return null;if(error.code==='ENOENT')throw new HttpError(404,'资源文件不存在。');throw error;});
     if(item?.isSymbolicLink())throw new HttpError(403,'不允许通过符号链接访问资源。');
   }return cursor;
 }
 export interface Tree {kind:'file'|'directory';hash:string;size:number;modifiedAt:string;mode:number;children?:Map<string,Tree>}
+interface FileStatHash {dev:bigint;ino:bigint;size:bigint;mtimeNs:bigint;ctimeNs:bigint;hash:string;modifiedAt:string;mode:number}
+const statHashCache=new Map<string,FileStatHash>();
+function rememberStatHash(filename:string,entry:FileStatHash){
+  statHashCache.delete(filename);
+  statHashCache.set(filename,entry);
+  if(statHashCache.size>10000)statHashCache.delete(statHashCache.keys().next().value!);
+}
+export async function fastFileSnapshot(filename:string,hint?:{hash?:string;size:number;modifiedAt:string}):Promise<Tree>{
+  const stat=await fs.lstat(filename,{bigint:true});
+  if(stat.isSymbolicLink())throw new HttpError(403,'操作范围包含符号链接，未执行文件操作。');
+  if(!stat.isFile())return snapshot(filename);
+  const cached=statHashCache.get(filename);
+  if(cached&&cached.dev===stat.dev&&cached.ino===stat.ino&&cached.size===stat.size&&cached.mtimeNs===stat.mtimeNs&&cached.ctimeNs===stat.ctimeNs){
+    return {kind:'file',hash:cached.hash,size:Number(stat.size),modifiedAt:cached.modifiedAt,mode:cached.mode};
+  }
+  const modifiedAt=isoMtime(stat);
+  const size=Number(stat.size);
+  // Racy-clean check: if a previously indexed file is older than 2s and matches size + mtime, reuse its hash.
+  if(hint?.hash&&hint.size===size&&hint.modifiedAt===modifiedAt&&Date.now()-stat.mtime.getTime()>2000){
+    const mode=Number(stat.mode&0o777n);
+    rememberStatHash(filename,{dev:stat.dev,ino:stat.ino,size:stat.size,mtimeNs:stat.mtimeNs,ctimeNs:stat.ctimeNs,hash:hint.hash,modifiedAt,mode});
+    return {kind:'file',hash:hint.hash,size,modifiedAt,mode};
+  }
+  return snapshot(filename);
+}
 export async function snapshot(filename:string):Promise<Tree>{
   const stat=await fs.lstat(filename);if(stat.isSymbolicLink())throw new HttpError(403,'操作范围包含符号链接，未执行文件操作。');
   if(stat.isFile()){
-    const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{
-      const before=await handle.stat();if(!before.isFile())throw new HttpError(403,'仅支持普通文件和目录。');const digest=createHash('sha256');for await(const bytes of handle.createReadStream({autoClose:false}))digest.update(bytes);const after=await handle.stat();if(before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
-      return{kind:'file',hash:digest.digest('hex'),size:after.size,modifiedAt:after.mtime.toISOString(),mode:after.mode&0o777};
+    const handle=await fs.open(filename,constants.O_RDONLY|NOFOLLOW);try{
+      const before=await handle.stat({bigint:true});if(!before.isFile())throw new HttpError(403,'仅支持普通文件和目录。');const digest=createHash('sha256');for await(const bytes of handle.createReadStream({autoClose:false}))digest.update(bytes);const after=await handle.stat({bigint:true});if(before.size!==after.size||before.mtimeNs!==after.mtimeNs)throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
+      const fileHash=digest.digest('hex'),modifiedAt=isoMtime(after),mode=Number(after.mode&0o777n);
+      rememberStatHash(filename,{dev:after.dev,ino:after.ino,size:after.size,mtimeNs:after.mtimeNs,ctimeNs:after.ctimeNs,hash:fileHash,modifiedAt,mode});
+      return{kind:'file',hash:fileHash,size:Number(after.size),modifiedAt,mode};
     }finally{await handle.close();}
   }
   if(!stat.isDirectory())throw new HttpError(403,'仅支持普通文件和目录。');
@@ -52,8 +88,8 @@ export async function copyExclusive(source:string,destination:string,tree:Tree):
   if(tree.kind==='directory'){
     await fs.mkdir(destination,{mode:tree.mode|0o700});for(const[name,child]of tree.children!)await copyExclusive(path.join(source,name),path.join(destination,name),child);await fs.utimes(destination,new Date(tree.modifiedAt),new Date(tree.modifiedAt));return;
   }
-  const input=await fs.open(source,constants.O_RDONLY|constants.O_NOFOLLOW);let output:Awaited<ReturnType<typeof fs.open>>|undefined;
-  try{output=await fs.open(destination,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,tree.mode);for await(const chunk of input.createReadStream({autoClose:false})){const bytes=chunk as Buffer;let offset=0;while(offset<bytes.length){const result=await output.write(bytes,offset,bytes.length-offset);offset+=result.bytesWritten;}}await output.sync();await output.utimes(new Date(tree.modifiedAt),new Date(tree.modifiedAt));}
+  const input=await fs.open(source,constants.O_RDONLY|NOFOLLOW);let output:Awaited<ReturnType<typeof fs.open>>|undefined;
+  try{output=await fs.open(destination,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|NOFOLLOW,tree.mode);for await(const chunk of input.createReadStream({autoClose:false})){const bytes=chunk as Buffer;let offset=0;while(offset<bytes.length){const result=await output.write(bytes,offset,bytes.length-offset);offset+=result.bytesWritten;}}await output.sync();await output.utimes(new Date(tree.modifiedAt),new Date(tree.modifiedAt));}
   finally{await Promise.allSettled([input.close(),...(output?[output.close()]:[])]);}
 }
 /** No recursive rm: unexpected new files keep the source directory recoverable. */

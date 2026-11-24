@@ -5,7 +5,17 @@ import { countdownText, deadlineCountdown, formatDeadlineLocal, validateDeadline
 import '../deadline.css';
 export default function DeadlineCountdown({project,onConfigure,expanded}:{project:Project;onConfigure:()=>void;expanded?:boolean}) {
   const [now,setNow]=useState(Date.now());
-  useEffect(()=>{const update=()=>setNow(Date.now());const timer=setInterval(update,1000);window.addEventListener('focus',update);document.addEventListener('visibilitychange',update);return()=>{clearInterval(timer);window.removeEventListener('focus',update);document.removeEventListener('visibilitychange',update);};},[]);
+  useEffect(()=>{
+    let timer: number | undefined;
+    const update=()=>{ if(!document.hidden) setNow(Date.now()); };
+    const stop=()=>{ window.clearInterval(timer); timer=undefined; };
+    const start=()=>{ stop(); if(!document.hidden) timer=window.setInterval(update,30000); };
+    const wake=()=>{ if(document.hidden) stop(); else { update(); start(); } };
+    start();
+    window.addEventListener('focus',wake);
+    document.addEventListener('visibilitychange',wake);
+    return()=>{ stop(); window.removeEventListener('focus',wake); document.removeEventListener('visibilitychange',wake); };
+  },[]);
   const configuration=useMemo(()=>{try{return project.deadlineAt || project.deadlineTimezone ? {value:validateDeadlineConfiguration(project.deadlineAt,project.deadlineTimezone)} : {};}catch(error){return {error:(error as Error).message};}},[project.deadlineAt,project.deadlineTimezone]);
   const value=configuration.value, parts=value ? deadlineCountdown(value.deadlineAt,now) : undefined;
   const text=parts ? countdownText(parts) : configuration.error ? '截止配置有误，请检查' : project.deadline ? '请补准确时间 / 时区' : '选择会议与正文截止';

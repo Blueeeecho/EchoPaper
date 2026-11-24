@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { chatsEqual, type PersistedChat } from '../shared/chat-merge';
 import { mergeConversationSelection } from './agentConversation';
 import { api, ApiError, json } from './api';
+import { subscribeWorkspaceEvents } from './workspaceEvents';
 interface RemoteChats {data:PersistedChat|null;hash:string|null}
 export function useProjectChats(projectId:string, read:()=>PersistedChat, apply:(data:PersistedChat)=>void, preferredSelection?:()=>string|undefined) {
  const [warning,setWarning]=useState(''),[ready,setReady]=useState(false);
@@ -53,9 +54,8 @@ export function useProjectChats(projectId:string, read:()=>PersistedChat, apply:
   }catch(e:any){if(active)setWarning(`本机对话存储暂不可用，浏览器草稿仍保留：${e.message}`);}};
   receiveRef.current=receive;
   void receive(true);
-  const events=new EventSource('/api/events');events.onmessage=e=>{try{const event=JSON.parse(e.data);if(event.projectId===projectId&&event.type==='file.changed'&&event.path==='notes/ai-conversations.json')void receive();}catch{}};
-  events.onopen=()=>{if(loaded.current)void receive();};
-  return()=>{active=false;mounted.current=false;events.close();clearTimeout(timer.current);timer.current=undefined;};
+  const unsubscribe=subscribeWorkspaceEvents({message:event=>{if(event.projectId===projectId&&event.type==='file.changed'&&event.path==='notes/ai-conversations.json')void receive();},reconnect:()=>{if(loaded.current)void receive();}});
+  return()=>{active=false;mounted.current=false;unsubscribe();clearTimeout(timer.current);timer.current=undefined;};
  },[projectId,url,flush]);
  return{queue,flush,warning,ready,changeLifecycle,changingId};
 }

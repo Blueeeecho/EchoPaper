@@ -22,6 +22,15 @@ export function translationIndex(translations:Record<string,string>):Map<string,
  return index;
 }
 
+export function translationKeyIndex(translations:Record<string,string>):Map<string,string> {
+ const index=new Map<string,string>();
+ for(const [key,value] of Object.entries(translations)) {
+  const separator=key.indexOf('|',key.indexOf('|')+1);
+  if(separator>0&&value.trim())index.set(key.slice(separator+1),key);
+ }
+ return index;
+}
+
 export function cachedTranslationKey(translations:Record<string,string>,target:string,text:string):string|undefined {
  const suffix=`|${textFingerprint(target,text)}`;
  return Object.keys(translations).find(key=>key.endsWith(suffix)&&translations[key].trim());

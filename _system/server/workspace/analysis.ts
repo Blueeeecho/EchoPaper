@@ -18,10 +18,27 @@ export function parseArticleAnalysis(raw:string,pages:AnalysisPage[],source:{res
  if(facts.some(f=>!pages.some(p=>p.page===f.page)))throw new HttpError(502,'模型引用了不存在的页码，未保存本次结果。');
  return{...source,title:data.title,pageCount:pages.length,analyzedAt:new Date().toISOString(),facts,directions:data.directions.map(d=>{if(d.factIndices.some(i=>i>=facts.length))throw new HttpError(502,'研究方向引用了不存在的依据。');return{id:randomUUID(),question:d.question,rationale:d.rationale,experiment:d.experiment,factIds:d.factIndices.map(i=>facts[i].id)};})};
 }
+export async function cachedLiteratureText(workspaceRoot:string,sourceHash:string):Promise<AnalysisPage[]|undefined>{
+ if(!/^[a-f0-9]{64}$/.test(sourceHash))throw new HttpError(400,'原文版本无效。');
+ try{
+  const filename=await assertNoSymlinks(workspaceRoot,`workspace/literature-text/${sourceHash}.json`);
+  const cached=JSON.parse(await fs.readFile(filename,'utf8'));
+  if(cached.version!==1||cached.sourceHash!==sourceHash||!Array.isArray(cached.pages)||!cached.pages.length
+   ||cached.pages.some((page:AnalysisPage,i:number)=>!page||page.page!==i+1||typeof page.text!=='string')){
+   throw new HttpError(409,'本地全文记录异常，请保留记录后检查。');
+  }
+  return cached.pages;
+ }catch(error){
+  if((error as HttpError).statusCode!==404&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+ }
+}
 export async function readAnalysisPdf(filename:string,workspaceRoot?:string):Promise<{pages:AnalysisPage[];sourceHash:string}>{
  const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);let bytes:Buffer;try{const before=await handle.stat();if(!before.isFile()||before.size>50*1024*1024)throw new HttpError(413,'阅读支持不超过 50 MB 的 PDF。');bytes=await handle.readFile();const after=await handle.stat();if(before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw new HttpError(409,'阅读期间文献发生变化，请重新选择。');}finally{await handle.close();}
  const sourceHash=hash(bytes),relative=`workspace/literature-text/${sourceHash}.json`;
- if(workspaceRoot){try{const cached=JSON.parse(await fs.readFile(await assertNoSymlinks(workspaceRoot,relative),'utf8'));if(cached.version!==1||cached.sourceHash!==sourceHash||!Array.isArray(cached.pages)||!cached.pages.length||cached.pages.some((p:AnalysisPage,i:number)=>p.page!==i+1||typeof p.text!=='string'))throw new HttpError(409,'本地全文记录异常，请保留记录后检查。');return{pages:cached.pages,sourceHash};}catch(e){if((e as HttpError).statusCode!==404&&(e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}}
+ if(workspaceRoot){
+  const cached=await cachedLiteratureText(workspaceRoot,sourceHash);
+  if(cached)return {pages:cached,sourceHash};
+ }
  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs');const fonts=path.join(path.dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')),'standard_fonts')+path.sep;
  const loading=getDocument({data:new Uint8Array(bytes),disableFontFace:true,useSystemFonts:false,standardFontDataUrl:fonts});try{const pdf=await loading.promise;if(pdf.numPages>150)throw new HttpError(413,'当前单篇阅读支持最多 150 页，请拆分长文档。');const pages:AnalysisPage[]=[];let count=0;for(let n=1;n<=pdf.numPages;n++){const page=await pdf.getPage(n),text=await page.getTextContent();const content=text.items.map(x=>'str'in x?x.str:'').join(' ');count+=content.length;if(count>1000000)throw new HttpError(413,'文献文本超过阅读上限，请拆分文档。');pages.push({page:n,text:content});page.cleanup();}if(count<80)throw new HttpError(422,'PDF 缺少可提取文字，可能是扫描件；请先进行 OCR。');if(workspaceRoot)await withLock(`literature-text:${workspaceRoot}:${sourceHash}`,async()=>{const file=await assertNoSymlinks(workspaceRoot,relative,true);await fs.mkdir(path.dirname(file),{recursive:true});try{await fs.writeFile(file,JSON.stringify({version:1,sourceHash,extractedAt:new Date().toISOString(),pages}),{flag:'wx'});}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;}});return{pages,sourceHash};}finally{await loading.destroy();}
 }

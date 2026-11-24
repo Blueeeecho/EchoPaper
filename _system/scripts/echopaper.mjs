@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {randomUUID} from 'node:crypto';
+import { WORKBENCH_PORTS } from './graceful-stop.mjs';
 
 const defaultWorkspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const help = `EchoPaper 本地接口命令行（默认输出 JSON）
@@ -135,7 +136,7 @@ async function connect(config) {
   else {try{const state=JSON.parse(await fs.readFile(path.join(config.workspace,'_system/runtime/instance.json'),'utf8'));if(Number.isSafeInteger(state.port)&&state.port>=1024&&state.port<=65535)candidates.push(state.port);}catch{}}
   const probe=async port=>{try{const base=`http://127.0.0.1:${port}`,health=await request(base,'/api/health',Math.min(config.timeout,1200));if(health.ok&&health.workspaceRoot===config.workspace)return {base,health};if(config.port&&health.ok)throw new CliError('此端口属于其他工作区，已拒绝操作。','EWORKSPACE');}catch(error){if(error.code==='EWORKSPACE')throw error;}return null;};
   for(const port of candidates){const found=await probe(port);if(found)return found;}
-  if(!config.port){const ports=Array.from({length:31},(_,i)=>4173+i).filter(p=>!candidates.includes(p));const found=(await Promise.all(ports.map(probe))).find(Boolean);if(found)return found;}
+  if(!config.port){const ports=WORKBENCH_PORTS.filter(p=>!candidates.includes(p));const found=(await Promise.all(ports.map(probe))).find(Boolean);if(found)return found;}
   throw new CliError('未找到此工作区的 EchoPaper 服务，请先启动工作台。','EOFFLINE');
 }
 function selectionPayload(value) {

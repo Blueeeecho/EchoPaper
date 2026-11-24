@@ -21,7 +21,23 @@ export default function ConferencePicker({ onSelect, onClose, initialQuery = '',
     }catch(failure){if(!controller.signal.aborted){setError((failure as Error).message);setData(undefined);}}
     finally{if(!controller.signal.aborted)setLoading(false);}
   }
-  useEffect(()=>{void load();const timer=setInterval(()=>setNow(Date.now()),1000);return()=>{request.current?.abort();clearInterval(timer);};},[]);
+  useEffect(()=>{
+    void load();
+    let timer: number | undefined;
+    const update=()=>{ if(!document.hidden) setNow(Date.now()); };
+    const stop=()=>{ window.clearInterval(timer); timer=undefined; };
+    const start=()=>{ stop(); if(!document.hidden) timer=window.setInterval(update,1000); };
+    const wake=()=>{ if(document.hidden) stop(); else { update(); start(); } };
+    start();
+    window.addEventListener('focus',wake);
+    document.addEventListener('visibilitychange',wake);
+    return()=>{
+      request.current?.abort();
+      stop();
+      window.removeEventListener('focus',wake);
+      document.removeEventListener('visibilitychange',wake);
+    };
+  },[]);
   // Defend against a stale cache/response: expired rounds never remain selectable.
   const choices=useMemo(()=>data?.conferences.flatMap(edition=>{
     if(rank!=='all'&&edition.ccf?.toUpperCase()!==rank)return [];

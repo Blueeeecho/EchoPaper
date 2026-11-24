@@ -23,7 +23,6 @@ export async function listProjects(workspaceRoot: string): Promise<Project[]> {
       const root = await registeredRoot(workspaceRoot, entry.name);
       const project = await getProject(workspaceRoot, entry.name);
       if (project.id !== entry.name) continue;
-      await initializeGit(root);
       if (!(await history(root)).length) await checkpoint(root, '接入工作台：原始版本');
       project.lastEditedAt=await latestSourceChange(root,project.updatedAt);projects.push(project);
     } catch (error) { if ((error as HttpError).statusCode === 404 || error instanceof SyntaxError) continue; throw error; }

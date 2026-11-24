@@ -1,3 +1,4 @@
+import { pythonExecutable } from './platform';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath}from'node:url';
@@ -28,7 +29,7 @@ export async function registerProjectImportRoutes(app:FastifyInstance,workspaceR
    const bytes=await part.toBuffer();if(part.file.truncated)throw new HttpError(413,'ZIP 超过 50 MB 上传限制。');
    const token=randomUUID();directory=path.join(parent,`i-${token}`);await fs.mkdir(directory,{mode:0o700});await fs.writeFile(path.join(directory,'project.zip'),bytes,{flag:'wx',mode:0o600});
    let manifest:Manifest;
-   try{const result=await run('/usr/bin/python3',[fileURLToPath(new URL('../scripts/import-project-zip.py',import.meta.url)),path.join(directory,'project.zip'),path.join(directory,'content')],{timeout:120_000,maxBuffer:8*1024*1024});manifest=JSON.parse(result.stdout);}catch(error){throw new HttpError(400,(error as {stderr?:string}).stderr?.trim().slice(0,400)||'ZIP 损坏或无法安全解压，请检查压缩包。');}
+   try{const result=await run(pythonExecutable(),[fileURLToPath(new URL('../scripts/import-project-zip.py',import.meta.url)),path.join(directory,'project.zip'),path.join(directory,'content')],{timeout:120_000,maxBuffer:8*1024*1024});manifest=JSON.parse(result.stdout);}catch(error){throw new HttpError(400,(error as {stderr?:string}).stderr?.trim().slice(0,400)||'ZIP 损坏或无法安全解压，请检查压缩包。');}
    const source=manifest.root?path.join(directory,'content',relativePath(manifest.root)):path.join(directory,'content');
    const candidates=[];
    for(const file of manifest.files.filter(file=>file.path.toLowerCase().endsWith('.tex'))){const buffer=Buffer.alloc(Math.min(file.size,256*1024));const handle=await fs.open(path.join(source,file.path),'r');try{await handle.read(buffer,0,buffer.length,0);}finally{await handle.close();}const text=buffer.toString('utf8').replace(/(?<!\\)%.*/g,'');candidates.push({path:file.path,documentClass:/\\documentclass\b/.test(text)});}

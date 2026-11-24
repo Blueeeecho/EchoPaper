@@ -24,10 +24,8 @@ async function fixture(t:TestContext,failUpstream=false,includeZhipu=false){
  t.after(async()=>{await app.close();await upstream.close();await fs.rm(workspace,{recursive:true,force:true});});
  upstream.post('/v1/chat/completions',async(request,reply)=>{
   upstreamCalls.push({url:request.url,contentType:String(request.headers['content-type']||''),body:request.body});
-  return reply.type('text/event-stream').send([
-   {model:'fixture-translator',choices:[{delta:{content:'证'},finish_reason:null}]},
-   {model:'fixture-translator',choices:[{delta:{content:'据'},finish_reason:'stop'}]},
-  ].map(packet=>'data: '+JSON.stringify(packet)+'\n\n').join('')+'data: [DONE]\n\n');
+  assert.equal(request.headers.authorization,'Bearer '+fakeKey);
+  return reply.send({model:'qwen-mt-flash',choices:[{message:{content:'证据'},finish_reason:'stop'}]});
  });
  upstream.post('/v2/translate',async(request)=>{
   upstreamCalls.push({url:request.url,contentType:String(request.headers['content-type']||''),body:request.body});
@@ -40,18 +38,20 @@ async function fixture(t:TestContext,failUpstream=false,includeZhipu=false){
  });
  const upstreamOrigin=await upstream.listen({host:'127.0.0.1',port:0});
  const providers:ModelProvider[]=[
-  {id:'llm',label:'Local mock LLM',kind:'openai-compatible',baseUrl:upstreamOrigin+'/v1',plan:'test',auth:failUpstream?'bearer':'none',enabled:true,includeUsage:false,passReasoning:false},
+  {id:'qwen',label:'Local mock Qwen-MT',kind:'qwen-mt',baseUrl:upstreamOrigin+'/v1',plan:'test',auth:'bearer',enabled:true,includeUsage:false,passReasoning:false},
+  {id:'assistant',label:'Local mock assistant',kind:'openai-compatible',baseUrl:upstreamOrigin+'/chat-api',plan:'test',auth:'none',enabled:true,includeUsage:false,passReasoning:false},
   {id:'deepl',label:'Local mock DeepL',kind:'deepl',baseUrl:upstreamOrigin+'/v2',plan:'test',auth:'bearer',enabled:true,includeUsage:false,passReasoning:false},
  ];
  const models:ProviderModel[]=[
-  {id:'llm-model',providerId:'llm',label:'Translator',model:'fixture-translator',contextWindow:32000,reasoning:'none',enabled:true},
+  {id:'qwen-model',providerId:'qwen',label:'Translator',model:'qwen-mt-flash',contextWindow:0,reasoning:'none',enabled:true},
+  {id:'assistant-model',providerId:'assistant',label:'Assistant',model:'test-chat',contextWindow:32000,reasoning:'none',enabled:true},
   {id:'deepl-model',providerId:'deepl',label:'Dedicated translator',model:'text-translation',contextWindow:0,reasoning:'none',enabled:true},
  ];
  if(includeZhipu){
   providers.push({id:'zhipu',label:'Local mock Zhipu',kind:'zhipu-translate',baseUrl:upstreamOrigin+'/glm',plan:'test',auth:'bearer',enabled:true,includeUsage:false,passReasoning:false});
   models.push({id:'zhipu-model',providerId:'zhipu',label:'GLM translator',model:'glm-4-flash',contextWindow:0,reasoning:'none',enabled:true});
  }
- const data=normalizeRegistry({version:1,providers,models,translations:models.map(model=>({id:'source-'+model.providerId,label:model.label,modelId:model.id,enabled:true,color:'#556677'})),translationLayout:'stack'},'llm-model');
+ const data=normalizeRegistry({version:1,providers,models,translations:models.map(model=>({id:'source-'+model.providerId,label:model.label,modelId:model.id,enabled:true,color:'#556677'})),translationLayout:'stack'},'assistant-model');
  data.assistant.roles=data.assistant.roles.map(role=>({...role,instructions:assistantSentinel}));
  await fs.mkdir(path.join(workspace,'_system/runtime'),{recursive:true});
  await fs.writeFile(path.join(workspace,'_system/runtime/model-providers.json'),JSON.stringify(data));
@@ -78,11 +78,11 @@ async function fixture(t:TestContext,failUpstream=false,includeZhipu=false){
  const configResponse=await nativeFetch(origin+'/api/ai/providers');
  assert.equal(configResponse.status,200);
  const config=await configResponse.json() as PublicRegistry;
- const post=(patch:Record<string,unknown>={},headers:HeadersInit={'Content-Type':'application/json'})=>nativeFetch(origin+'/api/ai/translate',{method:'POST',headers,body:JSON.stringify({...selection,sourceId:'source-llm',...patch})});
+ const post=(patch:Record<string,unknown>={},headers:HeadersInit={'Content-Type':'application/json'})=>nativeFetch(origin+'/api/ai/translate',{method:'POST',headers,body:JSON.stringify({...selection,sourceId:'source-qwen',...patch})});
  return{origin,config,requests,upstreamCalls,post};
 }
 
-test('configured translation adapters serialize JSON over real HTTP and consume terminal NDJSON for LLM and dedicated engines',async t=>{
+test('configured translation adapters serialize JSON over real HTTP and consume terminal NDJSON only from dedicated engines',async t=>{
  const f=await fixture(t),originalFetch=globalThis.fetch;
  const responses:{contentType:string;body:Promise<string>}[]=[];
  // Node has no document base URL. Resolve only the browser-relative URL, then
@@ -96,7 +96,7 @@ test('configured translation adapters serialize JSON over real HTTP and consume 
  };
  t.after(()=>{globalThis.fetch=originalFetch;});
  const adapters=configuredTranslationAdapters(f.config);
- assert.deepEqual(adapters.map(adapter=>adapter.id),['source-llm','source-deepl']);
+ assert.deepEqual(adapters.map(adapter=>adapter.id),['source-qwen','source-deepl']);
  for(const adapter of adapters){
   const partial:string[]=[];
   const translated=await adapter.translate(selection,AbortSignal.timeout(3000),text=>partial.push(text));
@@ -117,10 +117,8 @@ test('configured translation adapters serialize JSON over real HTTP and consume 
   assert.ok(events.every(event=>event.type==='delta'||event.type==='done'));
  }
  assert.equal(f.upstreamCalls.length,2);
- const llm=f.upstreamCalls.find(call=>call.url==='/v1/chat/completions')!.body;
- assert.equal(llm.messages.length,2);assert.match(llm.messages[0].content,/学术译者/);
- assert.deepEqual(llm.messages.map((message:any)=>message.role),['system','user']);
- assert.equal(llm.model,'fixture-translator');assert.equal(llm.stream,true);
+ const qwen=f.upstreamCalls.find(call=>call.url==='/v1/chat/completions')!.body;
+ assert.deepEqual(qwen,{model:'qwen-mt-flash',messages:[{role:'user',content:'Evidence'}],translation_options:{source_lang:'English',target_lang:'Chinese'},stream:false});
  assert.deepEqual(f.upstreamCalls.find(call=>call.url==='/v2/translate')!.body,{text:['Evidence'],target_lang:'ZH',source_lang:'EN',preserve_formatting:true});
  for(const request of f.upstreamCalls){
   assert.match(request.contentType,/^application\/json(?:;|$)/i);
@@ -133,7 +131,7 @@ test('native fetch JSON string without a JSON header reports request format, not
  const f=await fixture(t);
  // A string body causes native fetch to use text/plain; this reproduces the
  // browser request that previously mislabeled a short selection as >6000.
- const response=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',body:JSON.stringify({...selection,sourceId:'source-llm'})});
+ const response=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',body:JSON.stringify({...selection,sourceId:'source-qwen'})});
  assert.equal(response.status,400);
  const body=await response.json();assert.match(body.error,/JSON|请求格式/i);assert.doesNotMatch(body.error,/6000/);
  assert.match(f.requests[0].contentType,/^text\/plain/i);assert.equal(typeof f.requests[0].body,'string');
@@ -151,19 +149,19 @@ test('a real 6001-character selection is rejected before any upstream request; 6
  assert.equal(f.upstreamCalls.length,1);
 });
 
-test('configured engines omit unsupported context while LLM and DeepL retain it over HTTP',async t=>{
+test('configured engines omit unsupported context; only DeepL retains it over HTTP',async t=>{
  const f=await fixture(t,false,true),originalFetch=globalThis.fetch;
  globalThis.fetch=(input,init)=>nativeFetch(new URL(String(input),f.origin),init);
  t.after(()=>{globalThis.fetch=originalFetch;});
  const context='The evidence supports the logical conclusion.';
  const adapters=configuredTranslationAdapters(f.config);
  for(const adapter of adapters){
-  assert.equal(adapter.supportsContext,adapter.id!=='source-zhipu');
+  assert.equal(adapter.supportsContext,adapter.id==='source-deepl');
   assert.equal(await adapter.translate({...selection,context},AbortSignal.timeout(3000),()=>{}),'证据');
  }
  assert.equal(f.requests.length,3);
  for(const request of f.requests){
-  if(request.body.sourceId==='source-zhipu')assert.ok(!Object.hasOwn(request.body,'context'));
+  if(request.body.sourceId!=='source-deepl')assert.ok(!Object.hasOwn(request.body,'context'));
   else assert.equal(request.body.context,context);
  }
  assert.equal(f.upstreamCalls.find(call=>call.url==='/v2/translate')!.body.context,context);
@@ -200,25 +198,25 @@ test('invalid language and selection source fields report their own errors witho
 });
 
  test('资料翻译不需要论文项目，验证资料后仅发送选区',async t=>{
- const f=await fixture(t);const response=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'fixture-resource',sourceId:'source-llm',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(response.status,200);assert.match(await response.text(),/done/);assert.equal(f.upstreamCalls.length,1);assert.ok(!JSON.stringify(f.upstreamCalls[0].body).includes(assistantSentinel));const missing=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'missing',sourceId:'source-llm',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(missing.status,404);assert.equal(f.upstreamCalls.length,1);
+ const f=await fixture(t);const response=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'fixture-resource',sourceId:'source-qwen',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(response.status,200);assert.match(await response.text(),/done/);assert.equal(f.upstreamCalls.length,1);assert.ok(!JSON.stringify(f.upstreamCalls[0].body).includes(assistantSentinel));const missing=await nativeFetch(f.origin+'/api/ai/translate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({resourceId:'missing',sourceId:'source-qwen',text:'Evidence',target:'zh-CN',source:'pdf'})});assert.equal(missing.status,404);assert.equal(f.upstreamCalls.length,1);
 });
 
  test('translation failure returns correlated safe diagnostics without leaking credentials',async t=>{
  const f=await fixture(t,true);const response=await f.post();
  assert.equal(response.status,502);const body=await response.json();
  assert.equal(body.code,'translation_upstream_error');
- assert.equal(body.sourceId,'source-llm');assert.equal(typeof body.elapsedMs,'number');assert.ok(body.elapsedMs>=0);
+ assert.equal(body.sourceId,'source-qwen');assert.equal(typeof body.elapsedMs,'number');assert.ok(body.elapsedMs>=0);
  assert.ok(body.requestId);assert.equal(response.headers.get('x-translation-request-id'),body.requestId);
- assert.match(body.error,/502/);assert.ok(!JSON.stringify(body).includes(fakeKey));
+ assert.match(body.error,/HTTP 503/);assert.ok(!JSON.stringify(body).includes(fakeKey));
  assert.ok(!JSON.stringify(body).includes('Evidence'));
 });
 
-test('bounded reading context reaches LLM as separate data and oversized context never goes upstream',async t=>{
+test('unsupported or oversized reading context and assistant sources are rejected before upstream',async t=>{
  const f=await fixture(t);const context='Previous paragraph explains evidence. Next paragraph limits the claim.';
- const response=await f.post({context});assert.equal(response.status,200);await response.text();
- const messages=f.upstreamCalls[0].body.messages;assert.match(messages[0].content,/只翻译 text/);
- const payload=JSON.parse(messages[1].content.slice(messages[1].content.indexOf('{')));assert.equal(payload.text,'Evidence');assert.equal(payload.context,context);
- const invalid=await f.post({context:'x'.repeat(9001)});assert.equal(invalid.status,400);assert.equal(f.upstreamCalls.length,1);
+ const response=await f.post({context});assert.equal(response.status,400);assert.match((await response.json()).error,/不支持额外上下文/);
+ const invalid=await f.post({sourceId:'source-deepl',context:'x'.repeat(9001)});assert.equal(invalid.status,400);
+ const blocked=await f.post({sourceId:'source-assistant'});assert.equal(blocked.status,400);assert.match((await blocked.json()).error,/旧翻译来源/);
+ assert.equal(f.upstreamCalls.length,0);
 });
 
 test('DeepL receives reading context separately from translated text',async t=>{

@@ -59,7 +59,7 @@ test('model settings keep dirty edits on close and discard only through the expl
  const config={version:2,revision:'initial',translationFingerprint:'t',assistantFingerprint:'a',providers:[{id:'minimax',label:'示例连接',kind:'openai-compatible',baseUrl:'http://localhost/v1',plan:'',auth:'none',enabled:true,configured:true}],models:[],translations:[],translationLayout:'stack',assistant:{modelIds:[],defaultModelId:null,roles:defaultAgentDefinitions(),limits:DEFAULT_AGENT_LIMITS}};
  context.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify(config)));
  let closed=0;
- const view=harness<Parameters<typeof ModelSettings>[0]>(modules[0],{initialTab:'providers',onClose(){closed++;}});context.after(()=>{view.dispose();environment.restore();});
+ const view=harness<Parameters<typeof ModelSettings>[0]>(modules[0],{initialTab:'assistant',onClose(){closed++;}});context.after(()=>{view.dispose();environment.restore();});
  view.render();await settle();let tree=view.render();
  const name=all(tree,element=>element.props['aria-label']==='服务名称')[0];assert.ok(name);name.props.onChange({target:{value:'未保存的新名称'}});tree=view.render();
  button(tree,'关闭模型设置').props.onClick();tree=view.render();
@@ -114,6 +114,33 @@ test('unattached presentation materials survive leave and restore as a local dra
  view.dispose();restored=harness(modules[3],props);restored.render();await settle();tree=restored.render();
  button(tree,'恢复草稿').props.onClick();tree=restored.render();
  assert.equal(all(tree,element=>element.type==='textarea'&&element.props.placeholder?.startsWith('粘贴研究问题'))[0].props.value,'尚未点击接入的研究材料。');
+});
+
+test('the presentation can be edited during a job-list failure and recovers a valid old job after retry',async context=>{
+ const environment=browser();
+ let historyUnavailable=true, submitted:unknown;
+ const failed={id:'prior-outline',kind:'outline',status:'failed',documentHash:presentationFile.hash,error:'模型大纲未通过结构校验',checks:[]};
+ context.mock.method(globalThis,'fetch',async(url:string,options?:RequestInit)=>{
+  if(url.endsWith('/outline')){
+   submitted=JSON.parse(String(options?.body));
+   return new Response(JSON.stringify({...failed,id:'recovered',status:'queued'}));
+  }
+  if(url.endsWith('/jobs')){
+   return historyUnavailable?new Response(JSON.stringify({error:'任务目录暂不可读'}),{status:503}):new Response(JSON.stringify({jobs:[failed]}));
+  }
+  const data=url==='/api/ai/config'?{configured:false}:url==='/api/presentation-styles'?{styles:[]}:presentationFile;
+  return new Response(JSON.stringify(data));
+ });
+ const view=harness<Parameters<typeof Presentations>[0]>(modules[3],{presentationId:'presentation-test',onNavigate(){}});
+ context.after(()=>{view.dispose();environment.restore();});
+ view.render();await settle();let tree=view.render();
+ assert.match(text(tree),/任务记录读取失败/);
+ assert.ok(all(tree,element=>element.type==='textarea'&&element.props.placeholder?.startsWith('粘贴研究问题')).length);
+ historyUnavailable=false;
+ button(tree,'重试任务记录').props.onClick();await settle();tree=view.render();
+ assert.doesNotMatch(text(tree),/任务记录读取失败/);
+ button(tree,'恢复上次大纲').props.onClick();await settle();
+ assert.deepEqual(submitted,{expectedHash:presentationFile.hash,manual:false,recoverJobId:'prior-outline'});
 });
 
 test('presentation material search ignores cancelled late query results',async context=>{

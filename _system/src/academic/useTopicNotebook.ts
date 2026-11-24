@@ -1,16 +1,72 @@
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {emptyTopicNotebook,type TopicNotebook} from '../../shared/topic-notebook';
-import {api,json} from '../api';
+import {ApiError,api,json} from '../api';
 
-/** Load and save one topic's ideas and key references; saves are hash-checked, a conflict reloads and keeps nothing silently. */
+/** Saves use a loaded baseline and invalidate reads started before the edit. */
 export function useTopicNotebook(topicId:string,onError:(message:string)=>void){
  const [notebook,setNotebook]=useState<TopicNotebook>(()=>emptyTopicNotebook(topicId)),[loaded,setLoaded]=useState(false),[saving,setSaving]=useState(false);
- const hashRef=useRef<string|null>(null),queue=useRef(Promise.resolve()),current=useRef(notebook),readRequest=useRef(0);current.current=notebook;
- const load=useCallback(async()=>{const sequence=++readRequest.current;const v=await api<{notebook:TopicNotebook;hash:string|null}>(`/api/workspace/topics/${encodeURIComponent(topicId)}/notebook`);if(sequence!==readRequest.current)return;hashRef.current=v.hash;setNotebook(v.notebook);current.current=v.notebook;setLoaded(true);},[topicId]);
- useEffect(()=>{setLoaded(false);setNotebook(emptyTopicNotebook(topicId));void load().catch(e=>{setLoaded(true);onError(e.message);});return()=>{readRequest.current++;};},[topicId]);
- const update=useCallback((change:(n:TopicNotebook)=>TopicNotebook)=>{readRequest.current++;const next=change(current.current);current.current=next;setNotebook(next);
-  const saved=queue.current.then(async()=>{setSaving(true);try{const v=await api<{notebook:TopicNotebook;hash:string|null}>(`/api/workspace/topics/${encodeURIComponent(topicId)}/notebook`,json('PUT',{notebook:current.current,expectedHash:hashRef.current}));hashRef.current=v.hash;return true;}catch(e:any){onError(e.status===409?'课题笔记已在其他窗口修改，已载入最新版本，请重新输入刚才的修改。':e.message);await load().catch(()=>{});return false;}finally{setSaving(false);}});
-  queue.current=saved.then(()=>{});return saved;
+ const [loadFailed,setLoadFailed]=useState(false);
+ const hashRef=useRef<string|null|undefined>(undefined),current=useRef(notebook),readRequest=useRef(0),writeInFlight=useRef(false);
+ const endpoint=`/api/workspace/topics/${encodeURIComponent(topicId)}/notebook`;
+ const load=useCallback(async()=>{
+  if(writeInFlight.current)return;
+  const sequence=++readRequest.current;
+  try{
+   const value=await api<{notebook:TopicNotebook;hash:string|null}>(endpoint,{timeoutMs:15000});
+   if(sequence!==readRequest.current)return;
+   hashRef.current=value.hash;
+   current.current=value.notebook;
+   setNotebook(value.notebook);
+   setLoaded(true);
+   setLoadFailed(false);
+  }catch(error){
+   if(sequence===readRequest.current)setLoadFailed(true);
+   throw error;
+  }
+ },[endpoint]);
+ useEffect(()=>{
+  let active=true;
+  const empty=emptyTopicNotebook(topicId);
+  hashRef.current=undefined;
+  current.current=empty;
+  setLoaded(false);
+  setLoadFailed(false);
+  setNotebook(empty);
+  void load().catch((error:Error)=>{if(active)onError(error.message);});
+  return()=>{active=false;readRequest.current++;};
  },[topicId,load,onError]);
- return {notebook,loaded,saving,update,refresh:load};
+ const update=useCallback(async(change:(n:TopicNotebook)=>TopicNotebook)=>{
+  const expectedHash=hashRef.current,previous=current.current;
+  if(expectedHash===undefined||writeInFlight.current||previous.topicId!==topicId)return false;
+  const next=change(previous),sequence=++readRequest.current;
+  writeInFlight.current=true;
+  setSaving(true);
+  current.current=next;
+  setNotebook(next);
+  let reload=false;
+  try{
+   const value=await api<{notebook:TopicNotebook;hash:string|null}>(endpoint,{...json('PUT',{notebook:next,expectedHash}),timeoutMs:15000});
+   if(sequence!==readRequest.current)return false;
+   hashRef.current=value.hash;
+   current.current=value.notebook;
+   setNotebook(value.notebook);
+   return true;
+  }catch(error){
+   if(sequence!==readRequest.current)return false;
+   current.current=previous;
+   setNotebook(previous);
+   reload=error instanceof ApiError&&(error.status===409||error.status===408);
+   if(reload){
+    hashRef.current=undefined;
+    setLoaded(false);
+   }
+   onError(error instanceof ApiError&&error.status===409?'重点文献记录在其他窗口发生变化，请核对后重新标记。':error instanceof Error?error.message:'重点文献标记保存失败。');
+  }finally{
+   writeInFlight.current=false;
+   setSaving(false);
+  }
+  if(reload)await load().catch(()=>{});
+  return false;
+ },[topicId,endpoint,load,onError]);
+ return {notebook,loaded,saving,loadFailed,update,refresh:load};
 }

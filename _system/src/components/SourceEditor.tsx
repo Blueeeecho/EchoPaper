@@ -26,8 +26,9 @@ interface Props{workspaceId?:string;restorePosition?:boolean;path:string;value:s
 /** Stable language/theme extensions keep unrelated toolbar/SSE renders out of the editor. */
 export default memo(function SourceEditor({workspaceId='',restorePosition=true,path,value,readOnly,completion,keyboard,onChange,onReady,onHistoryChange,diagnostics=noDiagnostics,diagnosticsStale=false,diagnosticBuildId}:Props){
  const positionCleanup=useRef<(()=>void)|undefined>(undefined);
- const positionKey=editorPositionKey(workspaceId,path),restoring=useRef(true),frame=useRef(0);
- const remember=useCallback((editor:EditorView)=>{if(restoring.current||!workspaceId)return;const{anchor,head}=editor.state.selection.main;writeSession(positionKey,{anchor,head,top:editor.scrollDOM.scrollTop,left:editor.scrollDOM.scrollLeft});},[positionKey,workspaceId]);
+ const positionKey=editorPositionKey(workspaceId,path),restoring=useRef(true),frame=useRef(0),saveTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+ const flushPosition=useCallback((editor:EditorView)=>{clearTimeout(saveTimer.current);saveTimer.current=undefined;if(restoring.current||!workspaceId)return;const{anchor,head}=editor.state.selection.main;writeSession(positionKey,{anchor,head,top:editor.scrollDOM.scrollTop,left:editor.scrollDOM.scrollLeft});},[positionKey,workspaceId]);
+ const remember=useCallback((editor:EditorView)=>{if(restoring.current||!workspaceId)return;clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>flushPosition(editor),300);},[flushPosition,workspaceId]);
  const positionListener=useMemo(()=>EditorView.updateListener.of(update=>{if(update.selectionSet||update.docChanged)remember(update.view);}),[remember]);
  const reportHistory=useCallback((editor:EditorView)=>onHistoryChange?.({canUndo:!editor.state.readOnly&&undoDepth(editor.state)>0,canRedo:!editor.state.readOnly&&redoDepth(editor.state)>0}),[onHistoryChange]);
  const historyListener=useMemo(()=>EditorView.updateListener.of(update=>reportHistory(update.view)),[reportHistory]);
@@ -35,11 +36,11 @@ export default memo(function SourceEditor({workspaceId='',restorePosition=true,p
  const view=useRef<EditorView|null>(null);
  const input=useRef({path,diagnostics,stale:diagnosticsStale,buildId:diagnosticBuildId});
  input.current={path,diagnostics,stale:diagnosticsStale,buildId:diagnosticBuildId};
- const ready=useCallback((editor:EditorView)=>{restoring.current=true;const position=restorePosition?normalizeEditorPosition(readSession(positionKey),editor.state.doc.length):undefined;positionCleanup.current?.();view.current=editor;const persist=()=>remember(editor);editor.scrollDOM.addEventListener('scroll',persist);window.addEventListener('pagehide',persist);positionCleanup.current=()=>{editor.scrollDOM.removeEventListener('scroll',persist);window.removeEventListener('pagehide',persist);};updateEditorDiagnostics(editor,input.current);onReady(editor);reportHistory(editor);
+ const ready=useCallback((editor:EditorView)=>{restoring.current=true;const position=restorePosition?normalizeEditorPosition(readSession(positionKey),editor.state.doc.length):undefined;positionCleanup.current?.();view.current=editor;const persist=()=>remember(editor),flush=()=>flushPosition(editor);editor.scrollDOM.addEventListener('scroll',persist,{passive:true});window.addEventListener('pagehide',flush);positionCleanup.current=()=>{flush();editor.scrollDOM.removeEventListener('scroll',persist);window.removeEventListener('pagehide',flush);};updateEditorDiagnostics(editor,input.current);onReady(editor);reportHistory(editor);
   if(position)editor.dispatch({selection:{anchor:position.anchor,head:position.head}});
   cancelAnimationFrame(frame.current);frame.current=requestAnimationFrame(()=>{if(view.current!==editor||!editor.dom.isConnected)return;if(position){editor.scrollDOM.scrollTop=position.top;editor.scrollDOM.scrollLeft=position.left;}restoring.current=false;});
- },[onReady,reportHistory,positionKey,restorePosition,remember]);
+ },[onReady,reportHistory,positionKey,restorePosition,remember,flushPosition]);
  useEffect(()=>{if(view.current)updateEditorDiagnostics(view.current,input.current);},[path,diagnostics,diagnosticsStale,diagnosticBuildId]);
- useEffect(()=>()=>{positionCleanup.current?.();cancelAnimationFrame(frame.current);view.current=null;onHistoryChange?.({canUndo:false,canRedo:false});},[onHistoryChange]);
+ useEffect(()=>()=>{clearTimeout(saveTimer.current);positionCleanup.current?.();cancelAnimationFrame(frame.current);view.current=null;onHistoryChange?.({canUndo:false,canRedo:false});},[onHistoryChange]);
  return <CodeMirror className="source-editor" readOnly={readOnly} value={value} height="100%" theme="light" extensions={extensions} onCreateEditor={ready} onChange={onChange} basicSetup={setup} aria-label="论文源码编辑器"/>;
 });

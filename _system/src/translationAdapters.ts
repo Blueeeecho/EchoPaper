@@ -1,10 +1,9 @@
 import {api,json} from './api';
 import type{TranslationLanguage} from './selectionTranslation';
-import {isTranslationService,type PublicRegistry} from '../shared/model-providers';
+import {isDedicatedTranslationSource,type PublicRegistry} from '../shared/model-providers';
 export interface TranslationContext{projectId?:string;resourceId?:string;text:string;context?:string;target:TranslationLanguage;source:'tex'|'pdf';sourceLanguage?:'auto'|TranslationLanguage}
 export interface TranslationAdapter{
  id:string;label:string;model:string;color?:string;cacheVersion?:string;
- /** 专用翻译服务（DeepL 除外）不接受上下文；通用模型可借助上下文统一术语。 */
  supportsContext?:boolean;
  /** Adapters sharing a backend concurrency limit use the same queue key. */
  queueKey:string;
@@ -19,15 +18,15 @@ export async function streamTranslation(body:TranslationContext&{sourceId:string
  try{while(!done){const chunk=await reader.read();buffer+=decoder.decode(chunk.value,{stream:!chunk.done});let index:number;while((index=buffer.indexOf('\n'))>=0){line(buffer.slice(0,index));buffer=buffer.slice(index+1);if(done)break;}if(chunk.done){if(buffer.trim()&&!done)line(buffer);break;}}if(!done)throw Error('译文连接提前结束，请重试。');return text;}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
 }
 export function configuredTranslationAdapters(config:PublicRegistry):TranslationAdapter[]{
- return config.translations.filter(source=>source.enabled).map(source=>{
+ return config.translations.filter(source=>source.enabled&&isDedicatedTranslationSource(config,source)).map(source=>{
   const model=config.models.find(item=>item.id===source.modelId);
   const provider=config.providers.find(item=>item.id===model?.providerId);
-  const supportsContext=!!provider&&(!isTranslationService(provider)||provider.kind==='deepl');
+  const supportsContext=provider?.kind==='deepl';
   return {
    id:source.id,label:source.label,model:model?.label||'模型未配置',color:source.color,cacheVersion:model?.cacheVersion,
    supportsContext,queueKey:provider?.rateLimitGroup||provider?.id||source.id,
    translate:async(context,signal,onText)=>{
-    if(!model||!provider||!model.configured)throw Error('此来源尚未启用或未配置密钥，请打开划词翻译设置。');
+    if(!model||!provider||!model.configured)throw Error('此来源尚未启用或未配置密钥，请打开翻译 API 设置。');
     return streamTranslation({...context,context:supportsContext?context.context:undefined,sourceId:source.id},signal,onText);
    },
   };

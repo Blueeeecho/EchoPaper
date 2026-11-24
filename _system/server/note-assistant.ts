@@ -55,7 +55,7 @@ export function registerNoteAssistantRoutes(app: FastifyInstance, workspaceRoot:
             controller.abort();
         } };
         reply.raw.on('close', disconnect);
-        const deadline = setTimeout(() => controller.abort(new Error('笔记整理请求超时，请重试。')), config.data.assistant.limits.minutes * 60000);
+        const deadline = setTimeout(() => controller.abort(new Error('笔记整理请求超时，请重试。')), Math.max(1, Number(config.data.assistant.limits.minutes) || 60) * 60000);
         deadline.unref();
         try {
             const answer = await gateway({ projectId: 'workspace-notes', provider, model, tools: [], effort: 'low', signal: controller.signal,

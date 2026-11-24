@@ -17,7 +17,7 @@ import {HttpError} from '../server/security';
 type Translate=NonNullable<Parameters<typeof registerReadingProcessingRoutes>[5]>['translate'];
 const config={translations:[{id:'zhipu',modelId:'glm',label:'智谱',enabled:true}],
  models:[{id:'glm',providerId:'provider',model:'glm-4-flash',label:'GLM',enabled:true,configured:true}],
- providers:[{id:'provider',enabled:true}]} as PublicRegistry;
+ providers:[{id:'provider',kind:'zhipu-translate',enabled:true}]} as PublicRegistry;
 const registry={publicConfig:async()=>config};
 const engineOptions=async()=>PARSE_ENGINES.map(engine=>({id:engine.id,label:engine.label,configured:true}));
 const resource=(id:string):Resource=>({id,hash:`hash-${id}`,name:`${id}.pdf`,path:`${id}.pdf`,kind:'file',rootId:'root',size:100,modifiedAt:new Date().toISOString(),tags:[],missing:false,revision:1});
@@ -92,30 +92,44 @@ test('OCR of the next document overlaps translation while OCR remains single-slo
  const finished=await f.snapshot();assert.ok(Object.values(finished.statuses).every((status:any)=>status.stage==='complete'));
 });
 
-for(const mode of [null,2] as const){
- test(`${mode===null?'default':'explicit'} two-slot OCR overlaps two translations within four document slots`,{timeout:5000},async t=>{
-  const ocrGate=deferred(),translationGate=deferred();
-  let activeOcr=0,maxOcr=0,ocrCalls=0,activeTranslations=0,maxTranslations=0,translationCalls=0;
-  const f=await fixture(t,{ocrConcurrency:mode,ocr:async(_id,{signal})=>{
-   ocrCalls++;activeOcr++;maxOcr=Math.max(maxOcr,activeOcr);
-   try{await waitForGate(signal!,ocrGate.promise);}finally{activeOcr--;}
-  },translate:async(_id,_source,_text,signal)=>{
-   translationCalls++;activeTranslations++;maxTranslations=Math.max(maxTranslations,activeTranslations);
-   try{await waitForGate(signal,translationGate.promise);return '双OCR并行译文';}finally{activeTranslations--;}
-  }});
-  for(const id of ['first','second']){f.resources.push(resource(id));await f.store.writeLayout(layout(id));}
-  f.resources.push(resource('third'),resource('fourth'));
-  const run=f.service.tick();await until(()=>ocrCalls===2&&translationCalls===2);
-  const current=await f.snapshot();
-  assert.equal(current.parallelism.ocr,2);assert.equal(current.parallelism.activeDocuments,4);
-  assert.equal(current.parallelism.activeOcr,2);assert.equal(current.parallelism.activeTranslations,2);
-  assert.equal(current.statuses.third.stage,'ocr');assert.equal(current.statuses.fourth.stage,'ocr');
-  await f.service.tick();assert.equal(ocrCalls,2);assert.equal(translationCalls,2);
-  ocrGate.resolve();translationGate.resolve();await run;
-  assert.equal(maxOcr,2);assert.equal(maxTranslations,2);
-  assert.ok(Object.values((await f.snapshot()).statuses).every((status:any)=>status.stage==='complete'));
- });
-}
+test('default aistudio-vl caps OCR concurrency at 1 to avoid queue-full storms',{timeout:5000},async t=>{
+ const ocrGate=deferred();
+ let activeOcr=0,maxOcr=0,ocrCalls=0;
+ const f=await fixture(t,{ocrConcurrency:null,ocr:async(_id,{signal})=>{
+  ocrCalls++;activeOcr++;maxOcr=Math.max(maxOcr,activeOcr);
+  try{await waitForGate(signal!,ocrGate.promise);}finally{activeOcr--;}
+ }});
+ f.resources.push(resource('first'),resource('second'));
+ const run=f.service.tick();await until(()=>ocrCalls===1);
+ const current=await f.snapshot();
+ assert.equal(current.parallelism.ocr,1);assert.equal(current.parallelism.activeOcr,1);
+ ocrGate.resolve();await run;
+ assert.equal(maxOcr,1);assert.equal(ocrCalls,2);
+ assert.ok(Object.values((await f.snapshot()).statuses).every((status:any)=>status.stage==='complete'));
+});
+
+test('explicit two-slot OCR overlaps two translations within four document slots',{timeout:5000},async t=>{
+ const ocrGate=deferred(),translationGate=deferred();
+ let activeOcr=0,maxOcr=0,ocrCalls=0,activeTranslations=0,maxTranslations=0,translationCalls=0;
+ const f=await fixture(t,{ocrConcurrency:2,ocr:async(_id,{signal})=>{
+  ocrCalls++;activeOcr++;maxOcr=Math.max(maxOcr,activeOcr);
+  try{await waitForGate(signal!,ocrGate.promise);}finally{activeOcr--;}
+ },translate:async(_id,_source,_text,signal)=>{
+  translationCalls++;activeTranslations++;maxTranslations=Math.max(maxTranslations,activeTranslations);
+  try{await waitForGate(signal,translationGate.promise);return '双OCR并行译文';}finally{activeTranslations--;}
+ }});
+ for(const id of ['first','second']){f.resources.push(resource(id));await f.store.writeLayout(layout(id));}
+ f.resources.push(resource('third'),resource('fourth'));
+ const run=f.service.tick();await until(()=>ocrCalls===2&&translationCalls===2);
+ const current=await f.snapshot();
+ assert.equal(current.parallelism.ocr,2);assert.equal(current.parallelism.activeDocuments,4);
+ assert.equal(current.parallelism.activeOcr,2);assert.equal(current.parallelism.activeTranslations,2);
+ assert.equal(current.statuses.third.stage,'ocr');assert.equal(current.statuses.fourth.stage,'ocr');
+ await f.service.tick();assert.equal(ocrCalls,2);assert.equal(translationCalls,2);
+ ocrGate.resolve();translationGate.resolve();await run;
+ assert.equal(maxOcr,2);assert.equal(maxTranslations,2);
+ assert.ok(Object.values((await f.snapshot()).statuses).every((status:any)=>status.stage==='complete'));
+});
 
 test('OCR backpressure reduces later parse starts to one slot',{timeout:5000},async t=>{
  const initialWave=deferred(),first=deferred(),second=deferred(),later=deferred();

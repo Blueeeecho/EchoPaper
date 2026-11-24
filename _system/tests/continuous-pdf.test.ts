@@ -6,6 +6,7 @@ import {build} from 'esbuild';
 import * as React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import type {PDFDocumentProxy} from 'pdfjs-dist';
+import type ContinuousPdf from '../src/academic/ContinuousPdf';
 import type {PdfPage} from '../src/academic/ContinuousPdf';
 
 const compiled=await build({entryPoints:[fileURLToPath(new URL('../src/academic/ContinuousPdf.tsx',import.meta.url))],bundle:true,write:false,platform:'node',format:'cjs',packages:'external',jsx:'automatic'});
@@ -82,4 +83,36 @@ test('obsolete text layers are cancelled and late failures never replace the new
  first.reject(Object.assign(new Error('cancelled'),{name:'RenderingCancelledException'}));await flush();
  secondText.resolve({items:[{str:'current'}]});second.resolve();await flush();
  assert.equal(h.canvas.width,300);assert.equal(h.layer.children.length,1);assert.equal(h.states[2],'');
+});
+
+test('one unavailable page cannot block position restore, and scrolling only reads the visible region',async context=>{
+ let effect:(()=>()=>void)|undefined;
+ const react={...React,useRef:(current:unknown)=>({current}),useEffect:(next:()=>()=>void)=>{effect=next;}};
+ const require=createRequire(import.meta.url),module={exports:{} as {default:typeof ContinuousPdf}};
+ new Function('require','module','exports',compiled.outputFiles[0].text)((name:string)=>name==='react'?react:name==='pdfjs-dist'?{}:require(name),module,module.exports);
+ const frames=new Map<number,()=>void>();
+ const previous=Object.getOwnPropertyDescriptors(globalThis);
+ let frameId=0;
+ Object.defineProperty(globalThis,'requestAnimationFrame',{configurable:true,value:(next:()=>void)=>{frames.set(++frameId,next);return frameId;}});
+ Object.defineProperty(globalThis,'cancelAnimationFrame',{configurable:true,value:(index:number)=>frames.delete(index)});
+ context.after(()=>{for(const name of ['requestAnimationFrame','cancelAnimationFrame']){if(previous[name])Object.defineProperty(globalThis,name,previous[name]);else Reflect.deleteProperty(globalThis,name);}});
+ const animation=()=>{while(frames.size){const [id,next]=frames.entries().next().value!;frames.delete(id);next();}};
+ let offset=0,reads=0,scroll:(()=>void)|undefined;
+ const nodes=Array.from({length:256},(_,index)=>({
+  dataset:{pdfPage:String(index+1)},
+  getBoundingClientRect(){reads++;return{top:index*100-offset,bottom:(index+1)*100-offset};},
+  scrollIntoView(){offset=index*100;},
+ }));
+ const container={getBoundingClientRect:()=>({top:0,bottom:120}),querySelectorAll:()=>nodes,addEventListener:(_type:string,next:()=>void)=>{scroll=next;},removeEventListener:()=>{scroll=undefined;}};
+ const reported:number[]=[],requested:number[]=[];
+ const pdf={numPages:nodes.length,getPage(number:number){requested.push(number);return number===2?Promise.reject(Error('unavailable')):Promise.resolve({});}} as unknown as PDFDocumentProxy;
+ module.exports.default({pdf,zoom:1,container:{current:container as unknown as HTMLDivElement},onPage:page=>reported.push(page),initialPage:3});
+ const stop=effect?.();assert.ok(stop);
+ try{
+  await flush();animation();
+  assert.deepEqual(requested,[1,2,3]);assert.deepEqual(reported,[3]);
+  reads=0;offset=15000;scroll?.();animation();
+  assert.deepEqual(reported,[3,151]);assert.ok(reads<20);
+  offset++;scroll?.();animation();assert.deepEqual(reported,[3,151]);
+ }finally{stop();}
 });

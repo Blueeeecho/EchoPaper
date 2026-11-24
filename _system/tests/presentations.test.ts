@@ -16,6 +16,7 @@ import { registerPresentationRoutes } from '../server/presentations/routes';
 import type { PresentationFile, PresentationJob, PresentationSlide } from '../shared/presentation-types';
 import { ensureFonts, layoutSlide, layoutSvg, LayoutOverflowError, wrapText, type SlideLayout } from '../server/presentations/layout';
 import { presentationStore } from '../server/presentations/store';
+import { resolveStyle } from '../server/presentations/styles';
 
 const styleRoot=fileURLToPath(new URL('../../shared/presentation-styles',import.meta.url));
 const slide=(id='s1'):PresentationSlide=>({id,section:'研究内容',layout:'explanation',title:'证据约束的研究方法',titleEn:'Evidence-constrained method',keyMessage:'当前材料支持方法设计，实验结果留空。',blocks:[{id:'b1',type:'text',text:'分析原始材料，记录尚缺的实验。',textEn:'Analyze supplied materials and record missing experiments.',sourceIds:[]}],notes:{purpose:'解释设计。',speech:'本页只介绍方法，不推断实验效果。',transition:'接下来介绍验证计划。',questions:'实验是否完成？尚无结果材料。'},sourceIds:[]});
@@ -70,11 +71,11 @@ test('SVG charts preserve signed values on a common zero axis, including scienti
 
 test('SVG multi-series legends preserve long bilingual identities with script fonts and explicit overflow',()=>{ensureFonts();const names=['Baseline 基线方法 with complete evidence assumptions and author-supplied comparison details. '.repeat(4),'改进方法 Improved method retains full uncertainty statements and experiment provenance. '.repeat(4)],model:SlideLayout={slideId:'legend-chart',kind:'body',section:'研究结果',checks:[],items:[{kind:'chart',x:40,y:180,w:1200,h:480,labels:['A','B'],series:names.map((name,i)=>({name,values:i?[.3,-.2]:[-.25,.5]}))}]},svg=layoutSvg(model),doc=new DOMParser().parseFromString(svg,'image/svg+xml'),legends=Array.from(doc.getElementsByTagName('g')).filter(n=>n.hasAttribute('data-chart-legend-series'));assert.equal(legends.length,2);for(const[i,legend]of legends.entries()){assert.equal(legend.textContent!.replace(/\s+/g,''),names[i].replace(/\s+/g,''));assert.ok(legend.getElementsByTagName('text').length>1,'long names wrap into multiple visible lines');for(const span of Array.from(legend.getElementsByTagName('tspan')))assert.equal(span.getAttribute('font-family'),/[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]/.test(span.textContent!)?'隶书':'Times New Roman');}const legendTop=Math.min(...legends.map(n=>Number(n.getElementsByTagName('rect')[0].getAttribute('y'))));for(const bar of Array.from(doc.getElementsByTagName('rect')).filter(n=>n.hasAttribute('data-chart-value')))assert.ok(Number(bar.getAttribute('y'))+Number(bar.getAttribute('height'))<legendTop);const tiny:SlideLayout={...model,items:model.items.map(i=>({...i,h:130}))};assert.throws(()=>layoutSvg(tiny),e=>e instanceof LayoutOverflowError&&/图例/.test(e.message)&&(e as any).statusCode===422);});
 
-test('outline SSE local recovery and private diagnostics on a newly loaded isolated HTTP service',async()=>{
+test('outline SSE parsing and private diagnostics through the presentation routes',async()=>{
  let output='',finish='stop',calls=0;
  const f=await fixture({fetch:async()=>{calls++;return new Response(`data: ${JSON.stringify({choices:[{delta:{content:output},finish_reason:finish}],usage:{prompt_tokens:20,completion_tokens:80,total_tokens:100}})}\n\ndata: [DONE]\n\n`,{headers:{'content-type':'text/event-stream'}});}});
  try{
- await modelConfig(f);await f.app.listen({port:4187,host:'127.0.0.1'});
+ await modelConfig(f);
  let p=await f.create();p=await f.request('POST',`/api/presentations/${p.document.id}/sources`,{text:'Selected evidence.',expectedHash:p.hash});
  const s=slide();s.sourceIds=[p.document.sources[0].id];s.blocks[0].sourceIds=s.sourceIds;
  const valid=JSON.stringify({slides:[wire(s)]});
@@ -82,14 +83,77 @@ test('outline SSE local recovery and private diagnostics on a newly loaded isola
  const before:PresentationFile=await f.request('GET',`/api/presentations/${p.document.id}`);
  output=variant==='explanation'?'Here is the outline:\n'+valid+'\nEnd.':variant==='fenced'?'```json\n'+valid+'\n```':variant==='truncated'?valid.slice(0,-2):variant==='multiple'?valid+'\nsk-TESTSECRET1234567890\n{}':variant==='schema'?'{}':valid;
  finish=variant==='length'?'length':'stop';const count=calls;
- const response=await fetch(`http://127.0.0.1:4187/api/presentations/${p.document.id}/outline`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedHash:before.hash})});assert.equal(response.status,200);
- const job=await response.json() as PresentationJob,done=await f.wait(p.document.id,job);
+ const job=await f.request('POST',`/api/presentations/${p.document.id}/outline`,{expectedHash:before.hash});
+ const done=await f.wait(p.document.id,job);
  assert.equal(calls,count+1);const current:PresentationFile=await f.request('GET',`/api/presentations/${p.document.id}`);
  if(['explanation','fenced'].includes(variant)){assert.equal(done.status,'succeeded',done.error);assert.equal(current.document.slides.length,1);assert.equal(done.usage?.tokens,100);}
  else {assert.equal(done.status,'failed');assert.equal(current.hash,before.hash);const filename=path.join(f.root,'workspace/presentations',p.document.id,'build',job.id,'outline-diagnostic.json');const diag=JSON.parse(await fs.readFile(filename,'utf8'));assert.equal(diag.text,output.replace(/sk-[A-Za-z0-9_-]{15,}/g,'[REDACTED]'));assert.ok(!JSON.stringify(done).includes('TESTSECRET'));assert.equal(diag.finishReason,finish);assert.equal((await fs.stat(filename)).mode&0o777,0o600);assert.equal((await f.app.inject(`/api/presentations/${p.document.id}/jobs/${job.id}/outline-diagnostic.json`)).statusCode,404);}
  }
- console.log(`isolated HTTP 4187 loaded PID=${process.pid}; mocked SSE requests=${calls}; no paid requests`);
  }finally{await f.close();}
+});
+
+test('recovers a complete failed outline without a model call and exports all rows across continuation pages', async()=>{
+ let calls=0;
+ const f=await fixture({fetch:async()=>{calls++;throw Error('must not call');}});
+ try {
+  const originalCase='This complete case appears in the selected material.';
+  let file=await f.create();
+  const id=file.document.id,endpoint=`/api/presentations/${id}`;
+  file=await f.request('POST',endpoint+'/sources',{text:originalCase,expectedHash:file.hash});
+  const sourceIds=[file.document.sources[0].id];
+  const validCase={...slide('valid'),layout:'case' as const,sourceIds,
+   blocks:[{id:'original',type:'case' as const,text:originalCase,verbatim:true,sourceIds,caption:'材料原文'}]};
+  const invalidCase={...validCase,id:'unsupported',blocks:[{...validCase.blocks[0],text:'A quote absent from the source.'}]};
+  const rows=Array.from({length:7},(_,index)=>[String(index+1),`Row ${index+1} offers explicit traceable evidence from the selected source and keeps all supplied text visible.`]);
+  const table=slide('results');
+  table.layout='table';table.sourceIds=sourceIds;
+  table.blocks=[{id:'table',type:'table',headers:['Item','Evidence'],rows,sourceIds}];
+  const exactCaseWire=wire(validCase);
+  const captionEn='Original source passage';
+  const {style,manifestHash}=await resolveStyle(f.root,file.document.styleId,file.document.styleVersion);
+  const prior:PresentationJob={id:'job-previous',presentationId:id,kind:'outline',status:'failed',phase:'处理失败',
+   createdAt:new Date().toISOString(),sourceHash:hash(JSON.stringify(file.document.sources)),styleHash:hash(manifestHash+style.templateHash),
+   documentHash:file.hash,error:'模型大纲未通过结构校验',checks:[]};
+  await presentationStore(f.root).writeJob(prior);
+  const priorDir=path.join(f.root,'workspace/presentations',id,'build',prior.id);
+  await fs.mkdir(priorDir,{recursive:true});
+  const diagnostic=JSON.stringify({schemaVersion:1,finishReason:'stop',stage:'schema',text:JSON.stringify({slides:[
+   {...exactCaseWire,blocks:[{...exactCaseWire.blocks[0],captionEn}]},wire(invalidCase),wire(table)
+  ]})});
+  await fs.writeFile(path.join(priorDir,'outline-diagnostic.json'),diagnostic,{mode:0o600});
+  assert.equal((await f.request('GET',endpoint)).document.slides.length,0);
+  const recovery=await f.wait(id,await f.request('POST',endpoint+'/outline',{expectedHash:file.hash,recoverJobId:prior.id}));
+  assert.equal(recovery.status,'succeeded',recovery.error);
+  assert.equal(calls,0);
+  assert.ok(recovery.checks.some(check=>check.code==='case_source_missing'&&check.slide===2));
+  assert.ok(recovery.checks.some(check=>check.code==='layout_continuation'&&check.slide===3));
+  const recovered:PresentationFile=await f.request('GET',endpoint);
+  assert.ok(recovered.document.slides.length>3);
+  assert.equal(recovered.document.slides[0].blocks[0].caption,`材料原文\n${captionEn}`);
+  assert.equal(recovered.document.slides[0].blocks[0].text,originalCase);
+  assert.equal(recovered.document.slides[1].title,'待补原文案例');
+  assert.deepEqual(recovered.document.slides[1].blocks,[]);
+  assert.deepEqual(recovered.document.slides.flatMap(slide=>slide.blocks.flatMap(block=>block.rows??[])),rows);
+  assert.equal(await fs.readFile(path.join(priorDir,'outline-diagnostic.json'),'utf8'),diagnostic);
+  const stale=await f.app.inject({method:'POST',url:endpoint+'/outline',payload:{expectedHash:recovered.hash,recoverJobId:prior.id}});
+  assert.equal(stale.statusCode,409);
+
+  const exported=await f.wait(id,await f.request('POST',endpoint+'/export',{expectedHash:recovered.hash}));
+  assert.equal(exported.status,'succeeded',exported.error);
+  const response=await f.app.inject(exported.downloadUrl!);
+  assert.equal(response.statusCode,200);
+  const manifest=await JSZip.loadAsync(response.rawPayload);
+  const notesRelations=await manifest.file('ppt/notesSlides/_rels/notesSlide1.xml.rels')!.async('string');
+  assert.match(notesRelations,/relationships\/notesMaster"/);
+  assert.ok(manifest.file('ppt/notesMasters/notesMaster1.xml'));
+  const sheets=await Promise.all(Object.keys(manifest.files).filter(name=>/^ppt\/slides\/slide\d+\.xml$/.test(name))
+   .map(name=>manifest.file(name)!.async('string')));
+  const text=sheets.join('').replace(/<[^>]*>|\s/g,'');
+  for(const content of [originalCase,captionEn,...rows.map(row=>row[1])]){
+   assert.ok(text.includes(content.replace(/\s/g,'')),content);
+  }
+  assert.equal(calls,0);
+ } finally{await f.close();}
 });
 
 test('paper selection expands explicit chapter evidence, rejects cycles and protected paths',async()=>{
