@@ -71,6 +71,7 @@ export async function updateReview(workspaceRoot: string, id: string, roundId: s
     const raw = await fs.readFile(metadata);
     if (hash(raw) !== expectedHash) throw new HttpError(409, '审稿回复已在其他窗口修改，请比较后保存。', { current: await readRound(root, roundId) });
     const round: ReviewRound = JSON.parse(raw.toString('utf8'));
+    const previousGenerated = responses(round.items);
     let savedHash = expectedHash;
     if (JSON.stringify(round.items) !== JSON.stringify(items)) {
       await preserveRecovery(root, roundPath(roundId), raw);
@@ -83,8 +84,24 @@ export async function updateReview(workspaceRoot: string, id: string, roundId: s
       savedHash = hash(next);
     }
     try {
-      const generated = await assertNoSymlinks(root, responsePath(roundId), true);
-      await atomicWrite(generated, responses(items));
+      const relative = responsePath(roundId);
+      const next = Buffer.from(responses(items));
+      const readGenerated = async () => fs.readFile(await assertNoSymlinks(root, relative, true)).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      const existing = await readGenerated();
+      if (existing?.equals(next)) return { ...round, hash: savedHash };
+      // Only divergent bytes cannot be regenerated from the prior review fields.
+      if (existing && !existing.equals(Buffer.from(previousGenerated))) {
+        await preserveRecovery(root, relative, existing);
+      }
+      await atomicWrite(await assertNoSymlinks(root, relative, true), next, async () => {
+        const current = await readGenerated();
+        if (existing ? !current?.equals(existing) : current !== null) {
+          throw new HttpError(409, '同步前回复源码已在外部修改。');
+        }
+      });
     } catch {
       return { ...round, hash: savedHash, needsSourceSync: true };
     }

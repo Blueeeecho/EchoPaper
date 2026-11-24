@@ -23,6 +23,7 @@ interface AnalysisBlock {
 }
 
 interface AnalysisCache {
+  sourceHash?: string;
   blocks?: AnalysisBlock[];
 }
 
@@ -532,7 +533,7 @@ export function createPaperMetadataService(workspaceRoot: string) {
       : ['', '', ''];
 
     const title = paperTitle(resource);
-    const sig = `${CACHE_VERSION}|${layoutId}|${layoutSt}|${analysisSt}|${transSt}|${title}|${resource.name}|${resource.tags.join('\u0000')}`;
+    const sig = `${CACHE_VERSION}|${resource.hash ?? ''}|${layoutId}|${layoutSt}|${analysisSt}|${transSt}|${title}|${resource.name}|${resource.tags.join('\u0000')}`;
     const cached = memory.get(resource.id);
     if (cached && cached.sig === sig) return cached.meta;
 
@@ -541,13 +542,13 @@ export function createPaperMetadataService(workspaceRoot: string) {
     let authorKeywords: string[] = [];
     let titleZh: string | undefined;
 
-    if (paths && layoutSt) {
+    if (paths && layoutSt && resource.hash) {
       const [layout, analysis, translations] = await Promise.all([
         readJsonSafe<DocumentLayout>(paths.layout),
         analysisSt ? readJsonSafe<AnalysisCache>(paths.analysis) : Promise.resolve(null),
         transSt ? readJsonSafe<Record<string, string>>(paths.translations) : Promise.resolve(null),
       ]);
-      if (layout?.pages?.length) {
+      if (layout?.sourceHash === resource.hash && layout.pages?.length) {
         const p0 = layout.pages[0]?.layouts ?? [];
         const p1 = layout.pages[1]?.layouts ?? [];
         for (const b of [...p0, ...p1]) {
@@ -563,8 +564,10 @@ export function createPaperMetadataService(workspaceRoot: string) {
         }
         authorKeywords = extractExplicitAuthorKeywords([...p0, ...p1.slice(0, 6)]);
         abstractText = p0.filter(b => b.type === 'text' && b.text).map(b => b.text).join(' ').slice(0, 2000);
+        if (analysis?.sourceHash === resource.hash) {
+          titleZh = extractTranslatedTitle({originalTitle: title, analysis, translations});
+        }
       }
-      titleZh = extractTranslatedTitle({originalTitle: title, analysis, translations});
     }
 
     const {venue, year} = extractVenueYear({

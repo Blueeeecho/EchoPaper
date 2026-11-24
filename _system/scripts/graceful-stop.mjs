@@ -3,8 +3,9 @@ import path from 'node:path';
 
 export const WORKBENCH_PORTS = Array.from({ length: 31 }, (_, i) => 4173 + i);
 
-const samePath = (a, b) => {
-  const left = path.resolve(a || ''), right = path.resolve(b || '');
+export const sameWorkspacePath = (a, b) => {
+  if (typeof a !== 'string' || !path.isAbsolute(a) || typeof b !== 'string' || !path.isAbsolute(b)) return false;
+  const left = path.resolve(a), right = path.resolve(b);
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 };
 
@@ -13,7 +14,7 @@ export async function probeWorkspacePort(port, workspaceRoot, { timeoutMs = 1000
     const response = await request(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) return null;
     const data = await response.json();
-    return data?.ok && samePath(data.workspaceRoot, workspaceRoot) ? { port, health: data } : null;
+    return data?.ok && sameWorkspacePath(data.workspaceRoot, workspaceRoot) ? { port, health: data } : null;
   } catch {
     return null;
   }

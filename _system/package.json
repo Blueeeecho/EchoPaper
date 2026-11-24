@@ -3,12 +3,15 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.13 <27"
+  },
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
     "dev": "vite --host 127.0.0.1",
-    "test": "node --import tsx --test --test-concurrency=1 tests/*.test.ts",
-    "doctor": "node scripts/check-workspace.mjs",
+    "test": "node --import tsx --test --test-concurrency=1 \"tests/*.test.ts\" \"tests/*.test.mjs\"",
+    "doctor": "node --import tsx scripts/check-workspace.mjs",
     "cli": "node scripts/echopaper.mjs"
   },
   "dependencies": {

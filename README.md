@@ -13,16 +13,20 @@ Research usually ends up scattered across too many places: PDFs in one app, tran
 
 ## Quick start
 
-**Windows (no setup needed)**: Download `EchoPaper-1.0.0-win-x64.exe` from [Releases](https://github.com/Blueeeecho/EchoPaper/releases/latest), run the installer, and choose a folder for your papers and notes. Node.js, Python, Git, and Tectonic are already bundled inside—no extra environment setup needed. *(Since this preview build is unsigned, Windows SmartScreen may ask once on first run: click **More info** → **Run anyway**.)*
+**Windows installer (v1.0.0)**: Download [EchoPaper-1.0.0-win-x64.exe](https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe) from the [v1.0.0 release](https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0) and choose a local workspace folder for your papers and notes. The installer bundles Node.js, Python, Git, and Tectonic. This preview installer is unsigned; Windows may show a SmartScreen warning.
 
-**macOS or running from source**: Install **Node.js 22+** and **Python 3** (add **Tectonic** if you compile LaTeX locally, and **Git** for history), keep the whole folder together, and run:
+**macOS or Windows from source**:
+
+Use **Node.js 22.13 or later in the 22.x line, or Node.js 24.x**, and install **Git 2.28+** and **Python 3**. Git is needed to open the paper workspace even if you downloaded a ZIP. Keep the whole repository folder together, not just `_system`.
 
 ```sh
 git clone https://github.com/Blueeeecho/EchoPaper.git
 cd EchoPaper
 ```
 
-Double-click `启动工作台.command` on macOS (or `启动工作台.bat` on Windows; use `停止工作台` to stop), or start it from the terminal:
+**Easiest way**: double-click `启动工作台.command` on macOS or `启动工作台.bat` on Windows. To stop the server, use the matching `停止工作台` script. First launch (or moving between macOS and Windows) needs internet access to install the locked npm dependencies from `registry.npmmirror.com` and their platform binaries. If the browser doesn't open, use the local address printed by the launcher. It normally uses `http://127.0.0.1:4173`, but picks another port if needed.
+
+**Prefer the terminal?**
 
 ```sh
 npm --prefix _system ci --no-audit --no-fund
@@ -30,7 +34,9 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-Everything local works offline with zero API keys. When you want AI chat, document translation, or OCR parsing, add your own endpoint and key in **Settings**—credentials stay in macOS Keychain or Windows Credential Manager, never inside the repository.
+Reading, notes, local search and LaTeX editing don't need an API key. To compile LaTeX, install **Tectonic** (set `TECTONIC_PATH` if it isn't found) and the template's fonts. The first build may need to download a TeX bundle; offline builds need the relevant assets cached. The HZAU slide template requires **LiSu (隶书)** and **Times New Roman** and does not silently replace them. If setup fails, run `npm --prefix _system run doctor` after installing npm dependencies.
+
+For AI chat, document translation, or OCR parsing, add your own endpoint and key in **Settings**. Credentials stay in macOS Keychain or Windows Credential Manager, not in the repository.
 
 ## More
 

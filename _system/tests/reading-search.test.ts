@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import {setTimeout as delay} from 'node:timers/promises';
+import {tracingChannel} from 'node:diagnostics_channel';
 import Fastify from 'fastify';
 import {PDFDocument} from 'pdf-lib';
 import {createReadingSearch} from '../server/workspace/reading-search';
@@ -11,7 +14,7 @@ import {registerWorkspaceRoutes} from '../server/workspace/index';
 import {hash} from '../server/storage';
 import {translationCacheKey} from '../shared/bilingual-cache';
 import type {DocumentLayout} from '../shared/bilingual';
-import type {IndexedResource} from '../server/workspace/catalog';
+import {openCatalog,type IndexedResource} from '../server/workspace/catalog';
 
 const original='Decentralized agents coordinate through shared memory.';
 const translation='分布式智能体通过共享记忆协作。';
@@ -98,4 +101,77 @@ test('library search returns cached Chinese and English matches within topic and
   assert.equal((await call('GET',`/api/workspace/resources?q=coordinate&topicId=${emptyTopic.id}`)).total,0);
   assert.ok(!(await call('GET','/api/workspace/resources')).resources.some((item:any)=>item.searchMatch));
  }finally{await workspace.close();await app.close();await fs.rm(directory,{recursive:true,force:true});}
+});
+
+test('disconnected searches stop after the active batch and warm scans preserve the complete page',async t=>{
+ const f=await fixture(),app=Fastify();
+ const abortedUrl='/api/workspace/resources?q=superseded&limit=3';
+ const completedUrl='/api/workspace/resources?q=coordinate&limit=3';
+ let markRead!:()=>void,markDisconnected!:()=>void,markEnded!:()=>void;
+ const firstRead=new Promise<void>(resolve=>{markRead=resolve;});
+ const disconnected=new Promise<void>(resolve=>{markDisconnected=resolve;});
+ const ended=new Promise<void>(resolve=>{markEnded=resolve;});
+ const channel=tracingChannel('fastify.request.handler').asyncEnd;
+ const observeEnd=(event:unknown)=>{
+  if((event as {request?:{url:string}}).request?.url===abortedUrl)markEnded();
+ };
+ const waitFor=(promise:Promise<void>,label:string)=>Promise.race([
+  promise,delay(5000,undefined,{ref:false}).then(()=>{throw Error('Timed out: '+label);}),
+ ]);
+ let reads=0,hold=false,request:http.ClientRequest|undefined;
+ try{
+  const catalog=await openCatalog(f.root);
+  try{
+   for(let i=0;i<42;i++){
+    const id=`cached-paper-${i}`,name=`Paper ${String(i).padStart(2,'0')}.pdf`;
+    const row={...resource,id,name,path:name,hash:hash(id)};
+    catalog.state.resources.push(row);
+    await f.store.writeLayout({...layout,resourceId:id,sourceHash:row.hash});
+   }
+   await catalog.save();
+  }finally{catalog.close();}
+  const read=fs.readFile;
+  t.mock.method(fs,'readFile',(async(...args:Parameters<typeof fs.readFile>)=>{
+   if(typeof args[0]==='string'&&args[0].includes(`${path.sep}reading-search${path.sep}`)){
+    reads++;
+    if(hold){markRead();await disconnected;}
+   }
+   return read(...args);
+  }) as typeof fs.readFile);
+  app.addHook('onRequest',async request=>{
+   if(request.url===abortedUrl)request.raw.once('close',markDisconnected);
+  });
+  await registerWorkspaceRoutes(app,f.root,{watch:false});
+  channel.subscribe(observeEnd);
+  const url=await app.listen({host:'127.0.0.1',port:0});
+  hold=true;reads=0;
+  request=http.get(url+abortedUrl);
+  request.on('error',()=>{});
+  await waitFor(firstRead,'first index read');
+  request.destroy();
+  await waitFor(ended,'aborted request handler');
+  assert.ok(reads>0&&reads<=4,`disconnected search read ${reads} index documents`);
+  hold=false;
+
+  const getPage=async()=>{
+   const response=await fetch(url+completedUrl);
+   assert.equal(response.status,200);
+   return response.json();
+  };
+  const firstPage=await getPage();
+  reads=0;
+  const secondPage=await getPage();
+  assert.deepEqual(secondPage,firstPage);
+  assert.equal(secondPage.total,42);
+  assert.equal(secondPage.groupCounts.paper,42);
+  assert.deepEqual(secondPage.resources.map((item:{name:string})=>item.name),['Paper 00.pdf','Paper 01.pdf','Paper 02.pdf']);
+  assert.equal(secondPage.resources[0].searchMatch.source,'ocr');
+  assert.equal(secondPage.resources[0].searchMatch.page,2);
+  assert.equal(reads,2,'only index documents outside the 40-entry cache should be reread');
+ }finally{
+  request?.destroy();
+  markDisconnected();
+  channel.unsubscribe(observeEnd);
+  await app.close();await f.close();
+ }
 });

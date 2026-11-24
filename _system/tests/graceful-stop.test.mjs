@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import http from 'node:http';
 import net from 'node:net';
-import { findWorkspaceInstance, portReleased, requestGracefulStop, waitForPortRelease } from '../scripts/graceful-stop.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { findWorkspaceInstance, portReleased, requestGracefulStop, waitForPortRelease, WORKBENCH_PORTS } from '../scripts/graceful-stop.mjs';
 test('shutdown rejection preserves the failure instead of permitting restart', async () => {
   for (const status of [200, 403, 409, 500]) {
     await assert.rejects(requestGracefulStop(4173, async () => ({status})), /未强制终止/);
@@ -103,4 +107,61 @@ test('parallel workspace instance discovery matches target workspace across port
   assert.equal(found?.port, 4174);
   assert.equal(found?.health.pid, 999);
   assert.equal(probed.length, 31);
+});
+
+test('stop follows the workspace when its saved port is stale or from a copied folder', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'echopaper stop 测试-'));
+  const scripts = path.join(root, '_system', 'scripts');
+  const runtime = path.join(root, '_system', 'runtime');
+  const state = path.join(runtime, 'instance.json');
+  const run = promisify(execFile);
+  const servers = [];
+  const listen = async (workspaceRoot, shouldStop) => {
+    let shutdownCount = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url === '/api/health') {
+        res.writeHead(200, {'Content-Type': 'application/json'}).end(JSON.stringify({ ok: true, workspaceRoot }));
+      } else if (req.method === 'POST' && req.url === '/api/shutdown') {
+        shutdownCount++;
+        res.writeHead(202).end(() => { if (shouldStop) server.close(); });
+      } else res.writeHead(404).end();
+    });
+    servers.push(server);
+    for (const port of [...WORKBENCH_PORTS].reverse()) {
+      try {
+        await new Promise((resolve, reject) => {
+          server.once('error', reject);
+          server.listen(port, '127.0.0.1', () => {
+            server.removeListener('error', reject);
+            resolve();
+          });
+        });
+        return { port, shutdownCount: () => shutdownCount };
+      } catch (error) {
+        if (error.code !== 'EADDRINUSE') throw error;
+      }
+    }
+    throw new Error('No free fixture port');
+  };
+  try {
+    await mkdir(scripts, { recursive: true });
+    await mkdir(runtime);
+    for (const file of ['control.mjs', 'graceful-stop.mjs']) {
+      await copyFile(new URL(`../scripts/${file}`, import.meta.url), path.join(scripts, file));
+    }
+    const foreignRoot = path.join(root, 'different');
+    const foreign = await listen(foreignRoot, false);
+    for (const savedRoot of [root, foreignRoot]) {
+      const own = await listen(root, true);
+      await writeFile(state, JSON.stringify({ root: savedRoot, port: foreign.port }));
+      await run(process.execPath, [path.join(scripts, 'control.mjs'), 'stop'], { timeout: 8000 });
+      assert.equal(own.shutdownCount(), 1);
+      assert.equal(foreign.shutdownCount(), 0);
+      assert.equal(await portReleased(own.port), true);
+      await assert.rejects(readFile(state), { code: 'ENOENT' });
+    }
+  } finally {
+    await Promise.all(servers.filter(s => s.listening).map(s => new Promise(resolve => s.close(resolve))));
+    await rm(root, { recursive: true, force: true });
+  }
 });

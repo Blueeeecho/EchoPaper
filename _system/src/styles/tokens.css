@@ -1,0 +1,95 @@
+/* Shared palette for the shell and reader; keep legacy component aliases here. */
+:root {
+  --bg-canvas: #faf9f5;
+  --bg-sidebar: #f6f4ee;
+  --bg-surface: #fff;
+  --bg-subtle: #f1f0ec;
+  --bg-recessed: #e9e8e3;
+  --border-subtle: #edeae3;
+  --border-default: #e4e2dc;
+  --border-strong: #d3d0c8;
+  --text-primary: #1d2127;
+  --text-secondary: #555b64;
+  --text-muted: #666d76;
+  --accent: #2b5a8c;
+  --accent-hover: #224a75;
+  --accent-text: #1f4772;
+  --accent-tint: #ebf1f8;
+  --accent-tint-strong: #dbe6f2;
+  --accent-border: #b7cde5;
+
+  --ok: #2f7a55;
+  --ok-tint: #e8f3ec;
+  --ok-border: #bcd9c8;
+  --warn: #a8670f;
+  --warn-tint: #fbf1e1;
+  --warn-border: #e7c992;
+  --danger: #b4402b;
+  --danger-tint: #fbeae6;
+  --danger-border: #e9b9ad;
+
+  --font-sans: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-serif: "Times New Roman", "Songti SC", "SimSun", serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --text-base: 14px;
+  --text-sm: 13px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --focus-ring: 0 0 0 3px rgba(43, 90, 140, .18);
+  --shadow-overlay: 0 8px 28px rgba(20, 24, 31, .14), 0 1px 3px rgba(20, 24, 31, .08);
+
+  --ep-bg: var(--bg-canvas);
+  --ep-surface: var(--bg-surface);
+  --ep-surface-2: var(--bg-subtle);
+  --ep-surface-3: var(--bg-recessed);
+  --ep-border: var(--border-default);
+  --ep-border-strong: var(--border-strong);
+  --ep-text: var(--text-primary);
+  --ep-text-2: var(--text-secondary);
+  --ep-text-3: var(--text-muted);
+  --ep-accent: var(--accent);
+  --ep-accent-hover: var(--accent-hover);
+  --ep-accent-text: var(--accent-text);
+  --ep-accent-soft: var(--accent-tint);
+  --ep-accent-soft-2: var(--accent-tint-strong);
+  --ep-warning: var(--warn);
+  --ep-warning-soft: var(--warn-tint);
+  --ep-danger: var(--danger);
+  --ep-danger-soft: var(--danger-tint);
+  --ep-font: var(--font-serif);
+  --ep-mono: var(--font-mono);
+  --ep-radius-sm: var(--radius-sm);
+  --ep-radius: var(--radius-md);
+  --ep-radius-lg: var(--radius-lg);
+  --ep-shadow-sm: 0 1px 2px rgba(20, 24, 31, .05);
+  --ep-shadow-pop: var(--shadow-overlay);
+  --ep-ring: var(--focus-ring);
+
+  --r-bg: var(--bg-canvas);
+  --r-canvas: var(--bg-recessed);
+  --r-surface: var(--bg-surface);
+  --r-surface-2: var(--bg-subtle);
+  --r-text: var(--text-primary);
+  --r-text-2: var(--text-secondary);
+  --r-text-3: var(--text-muted);
+  --r-border: var(--border-default);
+  --r-border-strong: var(--border-strong);
+  --r-accent: var(--accent);
+  --r-accent-hover: var(--accent-hover);
+  --r-accent-soft: var(--accent-tint);
+  --r-warn: var(--warn);
+  --r-warn-soft: var(--warn-tint);
+  --r-danger: var(--danger);
+
+  --ink: var(--text-primary);
+  --muted: var(--text-secondary);
+  --line: var(--border-default);
+  --accent-strong: var(--accent-hover);
+  --surface: var(--bg-surface);
+  --surface-muted: var(--bg-subtle);
+  --surface-blue: var(--accent-tint);
+  --sidebar: var(--bg-sidebar);
+  --serif: var(--font-serif);
+  --warning: var(--warn);
+}

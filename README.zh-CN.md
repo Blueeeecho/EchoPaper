@@ -13,16 +13,20 @@
 
 ## 快速上手
 
-**Windows 免配置直接使用**：到 [Releases 页面](https://github.com/Blueeeecho/EchoPaper/releases/latest) 下载 `EchoPaper-1.0.0-win-x64.exe` 安装包，运行后选一个本地文件夹存放论文和笔记即可——Node.js、Python、Git 和 Tectonic 都已经打包在里面，不用再单独装运行环境。*（当前为未签名预览版，首次运行若弹出 Windows 安全提示，点 **“更多信息” → “仍要运行”** 即可。）*
+**Windows 安装版（v1.0.0）**：在 [v1.0.0 发布页](https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0)下载 [EchoPaper-1.0.0-win-x64.exe](https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe)，运行后选择本地工作区目录，用于存放论文和笔记。安装包内置 Node.js、Python、Git 和 Tectonic。此预览安装包未签名，Windows 可能显示 SmartScreen 提示。
 
-**macOS 或从源码运行**：准备好 **Node.js 22+** 和 **Python 3**（需要本地编译 LaTeX 再装一下 **Tectonic**，需要版本记录装上 **Git**），克隆完整仓库目录：
+**macOS 或 Windows 从源码运行**：
+
+请先安装 **Node.js 22.13 及以上的 22.x，或 Node.js 24.x**、**Git 2.28+** 和 **Python 3**。即使是下载 ZIP，打开论文工作区也需要 Git。请保留完整目录，不要只拷贝 `_system`。
 
 ```sh
 git clone https://github.com/Blueeeecho/EchoPaper.git
 cd EchoPaper
 ```
 
-在 macOS 上直接双击 `启动工作台.command`（Windows 源码运行可双击 `启动工作台.bat`，关闭用对应的 `停止工作台`），或者在终端启动：
+**最省事的方式**：在 macOS 上双击 `启动工作台.command`，在 Windows 上双击 `启动工作台.bat`，关闭后台用对应的 `停止工作台`。首次启动或在 macOS 和 Windows 间搬迁后，需要联网从 `registry.npmmirror.com` 安装锁定的 npm 依赖及其平台二进制文件。如果浏览器没自动打开，请用启动脚本打印的本地地址。默认是 `http://127.0.0.1:4173`，端口占用时会另选。
+
+**习惯用终端的话**：
 
 ```sh
 npm --prefix _system ci --no-audit --no-fund
@@ -30,7 +34,9 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-不填任何 API Key 也可以正常用完所有本地功能；需要使用 AI 助手、全文翻译或版面解析时，在界面右上角“模型设置”里填入自己的接口与密钥即可，密钥保存在系统钥匙串（macOS Keychain / Windows 凭据管理器）里，不会明文写进仓库目录。
+阅读、笔记、本地搜索和 LaTeX 编辑不需要 API Key。编译 LaTeX 还要安装 **Tectonic** 和模板所需字体；找不到编译器时可设置 `TECTONIC_PATH`。首次编译可能要下载 TeX 宏包资源，离线编译需要本地已有相应缓存。HZAU 幻灯片模板需要 **隶书** 和 **Times New Roman**，缺字体不会静默替换。已经安装 npm 依赖但启动有问题时，可以运行 `npm --prefix _system run doctor` 检查。
+
+需要使用 AI 助手、全文翻译或版面解析时，在“模型设置”里填入自己的接口与密钥。密钥保存在 macOS 钥匙串或 Windows 凭据管理器里，不会明文写进仓库。
 
 ## 补充说明
 

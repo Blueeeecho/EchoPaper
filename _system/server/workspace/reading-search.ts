@@ -120,11 +120,21 @@ export function createReadingSearch(root:string,options:{getText?:(id:string)=>s
   if(passage?.hits)return {source:passage.passage.source,snippet:excerpt(passage.passage.text,terms),page:passage.passage.page,terms};
   return {source:'text',snippet:excerpt(text,terms),terms};
  }
- async function find(resources:IndexedResource[],query:string){
-  const terms=searchTerms(query),matches=new Map<string,ResourceSearchMatch>();
-  for(let offset=0;offset<resources.length;offset+=4){
+ async function find(resources:IndexedResource[],query:string,signal?:AbortSignal){
+  const matches=new Map<string,ResourceSearchMatch>();
+  if(signal?.aborted)return matches;
+  const terms=searchTerms(query);
+  let ordered=resources;
+  if(cache.size){
+   const warm:IndexedResource[]=[],cold:IndexedResource[]=[];
+   for(const resource of resources)(cache.has(resource.id)?warm:cold).push(resource);
+   // Visit cached documents before misses evict them without changing the caller's order.
+   ordered=warm.concat(cold);
+  }
+  for(let offset=0;offset<ordered.length;offset+=4){
    if(closed)break;
-   const results=await Promise.all(resources.slice(offset,offset+4).map(async resource=>({id:resource.id,match:await match(resource,terms)})));
+   const results=await Promise.all(ordered.slice(offset,offset+4).map(async resource=>({id:resource.id,match:await match(resource,terms)})));
+   if(signal?.aborted){matches.clear();break;}
    for(const result of results)if(result.match)matches.set(result.id,result.match);
   }
   return matches;

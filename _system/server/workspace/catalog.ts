@@ -205,9 +205,7 @@ export async function openCatalog(workspaceRoot:string){
 
   return {
     state,
-    getText(id:string):string|undefined{
-      const inMemory=state.resources.find(item=>item.id===id);
-      if(inMemory&&typeof inMemory.text==='string')return inMemory.text;
+    getPersistedText(id:string):string|undefined{
       if(getTextStmt){
         const row=getTextStmt.get(id) as {text:string}|undefined;
         return row?.text;

@@ -86,7 +86,7 @@ export interface WorkspaceService {
 export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:string,options:{watch?:boolean;onEvent?:(event:any)=>void}={}):Promise<WorkspaceService>{
   const catalog=await openCatalog(workspaceRoot),state=catalog.state,maintenance=workspaceMaintenance(workspaceRoot),lock=`workspace-catalog:${path.resolve(workspaceRoot)}`;
   const paperMeta=createPaperMetadataService(workspaceRoot);
-  const readingSearch=createReadingSearch(workspaceRoot,{getText:catalog.getText,getMeta:item=>paperMeta.computeMeta(item)});
+  const readingSearch=createReadingSearch(workspaceRoot,{getText:catalog.getPersistedText,getMeta:item=>paperMeta.computeMeta(item)});
   const readingCache=layoutStore(workspaceRoot);
   const timelineSources=createTimelineSourceService(workspaceRoot);
   let active=0,closing=false,closed:Promise<void>|undefined;
@@ -517,7 +517,9 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     const trashed=trashedResourceIds(state);
     const topicResources=topic&&new Set(topic.resourceIds);
     const candidates=state.resources.filter(item=>(!item.missing||!trashed.has(item.id))&&(!query.rootId||item.rootId===query.rootId)&&(parent===undefined||(path.posix.dirname(item.path)==='.'?'':path.posix.dirname(item.path))===parent)&&(!topicResources||topicResources.has(item.id)));
-    const matches=q?await readingSearch.find(candidates,q):undefined;
+    const signal=q?request.signal:undefined;
+    const matches=q?await readingSearch.find(candidates,q,signal):undefined;
+    if(signal?.aborted)return;
     if(query.deduplicate!==undefined&&!['true','false'].includes(query.deduplicate))throw new HttpError(400,'去重参数无效。');
     const priority=new Set<string>();
     let priorityUnavailable=false;
@@ -527,6 +529,7 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
         for(const reference of notebook.keyRefs)priority.add(reference.resourceId);
       }catch{priorityUnavailable=true;}
     }
+    if(signal?.aborted)return;
     const found=matches?candidates.filter(item=>matches.has(item.id)):candidates;
     const matching=query.deduplicate==='true'?uniquePaperResources(found,priority):found;
     const groupCounts={paper:0,note:0,summary:0,other:0};
@@ -534,6 +537,7 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     const items=matching.filter(item=>!group||(item.kind==='file'&&resourceGroup(item.name)===group)).sort((first,second)=>Number(priority.has(second.id))-Number(priority.has(first.id))||(query.sort==='recent'?second.modifiedAt.localeCompare(first.modifiedAt):0)||compareResourceNames(first,second));
     const pageItems=items.slice(offset,offset+limit).map(item=>({...publicResource(item),...(matches?.has(item.id)?{searchMatch:matches.get(item.id)}:{})}));
     const enriched=await paperMeta.enrich(pageItems,state.resources);
+    if(signal?.aborted)return;
     return{resources:enriched,total:items.length,groupCounts,roots:state.roots.map(publicRoot),indexing:state.roots.some(r=>r.status==='scanning'),...(priorityUnavailable?{priorityUnavailable}: {})}satisfies ResourcePage;
   });
   app.get<{Params:{id:string}}>('/api/workspace/resources/:id',async request=>{const item=resource(request.params.id);const base=item.missing?publicResource(item):(await resourceFile(item.id)).resource;return paperMeta.enrichOne(base,state.resources);});
