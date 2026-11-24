@@ -34,6 +34,7 @@ public/pdfjs/
 *secret*
 *credential*
 *token*
+!/src/styles/tokens.css
 
 # OS
 .DS_Store

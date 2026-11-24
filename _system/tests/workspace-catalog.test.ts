@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import Fastify from 'fastify';
+import {PDFDocument} from 'pdf-lib';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {openCatalog} from '../server/workspace/catalog';
@@ -53,6 +54,72 @@ test('resource index searches file names, text and tags, lists parents and valid
     assert.equal((await f.call('GET',`/api/workspace/resources?topicId=${topic.id}`)).resources[0].id,nested.id);
     assert.equal((await f.call('GET',`/api/workspace/resources/${nested.id}/text`)).content,'A falsifiable probability tree');
     assert.equal((await f.service.resourceFile(nested.id)).resource.revision,tagged.revision);
+  }finally{await f.close();}
+});
+
+test('resource search reads indexed text without scanning the catalog for each row',async()=>{
+  const f=await fixture();
+  try{
+    await Promise.all(Array.from({length:24},(_,i)=>fs.writeFile(path.join(f.source,`row-${i}.txt`),i===7?'needle-body-only':'ordinary content')));
+    await f.connect();
+    const rows=f.service.resourcesRef();
+    const find=rows.find.bind(rows);
+    let fullCatalogLookups=0;
+    rows.find=((...args:Parameters<typeof find>)=>{fullCatalogLookups++;return find(...args);}) as typeof rows.find;
+    const result=await f.call('GET','/api/workspace/resources?q=needle-body-only');
+    assert.equal(result.total,1);
+    assert.equal(result.resources[0].name,'row-7.txt');
+    assert.equal(result.resources[0].searchMatch.source,'text');
+    assert.equal(fullCatalogLookups,0);
+  }finally{await f.close();}
+});
+
+test('replacing a PDF at the same path drops stale OCR metadata from list, detail and search',async()=>{
+  const f=await fixture();
+  try{
+    const filename=path.join(f.source,'fixture.pdf');
+    const writePdf=async(pages:number)=>{
+      const pdf=await PDFDocument.create();
+      for(let n=0;n<pages;n++)pdf.addPage();
+      await fs.writeFile(filename,await pdf.save());
+    };
+    await writePdf(1);
+    const source=await f.connect();
+    const [original]=(await f.call('GET','/api/workspace/resources')).resources;
+    const layoutDir=path.join(f.root,'workspace','reading-layout');
+    await fs.mkdir(layoutDir,{recursive:true});
+    await fs.writeFile(path.join(layoutDir,`${original.id}.json`),JSON.stringify({
+      version:1,resourceId:original.id,sourceHash:original.hash,
+      pages:[{layouts:[{type:'footer',text:'Published in ACL 2025.'}]}],
+    }));
+    await fs.writeFile(path.join(layoutDir,`${original.id}.analysis.json`),JSON.stringify({
+      sourceHash:original.hash,
+      blocks:[{type:'title',role:'doc_title',page:0,text:'A fixture title',translationKey:'fixture-title'}],
+    }));
+    await fs.writeFile(path.join(layoutDir,`${original.id}.translations.json`),JSON.stringify({'fixture-title':'测试论文标题'}));
+    const [before]=(await f.call('GET','/api/workspace/resources')).resources;
+    assert.equal(before.titleZh,'测试论文标题');
+    assert.equal(before.venue,'ACL');
+    assert.equal(before.year,'2025');
+    await writePdf(2);
+    await f.call('POST',`/api/workspace/roots/${source.id}/scan`,{},202);
+    await f.settle(source.id);
+    const [after]=(await f.call('GET','/api/workspace/resources')).resources;
+    assert.equal(after.id,original.id);
+    assert.notEqual(after.hash,original.hash);
+    assert.equal(after.venue,undefined);
+    assert.equal(after.year,undefined);
+    assert.equal(after.titleZh,undefined);
+    const detail=await f.call('GET',`/api/workspace/resources/${after.id}`);
+    assert.equal(detail.venue,undefined);
+    assert.equal((await f.call('GET','/api/workspace/resources?q=ACL')).total,0);
+    await fs.writeFile(path.join(layoutDir,`${after.id}.json`),JSON.stringify({
+      version:1,resourceId:after.id,sourceHash:after.hash,
+      pages:[{layouts:[{type:'footer',text:'Published in ICML 2026.'}]}],
+    }));
+    const [reparsed]=(await f.call('GET','/api/workspace/resources')).resources;
+    assert.equal(reparsed.venue,'ICML');
+    assert.equal(reparsed.titleZh,undefined); // Old analysis is still on disk.
   }finally{await f.close();}
 });
 

@@ -2,7 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
-import { findWorkspaceInstance, portReleased, probeWorkspacePort, requestGracefulStop, waitForPortRelease, WORKBENCH_PORTS } from './graceful-stop.mjs';
+import { findWorkspaceInstance, portReleased, probeWorkspacePort, requestGracefulStop, sameWorkspacePath, waitForPortRelease, WORKBENCH_PORTS } from './graceful-stop.mjs';
+
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 13) || nodeMajor > 26) {
+  console.error('EchoPaper 需要 Node.js 22.13 至 26.x，建议使用 22.x 或 24.x；当前版本为 ' + process.version + '。');
+  process.exit(1);
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const system = path.join(root, '_system');
@@ -15,7 +21,10 @@ async function health(port) {
   return found ? found.health : null;
 }
 async function state() {
-  try { return JSON.parse(await fs.readFile(stateFile, 'utf8')); } catch { return null; }
+  try {
+    const saved = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    return sameWorkspacePath(saved?.root, root) && Number.isInteger(saved.port) && saved.port >= 1024 && saved.port <= 65535 ? saved : null;
+  } catch { return null; }
 }
 async function freePort(savedPort) {
   // Recover an already running instance even if its runtime state file was lost.
@@ -120,11 +129,10 @@ async function start() {
 }
 async function stop() {
   const current = await state();
-  const discovered = current ? null : await findWorkspaceInstance(root);
-  const saved = current ?? (discovered ? { pid: discovered.health.pid, port: discovered.port, root } : null);
+  const discovered = await findWorkspaceInstance(root, { preferredPort: current?.port });
+  const saved = discovered ?? current;
   if (!saved) { console.log('EchoPaper 当前未运行。'); return; }
-  const info = await health(saved.port);
-  if (info) {
+  if (discovered && await health(saved.port)) {
     await requestGracefulStop(saved.port);
     for (let count = 0; count < 200 && await health(saved.port); count++) await pause(100);
     if (await health(saved.port)) throw new Error('后台尚未完成正常退出；保留运行记录，未强制终止，也未启动新后台。');

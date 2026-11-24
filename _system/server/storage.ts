@@ -18,12 +18,13 @@ export async function withLock<T>(key: string, work: () => Promise<T>): Promise<
   try { return await current; } finally { if (locks.get(key) === current) locks.delete(key); }
 }
 export const hash = (content: string | Buffer): string => createHash('sha256').update(content).digest('hex');
-export async function atomicWrite(filename: string, content: string | Buffer): Promise<void> {
+export async function atomicWrite(filename: string, content: string | Buffer, beforeReplace?: () => Promise<void>): Promise<void> {
   await fs.mkdir(path.dirname(filename), { recursive: true });
   const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${randomUUID()}.tmp`);
   try {
     await fs.writeFile(temporary, content, { flag: 'wx' });
     for (let attempt = 0; ; attempt++) {
+      if (beforeReplace) await beforeReplace();
       try {
         await fs.rename(temporary, filename);
         break;

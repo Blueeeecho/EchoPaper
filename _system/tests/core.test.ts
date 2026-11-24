@@ -228,6 +228,44 @@ test('review saves compare round hashes and can regenerate a failed source write
   } finally {await cleanup();}
 });
 
+test('review regeneration preserves a separately edited response source',async()=>{
+  const {root,app,create,cleanup}=await fixture();
+  try {
+    await create('Alpha');
+    const files='/api/projects/Alpha/file', base='/api/projects/Alpha/reviews';
+    const round=(await app.inject({method:'POST',url:base,payload:{}})).json();
+    const url=base+'/'+round.id;
+    const put=(expectedHash:string, response:string)=>app.inject({method:'PUT',url,payload:{expectedHash,items:[{id:'A',response}]}});
+    const normal=await put(round.hash,'First structured draft');
+    assert.equal(normal.statusCode,200,normal.body);
+    assert.equal(normal.json().needsSourceSync,undefined);
+    const relative=`reviews/${round.id}/response/responses.tex`;
+    const getSource=()=>app.inject(files+'?path='+encodeURIComponent(relative));
+    const generated=(await getSource()).json();
+    assert.match(generated.content,/First structured draft/);
+    const edited='Manually edited response source · 保留此稿\n';
+    const save=await app.inject({method:'PUT',url:files,payload:{path:relative,content:edited,expectedHash:generated.hash}});
+    assert.equal(save.statusCode,403,save.body); // generated output is not editable in-app
+    await fs.writeFile(path.join(root,'papers/Alpha',relative),edited);
+    assert.equal((await app.inject(base)).json().rounds[0].needsSourceSync,true);
+    const recovery=path.join(root,'papers/Alpha/.workbench/recovery');
+    await fs.rename(recovery,recovery+'-saved');
+    await fs.writeFile(recovery,'Fixture blocks new recovery writes');
+    const blocked=await put(normal.json().hash,'First structured draft');
+    assert.equal(blocked.statusCode,200,blocked.body);
+    assert.equal(blocked.json().needsSourceSync,true);
+    assert.equal((await getSource()).json().content,edited);
+    await fs.unlink(recovery);
+    await fs.rename(recovery+'-saved',recovery);
+    const update=await put(normal.json().hash,'Second structured draft');
+    assert.equal(update.statusCode,200,update.body);
+    assert.equal(update.json().needsSourceSync,undefined);
+    assert.match((await getSource()).json().content,/Second structured draft/);
+    const snapshots=await Promise.all((await fs.readdir(recovery)).map(file=>fs.readFile(path.join(recovery,file),'utf8')));
+    assert.ok(snapshots.includes(edited));
+  } finally {await cleanup();}
+});
+
 test('text editing rejects invalid UTF-8 and restores binary revisions by byte',async()=>{
   const {root,app,create,cleanup}=await fixture();
   try {

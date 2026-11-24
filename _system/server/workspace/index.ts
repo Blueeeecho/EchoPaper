@@ -86,7 +86,7 @@ export interface WorkspaceService {
 export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:string,options:{watch?:boolean;onEvent?:(event:any)=>void}={}):Promise<WorkspaceService>{
   const catalog=await openCatalog(workspaceRoot),state=catalog.state,maintenance=workspaceMaintenance(workspaceRoot),lock=`workspace-catalog:${path.resolve(workspaceRoot)}`;
   const paperMeta=createPaperMetadataService(workspaceRoot);
-  const readingSearch=createReadingSearch(workspaceRoot,{getText:catalog.getText,getMeta:item=>paperMeta.computeMeta(item)});
+  const readingSearch=createReadingSearch(workspaceRoot,{getText:catalog.getPersistedText,getMeta:item=>paperMeta.computeMeta(item)});
   const readingCache=layoutStore(workspaceRoot);
   const timelineSources=createTimelineSourceService(workspaceRoot);
   let active=0,closing=false,closed:Promise<void>|undefined;

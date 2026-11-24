@@ -64,6 +64,12 @@ const pathUrl = (id: string) => `/api/projects/${encodeURIComponent(id)}`;
 const textual = (path: string) => !/\.(pdf|png|jpg|jpeg|gif|webp|ico|zip|gz|woff2?|ttf|otf|eps|mp4|docx|pptx|xlsx)$/i.test(path);
 const draftKey = (id: string, path: string) => `motai:draft:${id}:${path}`;
 const paperSessionKey = (id: string) => `${workspaceSessionKey}:paper:${id}`;
+function readPanePreference(key: string): boolean {
+  try { return localStorage.getItem(`motai:focus:${key}:v1`) === 'true'; } catch { return false; }
+}
+function persistPreference(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* Preferences must not block editing. */ }
+}
 function readPaperSession(id: string): WorkspaceSession | undefined {
   const saved = normalizeWorkspaceSession(readSession(paperSessionKey(id)));
   return saved?.projectId === id ? saved : undefined;
@@ -138,9 +144,9 @@ export default function App({hub}:{hub?:PaperHubNavigation}={}) {
   const [consoleTab, setConsoleTab] = useState<'issues' | 'log'>('issues');
   const [taskBuildId, setTaskBuildId] = useState('');
   const pendingTaskPreview = useRef('');
-  const [consoleOpen, setConsoleOpen] = useState(() => localStorage.getItem('motai:focus:console:v1') === 'true');
-  const [showProjects, setShowProjects] = useState(() => localStorage.getItem('motai:focus:projects:v1') === 'true');
-  const [showFiles, setShowFiles] = useState(() => localStorage.getItem('motai:focus:files:v1') === 'true');
+  const [consoleOpen, setConsoleOpen] = useState(() => readPanePreference('console'));
+  const [showProjects, setShowProjects] = useState(() => readPanePreference('projects'));
+  const [showFiles, setShowFiles] = useState(() => readPanePreference('files'));
   const [writingPane,setWritingPane]=useState<'source'|'pdf'>('source');
   const [aiOpen, setAiOpen] = useState(initialSession.aiOpen);
   const [aiStarted, setAiStarted] = useState(false);
@@ -394,7 +400,7 @@ export default function App({hub}:{hub?:PaperHubNavigation}={}) {
   useEffect(() => {
     if (!projectId || loading) return;
     projectRef.current = projectId; docRef.current = null; contentRef.current = ''; pathRef.current = ''; conflictRef.current = null;
-    localStorage.setItem('motai:project', projectId); setFiles([]); setBuilds([]); setDoc(null); setContent(''); setConflict(null); setSelectedPath(''); setLineTarget(undefined); setFileError(''); setSaveFailed(false); currentLoad.current++;
+    persistPreference('motai:project', projectId); setFiles([]); setBuilds([]); setDoc(null); setContent(''); setConflict(null); setSelectedPath(''); setLineTarget(undefined); setFileError(''); setSaveFailed(false); currentLoad.current++;
     loadedProject.current='';
     const p=projects.find(p=>p.id===projectId),saved=readPaperSession(projectId)||(bootSession.current?.projectId===projectId?bootSession.current:undefined);
     const target=p?.targets.find(t=>t.id===saved?.targetId)||p?.targets[0];setTargetId(target?.id||'');
@@ -499,9 +505,9 @@ export default function App({hub}:{hub?:PaperHubNavigation}={}) {
     if(loadedProject.current===projectId&&selectedPath)writeSession(paperSessionKey(projectId),{...session,screen:'project'});
   },[loading,libraryOpen,projectId,view,selectedPath,targetId,aiOpen,editorPercent,doc]);
   useEffect(() => { if (aiOpen) setAiStarted(true); }, [aiOpen]);
-  useEffect(() => { localStorage.setItem('motai:focus:console:v1', String(consoleOpen)); }, [consoleOpen]);
-  useEffect(() => { localStorage.setItem('motai:focus:projects:v1', String(showProjects)); }, [showProjects]);
-  useEffect(() => { localStorage.setItem('motai:focus:files:v1', String(showFiles)); }, [showFiles]);
+  useEffect(() => { persistPreference('motai:focus:console:v1', String(consoleOpen)); }, [consoleOpen]);
+  useEffect(() => { persistPreference('motai:focus:projects:v1', String(showProjects)); }, [showProjects]);
+  useEffect(() => { persistPreference('motai:focus:files:v1', String(showFiles)); }, [showFiles]);
 
   async function beforeBackup() { if (conflict) throw new Error('请先处理源码保存冲突，再备份或恢复。'); if (!await save()) throw new Error('源码尚未保存，已暂停备份。'); await chatFlush.current?.(); await migrateBrowserChats(projects.map(p=>p.id)); }
   async function beginAiEdit() {
