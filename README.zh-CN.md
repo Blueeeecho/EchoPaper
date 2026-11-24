@@ -13,16 +13,16 @@
 
 ## 快速上手
 
-开始前需要在电脑上准备好 **Node.js 22+** 和 **Python 3**（如果要本地编译 LaTeX 再装一下 **Tectonic**，需要版本记录可以装上 **Git**）。克隆或下载时请保留完整目录，不要只拷贝里面的 `_system`。
+**Windows 免配置直接使用**：到 [Releases 页面](https://github.com/Blueeeecho/EchoPaper/releases/latest) 下载 `EchoPaper-1.0.0-win-x64.exe` 安装包，运行后选一个本地文件夹存放论文和笔记即可——Node.js、Python、Git 和 Tectonic 都已经打包在里面，不用再单独装运行环境。*（当前为未签名预览版，首次运行若弹出 Windows 安全提示，点 **“更多信息” → “仍要运行”** 即可。）*
+
+**macOS 或从源码运行**：准备好 **Node.js 22+** 和 **Python 3**（需要本地编译 LaTeX 再装一下 **Tectonic**，需要版本记录装上 **Git**），克隆完整仓库目录：
 
 ```sh
 git clone https://github.com/Blueeeecho/EchoPaper.git
 cd EchoPaper
 ```
 
-**最省事的方式**：在 macOS 上直接双击 `启动工作台.command`，在 Windows 上直接双击 `启动工作台.bat`（关闭时点对应的 `停止工作台` 即可）。第一次启动或跨系统拷贝后，它会自动安装当前系统所需的依赖，并在浏览器里打开 `http://127.0.0.1:4173`。
-
-**习惯用终端的话**：
+在 macOS 上直接双击 `启动工作台.command`（Windows 源码运行可双击 `启动工作台.bat`，关闭用对应的 `停止工作台`），或者在终端启动：
 
 ```sh
 npm --prefix _system ci --no-audit --no-fund

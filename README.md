@@ -13,16 +13,16 @@ Research usually ends up scattered across too many places: PDFs in one app, tran
 
 ## Quick start
 
-You will need **Node.js 22+** and **Python 3** (plus **Tectonic** if you want local LaTeX compilation, and **Git** for version history). Keep the whole repository folder together—don't copy `_system` by itself.
+**Windows (no setup needed)**: Download `EchoPaper-1.0.0-win-x64.exe` from [Releases](https://github.com/Blueeeecho/EchoPaper/releases/latest), run the installer, and choose a folder for your papers and notes. Node.js, Python, Git, and Tectonic are already bundled inside—no extra environment setup needed. *(Since this preview build is unsigned, Windows SmartScreen may ask once on first run: click **More info** → **Run anyway**.)*
+
+**macOS or running from source**: Install **Node.js 22+** and **Python 3** (add **Tectonic** if you compile LaTeX locally, and **Git** for history), keep the whole folder together, and run:
 
 ```sh
 git clone https://github.com/Blueeeecho/EchoPaper.git
 cd EchoPaper
 ```
 
-**Easiest way**: double-click `启动工作台.command` on macOS or `启动工作台.bat` on Windows (and use the matching `停止工作台` script to shut it down). On first launch—or after moving the folder between macOS and Windows—it automatically installs what your system needs and opens `http://127.0.0.1:4173`.
-
-**Prefer the terminal?**
+Double-click `启动工作台.command` on macOS (or `启动工作台.bat` on Windows; use `停止工作台` to stop), or start it from the terminal:
 
 ```sh
 npm --prefix _system ci --no-audit --no-fund
@@ -30,7 +30,7 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-Everything local (reading, notes, library search, LaTeX editing and compilation) works offline with zero API keys. When you want AI chat, document translation, or OCR parsing, add your own endpoint and key in **Settings**—credentials stay in macOS Keychain or Windows Credential Manager, never inside the repository.
+Everything local works offline with zero API keys. When you want AI chat, document translation, or OCR parsing, add your own endpoint and key in **Settings**—credentials stay in macOS Keychain or Windows Credential Manager, never inside the repository.
 
 ## More
 
