@@ -13,6 +13,10 @@ Research usually ends up scattered across too many places: PDFs in one app, tran
 
 ## Quick start
 
+**Windows installer (v1.0.0)**: Download [EchoPaper-1.0.0-win-x64.exe](https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe) from the [v1.0.0 release](https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0) and choose a local workspace folder for your papers and notes. The installer bundles Node.js, Python, Git, and Tectonic. This preview installer is unsigned; Windows may show a SmartScreen warning.
+
+**macOS or Windows from source**:
+
 Use **Node.js 22.13 or later in the 22.x line, or Node.js 24.x**, and install **Git 2.28+** and **Python 3**. Git is needed to open the paper workspace even if you downloaded a ZIP. Keep the whole repository folder together, not just `_system`.
 
 ```sh

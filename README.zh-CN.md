@@ -13,6 +13,10 @@
 
 ## 快速上手
 
+**Windows 安装版（v1.0.0）**：在 [v1.0.0 发布页](https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0)下载 [EchoPaper-1.0.0-win-x64.exe](https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe)，运行后选择本地工作区目录，用于存放论文和笔记。安装包内置 Node.js、Python、Git 和 Tectonic。此预览安装包未签名，Windows 可能显示 SmartScreen 提示。
+
+**macOS 或 Windows 从源码运行**：
+
 请先安装 **Node.js 22.13 及以上的 22.x，或 Node.js 24.x**、**Git 2.28+** 和 **Python 3**。即使是下载 ZIP，打开论文工作区也需要 Git。请保留完整目录，不要只拷贝 `_system`。
 
 ```sh

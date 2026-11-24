@@ -1,16 +1,17 @@
 import {ProcessingControls,useReadingProcessing} from './ReadingProcessing';
-import ResourceReader from './ResourceReader';
 import {usePdfImport,PdfImportButton,PdfImportFeedback,PdfImportOverlay} from './PdfImport';
-import ReadingNotes from './ReadingNotes';
 import ReferenceList,{type ReferenceListProps} from './ReferenceList';
 import {useTopicNotebook} from './useTopicNotebook';
-import {useCallback,useEffect,useRef,useState} from 'react';
+import {lazy,Suspense,useCallback,useEffect,useRef,useState} from 'react';
 import {Check,ChevronRight,Download,File,FilePlus,Folder,FolderOpen,FolderPlus,Link,LoaderCircle,Pencil,Plus,RefreshCw,RotateCcw,Search,Settings2,Tag,Trash2,WandSparkles,X} from 'lucide-react';
 import type {FileOperation,ResearchTopic,Resource,ResourcePage,SourceRoot,WorkspaceOverview} from '../../shared/workspace-types';
 import {api,json,prettyDate} from '../api';
 import HubDialog from './HubDialog';
 import {isResourceGroup,resourceGroup,RESOURCE_GROUP_LABELS,type ResourceGroup} from '../../shared/resource-kind';
 import './TopicWorkspace.css';
+
+const ResourceReader=lazy(()=>import('./ResourceReader'));
+const ReadingNotes=lazy(()=>import('./ReadingNotes'));
 
 const bytes=(n:number)=>n<1024?`${n} B`:n<1024**2?`${(n/1024).toFixed(1)} KB`:n<1024**3?`${(n/1024**2).toFixed(1)} MB`:`${(n/1024**3).toFixed(1)} GB`;
 // Papers and text open straight into the reader; other files show their details.
@@ -171,7 +172,7 @@ export default function Library({overview,initialQuery='',initialResourceId,topi
   <button role="tab" aria-selected={libraryView==='files'&&group==='other'} onClick={()=>{chooseView('files');chooseGroup('other');}}>{RESOURCE_GROUP_LABELS.other}{groupCounts&&<small>{groupCounts.other}</small>}</button>
   <button role="tab" aria-selected={libraryView==='files'&&!group} onClick={()=>{chooseView('files');chooseGroup('');}}>全部文件</button>
  </nav>{libraryView==='files'&&libraryTools}</div>
- {libraryView==='notes'&&<ReadingNotes topicResourceIds={topicId?overview?.topics.find(t=>t.id===topicId)?.resourceIds:undefined} onError={onError}/>}
+ {libraryView==='notes'&&<Suspense fallback={<p role="status">正在打开阅读笔记…</p>}><ReadingNotes topicResourceIds={topicId?overview?.topics.find(t=>t.id===topicId)?.resourceIds:undefined} onError={onError}/></Suspense>}
  {linkError&&<p role="alert" className="academic-inline-error">{linkError}</p>}
  <div className="academic-library-layout" hidden={libraryView!=='files'}><aside className="academic-locations" hidden={!locationsOpen}><h2>文件位置 <small>{roots.length}</small></h2><button className={!rootId?'active':''} onClick={()=>chooseRoot('')}><FilesIcon/>全部位置</button>{roots.map(r=><button key={r.id} className={rootId===r.id?'active':''} onClick={()=>chooseRoot(r.id)} title={r.path}><Folder size={16}/><span>{r.label}<small>{r.status==='scanning'?'正在建立索引…':r.status==='offline'?'目录离线':r.status==='error'?'索引失败':`${r.scannedFiles} 项 · ${r.permission==='write'?'可整理':'只读'}`}</small></span>{r.status==='scanning'&&<LoaderCircle size={13} className="spin"/>}</button>)}{!roots.length&&<p>连接本机目录后，即可检索与整理文件。</p>}<div className="academic-location-note">已有论文继续由论文工作区管理。外部目录原件不包含在工作台完整备份中。</div></aside>
  <div className="academic-file-browser library-reference-browser">
@@ -190,7 +191,7 @@ export default function Library({overview,initialQuery='',initialResourceId,topi
  <label className="academic-detail-label"><Tag size={14}/>标签<input disabled={selectionLoading||busy||!!selectionError||!!metadataConflict} value={tags} onChange={e=>setTags(e.target.value)} placeholder="用逗号分隔"/></label><fieldset disabled={selectionLoading||busy||!!selectionError||!!metadataConflict} className="academic-topic-links"><legend><Link size={14}/>关联课题</legend>{selectionTopics.filter(t=>!t.archived).map(t=><label className="academic-checkbox" key={t.id}><input type="checkbox" checked={topicLinks.includes(t.id)} onChange={()=>setTopicLinks(values=>values.includes(t.id)?values.filter(id=>id!==t.id):[...values,t.id])}/>{t.title}</label>)}{!selectionTopics.length&&<small>可在“研究课题”中建立课题。</small>}</fieldset><button className="academic-primary" disabled={busy||selectionLoading||!!selectionError||!!metadataConflict} onClick={()=>void saveMetadata()}>{selectionLoading?<LoaderCircle size={14} className="spin"/>:<Check size={14}/>}保存标题、标签与关联</button>
  </aside>}
  </div>
- {reading&&<ResourceReader key={reading.id} resource={reading} initialPage={reading.searchMatch?.page} onGuardChange={setReaderGuard} onClose={()=>setReading(undefined)}/>}
+ {reading&&<Suspense fallback={<p role="status">正在打开文献…</p>}><ResourceReader key={reading.id} resource={reading} initialPage={reading.searchMatch?.page} onGuardChange={setReaderGuard} onClose={()=>setReading(undefined)}/></Suspense>}
  {dialog&&<HubDialog title={{connect:'连接学术文件夹',root:'连接目录设置',mkdir:'新建目录','create-file':'新建文本文件',rename:'重命名原文件',move:'移动原文件',trash:'移至可恢复回收站',relink:'重新定位文件'}[dialog]} onClose={()=>{if(!busy)setDialog(undefined);}}><form onSubmit={submit} className="academic-form">{['connect','root'].includes(dialog)?<><label>名称<input value={label} onChange={e=>setLabel(e.target.value)} placeholder="例如：论文阅读资料"/></label><label>本机完整路径<input required value={path} disabled={dialog==='root'} onChange={e=>setPath(e.target.value)} placeholder="/Users/你的用户名/…"/></label><label>访问权限<select value={permission} onChange={e=>setPermission(e.target.value as 'read'|'write')}><option value="write">读取与整理 · 允许移动、重命名、可恢复删除</option><option value="read">只读 · 仅索引与预览</option></select></label><p className="academic-help">只索引你选择的目录。连接不会自动移动或复制原文件，工作台受管理目录由专用工作区处理。</p></>:dialog==='trash'?<><p>将“{selected?.name}”移至该目录的工作台回收站。</p><p className="academic-help">可以从整理记录中恢复。恢复时原位置被占用会保留双方文件。</p></>:<>{(dialog==='move'||dialog==='relink')&&<label>目标位置<select required value={destinationRootId} onChange={e=>setDestinationRootId(e.target.value)}>{roots.filter(r=>r.permission==='write'||dialog==='relink').map(r=><option key={r.id} value={r.id}>{r.label}</option>)}</select></label>}<label>{dialog==='rename'?'新名称':'相对于所选目录的路径'}<input required value={path} onChange={e=>setPath(e.target.value)} placeholder={dialog==='mkdir'?'输入新目录名称':'例如：reading/paper.pdf'}/></label>{dialog==='create-file'&&<><label>文件内容<textarea rows={7} value={newContent} onChange={e=>setNewContent(e.target.value)} placeholder="可留空，使用 UTF-8 保存"/></label><p className="academic-help">在所选目录创建原文件。重名不会覆盖，建议使用 .md 或 .txt 扩展名。</p></>}{dialog==='move'&&<p className="academic-help">原位置：{selected?.path}。关联随文件更新，同名文件不会被覆盖。</p>}</>}<footer><button type="button" className="academic-secondary" disabled={busy} onClick={()=>setDialog(undefined)}>取消</button><button className="academic-primary" disabled={busy}>{busy?'操作中…':dialog==='trash'?'移至回收站':'确认'}</button></footer></form></HubDialog>}
  </section>;
 }
