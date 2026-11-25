@@ -4,7 +4,7 @@ import {readTopicNotebook} from './topic-notebook';
 import {createReadingSearch} from './reading-search';
 import {createPaperMetadataService} from './paper-metadata';
 import {layoutStore} from './document-layout';
-import {pdfTitle} from './pdf-title';
+import {MAX_INDEXED_PDF_BYTES,pdfTitle,pdfTitleFromFile} from './pdf-title';
 import {isResourceGroup,resourceGroup} from '../../shared/resource-kind';
 import {previousTaskIndex,workTargetPath} from '../../shared/research-targets.ts';
 import {resolveWorkTarget,workTargetOptions,resolvedTargetPath} from './research-targets.ts';
@@ -43,18 +43,8 @@ function progressDateFields(input:Record<string,unknown>,original?:{day?:string;
  if(kind!==undefined&&kind!=='progress'&&kind!=='task')throw new HttpError(400,'记录类型无效。');
  return {...(day?{day:day as string}:{}),...(kind?{kind:kind as 'progress'|'task'}:{})};
 }
-async function extractedText(filename:string,preloadedBytes?:Buffer):Promise<string|undefined>{
-  const ext=path.extname(filename).toLowerCase();
-  const size=preloadedBytes?preloadedBytes.length:(await fs.stat(filename)).size;
-  if(textExtensions.has(ext)&&size<=2*1024*1024){
-    let bytes=preloadedBytes;
-    if(!bytes){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{bytes=await handle.readFile();}finally{await handle.close();}}
-    if(bytes.includes(0))return undefined;
-    return bytes.toString('utf8');
-  }
-  if(ext!=='.pdf'||size>32*1024*1024)return undefined;
-  let bytes=preloadedBytes;
-  if(!bytes){const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);bytes=await handle.readFile().finally(()=>handle.close());}
+async function extractedText(filename:string,bytes:Buffer):Promise<string|undefined>{
+  if(path.extname(filename).toLowerCase()!=='.pdf')return bytes.includes(0)?undefined:bytes.toString('utf8');
   const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),fonts=path.join(path.dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')),'standard_fonts')+path.sep;
   const loading=getDocument({data:new Uint8Array(bytes),disableFontFace:true,useSystemFonts:false,standardFontDataUrl:fonts,verbosity:0});
   try{
@@ -69,6 +59,48 @@ async function extractedText(filename:string,preloadedBytes?:Buffer):Promise<str
     }
     return content.slice(0,2*1024*1024);
   }finally{await loading.destroy();}
+}
+
+function indexTextSupported(filename:string,size:number){
+  const ext=path.extname(filename).toLowerCase();
+  return ext==='.pdf'?size<=MAX_INDEXED_PDF_BYTES:textExtensions.has(ext)&&size<=2*1024*1024;
+}
+
+async function withStableIndexedFile<T>(filename:string,hash:string,read:()=>Promise<T>):Promise<T>{
+  const check=async()=>{
+    const current=await fastFileSnapshot(filename);
+    if(current.kind!=='file'||current.hash!==hash)throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
+  };
+  await check();
+  try{return await read();}finally{await check();}
+}
+
+async function readIndexedBytes(filename:string,size:number,hash:string):Promise<Buffer>{
+  const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);
+  try{
+    // Only the indexed byte count is read, so a concurrently growing file cannot inflate the buffer.
+    const bytes=Buffer.alloc(size);
+    let offset=0;
+    while(offset<bytes.length){
+      const {bytesRead}=await handle.read(bytes,offset,bytes.length-offset,offset);
+      if(!bytesRead)break;
+      offset+=bytesRead;
+    }
+    if(offset!==bytes.length||createHash('sha256').update(bytes).digest('hex')!==hash)throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
+    return bytes;
+  }finally{await handle.close();}
+}
+
+async function extractIndexFields(filename:string,tree:{size:number;hash:string},options:{text:boolean;title:boolean}){
+  const isPdf=/\.pdf$/i.test(filename),text=options.text&&indexTextSupported(filename,tree.size),title=options.title&&isPdf;
+  if(!text&&!title)return {};
+  return withStableIndexedFile(filename,tree.hash,async()=>{
+    const bytes=(text||title&&tree.size<=MAX_INDEXED_PDF_BYTES)?await readIndexedBytes(filename,tree.size,tree.hash):undefined;
+    return {
+      ...(text&&bytes?{text:await extractedText(filename,bytes).catch(()=>undefined)}:{}),
+      ...(title?{title:bytes?await pdfTitle(bytes):await pdfTitleFromFile(filename)}:{}),
+    };
+  });
 }
 
 export interface WorkspaceService {
@@ -145,37 +177,24 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
         if(stat.isDirectory()){
           const children=new Map<string,Tree>();for(const entry of (await fs.readdir(filename,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){if(entry.name.startsWith('.')||entry.isSymbolicLink()||(!entry.isDirectory()&&!entry.isFile()))continue;try{children.set(entry.name,await walk(relative?relative+'/'+entry.name:entry.name));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'||(error as HttpError).statusCode===404)continue;throw error;}}
           const digest=createHash('sha256');let size=0;for(const[name,child]of [...children].sort(([a],[b])=>a<b?-1:a>b?1:0)){digest.update(JSON.stringify([name,child.kind,child.hash]));size+=child.size;}tree={kind:'directory',children,hash:digest.digest('hex'),size,modifiedAt:stat.mtime.toISOString(),mode:stat.mode&0o777};
-        }else tree=await fastFileSnapshot(filename,old&&old.kind==='file'?old:undefined);
+        }else tree=await fastFileSnapshot(filename);
         if(relative){count++;const record:IndexedResource={id:old?.id||randomUUID(),rootId:item.id,path:relative,name:path.posix.basename(relative),kind:tree.kind,size:tree.size,modifiedAt:tree.modifiedAt,tags:old?.tags||[],...(old?.title&&old.hash===tree.hash?{title:old.title}:{}),...(old?.snippet&&old.hash===tree.hash?{snippet:old.snippet}:{}),missing:false,revision:old?.revision||1,hash:tree.hash};if(old&&(old.hash!==record.hash||old.missing||old.kind!==record.kind||old.modifiedAt!==record.modifiedAt))record.revision++;
           if(tree.kind==='file'){
             const contentChanged=!old||old.hash!==record.hash;
-            const needsPdfTitle=!record.title&&/\.pdf$/i.test(record.name)&&!titles.has(tree.hash);
-            let preloaded:Buffer|undefined;
-            if(contentChanged||needsPdfTitle){
-              if(/\.pdf$/i.test(record.name)&&tree.size<=32*1024*1024){
-                const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);
-                try{preloaded=await handle.readFile();}finally{await handle.close();}
-              }
-            }
+            const knownTitle=record.title||(record.hash?titles.get(record.hash):undefined);
+            const fields=await extractIndexFields(filename,tree,{text:contentChanged,title:!knownTitle});
             if(contentChanged){
-              const text=await extractedText(filename,preloaded).catch(()=>undefined);
-              if(text!==undefined){record.text=text;record.snippet=text.replace(/\s+/g,' ').slice(0,240);}
-              else{record.text=undefined;delete record.snippet;}
+              record.text=fields.text;
+              record.snippet=fields.text?.replace(/\s+/g,' ').slice(0,240);
             }
-            if(!record.title&&/\.pdf$/i.test(record.name)){
-              record.title=titles.get(tree.hash);
-              if(!record.title){
-                if(preloaded)record.title=await pdfTitle(preloaded);
-                else{const handle=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW);try{record.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}}
-              }
-            }
+            if(/\.pdf$/i.test(record.name))record.title=knownTitle||fields.title;
           }
           if(old&&record.title!==old.title&&record.revision===old.revision)record.revision++;found.set(record.id,record);
           if(count%100===0)scanProgress.set(item.id,count);}
         return tree;
       }
       let failure:Error|undefined;
-      try{await walk('');}catch(error){failure=error as Error;}
+      try{await walk('');}catch(error){if(error instanceof HttpError&&error.statusCode===409&&pass<5)continue;failure=error as Error;}
       const published=await mutate(async()=>{
         const current=state.resources.filter(entry=>entry.rootId===item.id);
         // A concurrent edit or watcher event invalidates this snapshot before publication.
@@ -253,7 +272,7 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     if(initial.missing)throw new HttpError(404,'资源原位置已不存在，索引和关联仍保留。');
     const source=root(initial.rootId);
     const filename=await rootFile(workspaceRoot,source,initial.path);
-    const actual=initial.kind==='file'?await fastFileSnapshot(filename,initial):await snapshot(filename);
+    const actual=initial.kind==='file'?await fastFileSnapshot(filename):await snapshot(filename);
     if(initial.hash===actual.hash&&initial.modifiedAt===actual.modifiedAt&&initial.size===actual.size){
       return {filename,resource:publicResource(initial),hash:actual.hash};
     }
@@ -261,25 +280,15 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
       const item=resource(id);
       if(item.missing)throw new HttpError(404,'资源原位置已不存在，索引和关联仍保留。');
       const checkedFilename=await rootFile(workspaceRoot,root(item.rootId),item.path);
-      const checked=item.kind==='file'?await fastFileSnapshot(checkedFilename,item):await snapshot(checkedFilename);
+      const checked=item.kind==='file'?await fastFileSnapshot(checkedFilename):await snapshot(checkedFilename);
       if(item.hash!==checked.hash||item.modifiedAt!==checked.modifiedAt||item.size!==checked.size){
         const contentChanged=item.hash!==checked.hash;
+        const fields=contentChanged&&checked.kind==='file'?await extractIndexFields(checkedFilename,checked,{text:true,title:true}):undefined;
         Object.assign(item,{hash:checked.hash,size:checked.size,modifiedAt:checked.modifiedAt,revision:item.revision+1});
-        if(item.kind==='file'){
-          let preloaded:Buffer|undefined;
-          if(contentChanged&&/\.pdf$/i.test(item.name)&&checked.size<=32*1024*1024){
-            const handle=await fs.open(checkedFilename,constants.O_RDONLY|constants.O_NOFOLLOW);
-            try{preloaded=await handle.readFile();}finally{await handle.close();}
-            item.title=await pdfTitle(preloaded);
-          }else if(contentChanged&&/\.pdf$/i.test(item.name)){
-            const handle=await fs.open(checkedFilename,constants.O_RDONLY|constants.O_NOFOLLOW);
-            try{item.title=await pdfTitle(await handle.readFile());}finally{await handle.close();}
-          }
-          if(contentChanged){
-            const text=await extractedText(checkedFilename,preloaded).catch(()=>undefined);
-            item.text=text;
-            item.snippet=text?.replace(/\s+/g,' ').slice(0,240);
-          }
+        if(fields){
+          if(/\.pdf$/i.test(item.name))item.title=fields.title;
+          item.text=fields.text;
+          item.snippet=fields.text?.replace(/\s+/g,' ').slice(0,240);
         }
         await catalog.save();
         notifyResources();
@@ -569,10 +578,18 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     for(const record of affected){let tree:Tree|undefined=actual;const suffix=record.path.slice(base.length);for(const part of suffix.split('/').filter(Boolean))tree=tree?.children?.get(part);const nextPath=targetPath+suffix,duplicate=state.resources.find(r=>r.rootId===targetRoot.id&&r.path===nextPath&&!affected.some(a=>a.id===r.id));
       if(duplicate){if(!tree||tree.hash!==record.hash||tree.hash!==duplicate.hash||duplicate.tags.length||await referenced(duplicate.id))throw new HttpError(409,'新位置已有另一个有独立内容或关联的资源，未合并资源身份。');remove.add(duplicate.id);}planned.push({record,nextPath,tree,duplicate});
     }
+    const fields=actual.kind==='file'?await extractIndexFields(filename,actual,{text:true,title:false}):undefined;
     for(const{record,nextPath,tree,duplicate}of planned){record.rootId=targetRoot.id;record.path=nextPath;record.name=path.posix.basename(nextPath);record.missing=!tree;record.revision++;if(tree){record.hash=tree.hash;record.size=tree.size;record.modifiedAt=tree.modifiedAt;record.text=duplicate?.text||record.text;}}
-    state.resources=state.resources.filter(r=>!remove.has(r.id));if(item.kind==='file'){item.text=await extractedText(filename).catch(()=>undefined);item.snippet=item.text?.replace(/\s+/g,' ').slice(0,240);}await catalog.save();return publicResource(item);
+    state.resources=state.resources.filter(r=>!remove.has(r.id));if(fields){item.text=fields.text;item.snippet=item.text?.replace(/\s+/g,' ').slice(0,240);}await catalog.save();return publicResource(item);
   }));
-  app.get<{Params:{id:string}}>('/api/workspace/resources/:id/text',async request=>{const detail=await resourceFile(request.params.id);if(detail.resource.kind!=='file')throw new HttpError(415,'目录不能读取为文本。');const content=await extractedText(detail.filename);if(content===undefined)throw new HttpError(415,'此文件暂不支持文本读取，或超过文本预览大小限制。');return{content,hash:detail.hash};});
+  app.get<{Params:{id:string}}>('/api/workspace/resources/:id/text',async request=>{
+    const detail=await resourceFile(request.params.id);
+    if(detail.resource.kind!=='file')throw new HttpError(415,'目录不能读取为文本。');
+    const content=indexTextSupported(detail.filename,detail.resource.size)?await withStableIndexedFile(detail.filename,detail.hash,async()=>
+      extractedText(detail.filename,await readIndexedBytes(detail.filename,detail.resource.size,detail.hash))):undefined;
+    if(content===undefined)throw new HttpError(415,'此文件暂不支持文本读取，或超过文本预览大小限制。');
+    return{content,hash:detail.hash};
+  });
   app.get<{Params:{id:string};Querystring:{sourceHash?:string}}>('/api/workspace/resources/:id/raw',async(request,reply)=>{
     const detail=await resourceFile(request.params.id);
     if(request.query.sourceHash!==undefined&&request.query.sourceHash!==detail.hash)throw new HttpError(409,'原文已变更，请更新知识关系图后重新打开。');

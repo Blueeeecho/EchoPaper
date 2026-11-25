@@ -435,3 +435,61 @@ test('queued task build rejects a changed source fingerprint before invoking the
   assert.equal(result.status,'failed');assert.match(result.reason!,/排队期间源码已变化/);assert.ok(!result.log.includes('engine-started'));assert.equal(result.pdf,undefined);
  }finally{await f.cleanup();}
 });
+
+test('build status reuses unchanged file identities but hashes equal-size edits with restored mtime',async t=>{
+ const f=await fixture();
+ t.after(()=>f.cleanup());
+ const asset=path.join(f.directory,'manuscript','large-asset.bin');
+ await fs.writeFile(asset,Buffer.alloc(4*1024*1024,65));
+ const fixed=new Date('2024-01-01T00:00:00Z');
+ await fs.utimes(asset,fixed,fixed);
+ const originalOpen=fs.open;
+ let opens=0;
+ const spy=t.mock.method(fs,'open',(...args:Parameters<typeof originalOpen>)=>{
+  if(args[0]===asset)opens++;
+  return originalOpen(...args);
+ });
+ const old=await currentBuildSource(f.root,'test','main');
+ assert.equal(opens,1);
+ for(let i=0;i<4;i++)assert.deepEqual(await currentBuildSource(f.root,'test','main'),old);
+ assert.equal(opens,1);
+ const handle=await originalOpen(asset,'r+');
+ try{await handle.write(Buffer.from('B'),0,1,4096);}finally{await handle.close();}
+ await fs.utimes(asset,fixed,fixed);
+ const updated=await currentBuildSource(f.root,'test','main');
+ assert.notEqual(updated.sourceHash,old.sourceHash);
+ assert.equal(opens,2);
+ spy.mock.restore();
+ assert.equal(updated.sourceHash,fingerprint(await sourceFiles(path.dirname(asset),'main.tex')));
+});
+
+test('explicit local Tectonic bundle preserves untrusted flags and never falls back to the network',async t=>{
+ const f=await fixture();
+ t.after(()=>f.cleanup());
+ const bundle=path.join(f.root,'local bundle');
+ await fs.mkdir(bundle);
+ const compiler=path.join(f.root,'record-tectonic');
+ const capture=path.join(f.root,'args.json');
+ await fs.writeFile(compiler,`#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(capture)},JSON.stringify(process.argv.slice(2)));
+console.error('failed to download bundle: HTTP 403');
+process.exitCode=1;
+`,{mode:0o755});
+ const previous=process.env.TECTONIC_BUNDLE_PATH;
+ try{
+  const options={compiler,cwd:f.root,output:path.join(f.root,'out'),main:'main.tex',timeoutMs:5000};
+  process.env.TECTONIC_BUNDLE_PATH='https://unconfigured.invalid/bundle';
+  const invalid=await runCompiler(options);
+  assert.match(invalid.error??'',/绝对路径/);
+  await assert.rejects(fs.access(capture));
+  process.env.TECTONIC_BUNDLE_PATH=bundle;
+  const result=await runCompiler(options);
+  assert.equal(result.code,1);
+  const args=JSON.parse(await fs.readFile(capture,'utf8')) as string[];
+  assert.deepEqual(args.slice(0,5),['-X','compile','--untrusted','--bundle',await fs.realpath(bundle)]);
+  assert.ok(args.includes('--synctex'));
+  assert.equal(result.fullLog,undefined);
+ }finally{
+  if(previous===undefined)delete process.env.TECTONIC_BUNDLE_PATH;else process.env.TECTONIC_BUNDLE_PATH=previous;
+ }
+});

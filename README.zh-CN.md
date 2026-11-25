@@ -34,7 +34,7 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-阅读、笔记、本地搜索和 LaTeX 编辑不需要 API Key。编译 LaTeX 还要安装 **Tectonic** 和模板所需字体；找不到编译器时可设置 `TECTONIC_PATH`。首次编译可能要下载 TeX 宏包资源，离线编译需要本地已有相应缓存。HZAU 幻灯片模板需要 **隶书** 和 **Times New Roman**，缺字体不会静默替换。已经安装 npm 依赖但启动有问题时，可以运行 `npm --prefix _system run doctor` 检查。
+阅读、笔记、本地搜索和 LaTeX 编辑不需要 API Key。编译 LaTeX 还要安装 **Tectonic** 和模板所需字体；找不到编译器时可设置 `TECTONIC_PATH`。首次编译可能要下载 TeX 宏包资源，离线编译需要已有缓存，或在启动 EchoPaper 前把 `TECTONIC_BUNDLE_PATH` 设为可信、兼容的本地宏包目录、ZIP 或 TTB 的绝对路径。指定时不会改用默认在线宏包重试。HZAU 幻灯片模板需要 **隶书** 和 **Times New Roman**，缺字体不会静默替换。已经安装 npm 依赖但启动有问题时，可以运行 `npm --prefix _system run doctor` 检查。
 
 需要使用 AI 助手、全文翻译或版面解析时，在“模型设置”里填入自己的接口与密钥。密钥保存在 macOS 钥匙串或 Windows 凭据管理器里，不会明文写进仓库。
 

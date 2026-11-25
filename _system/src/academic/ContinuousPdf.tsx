@@ -1,13 +1,15 @@
-import {useEffect,useRef,useState,type RefObject} from 'react';
+import {memo,useEffect,useLayoutEffect,useRef,useState,type PointerEvent,type RefObject} from 'react';
 import {TextLayer,type PDFDocumentProxy} from 'pdfjs-dist';
 import {mostVisiblePdfPage} from '../pdfClick';
+import {readingPageInput} from './readingPosition';
 
-export function PdfPage({pdf,number,zoom,container}:{pdf:PDFDocumentProxy;number:number;zoom:number;container:RefObject<HTMLDivElement|null>}){
+export function PdfPage({pdf,number,zoom,visible,onLayout}:{pdf:PDFDocumentProxy;number:number;zoom:number;visible:boolean;onLayout:()=>void}){
  const host=useRef<HTMLDivElement>(null),canvas=useRef<HTMLCanvasElement>(null),layer=useRef<HTMLDivElement>(null);
  const rendering=useRef<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['render']>|undefined>(undefined);
- const [visible,setVisible]=useState(false),[size,setSize]=useState({width:612,height:792}),[error,setError]=useState(''),[empty,setEmpty]=useState(false);
- useEffect(()=>{const element=host.current;if(!element)return;let closed=false;const observer=new IntersectionObserver(entries=>{if(!closed&&entries[0])setVisible(entries[0].isIntersecting);},{root:container.current,rootMargin:'1000px'});observer.observe(element);return()=>{closed=true;observer.disconnect();};},[]);
- useEffect(()=>{if(!visible&&number!==1)return;let cancelled=false;void pdf.getPage(number).then(p=>{if(!cancelled){const v=p.getViewport({scale:1});setSize({width:v.width,height:v.height});}}).catch(()=>{});return()=>{cancelled=true;};},[pdf,number,visible]);
+ const [size,setSize]=useState({width:612,height:792}),[error,setError]=useState(''),[empty,setEmpty]=useState(false);
+ const stopSelection=useRef<(()=>void)|undefined>(undefined);
+ useLayoutEffect(()=>{if(visible)onLayout();},[visible,size,onLayout]);
+ useEffect(()=>()=>stopSelection.current?.(),[visible,pdf,number,zoom]);
  useEffect(()=>{
   const drawingCanvas=canvas.current,textContainer=layer.current;
   if(!visible||!drawingCanvas||!textContainer)return;
@@ -18,6 +20,8 @@ export function PdfPage({pdf,number,zoom,container}:{pdf:PDFDocumentProxy;number
    if(!current())return;
    const previous=rendering.current;
    if(previous){await previous.promise.catch(()=>{});if(!current())return;}
+   const base=page.getViewport({scale:1});
+   setSize(previous=>previous.width===base.width&&previous.height===base.height?previous:{width:base.width,height:base.height});
    const viewport=page.getViewport({scale:zoom}),context=drawingCanvas.getContext('2d');
    if(!context)throw Error('无法创建 PDF 画布。');
    setError('');setEmpty(false);
@@ -41,20 +45,49 @@ export function PdfPage({pdf,number,zoom,container}:{pdf:PDFDocumentProxy;number
   });
   return()=>{cancelled=true;render?.cancel();textLayer?.cancel();};
  },[pdf,number,zoom,visible]);
- const startSelecting=()=>{const l=layer.current;if(!l)return;l.classList.add('selecting');const stop=()=>{l.classList.remove('selecting');document.removeEventListener('pointerup',stop);};document.addEventListener('pointerup',stop);};
+ const startSelecting=(event:PointerEvent)=>{
+  const l=layer.current;
+  if(!l||!event.isPrimary||event.button!==0)return;
+  stopSelection.current?.();
+  l.classList.add('selecting');
+  const stop=(e?:globalThis.PointerEvent)=>{
+   if(e&&e.pointerId!==event.pointerId)return;
+   l.classList.remove('selecting');document.removeEventListener('pointerup',stop);document.removeEventListener('pointercancel',stop);window.removeEventListener('blur',cleanup);stopSelection.current=undefined;
+  };
+  const cleanup=()=>stop();
+  stopSelection.current=cleanup;
+  document.addEventListener('pointerup',stop);document.addEventListener('pointercancel',stop);window.addEventListener('blur',cleanup);
+ };
  return <section onPointerDown={startSelecting} ref={host} data-pdf-page={number} aria-label={`PDF 第${number}页`} style={{width:size.width*zoom,minHeight:size.height*zoom}} className="resource-reader-page">{visible&&<><canvas ref={canvas}/><div ref={layer} className="textLayer"/>{empty&&<p>本页无可选文字，未进行 OCR。</p>}{error&&<p role="alert">{error}</p>}</>}</section>;
 }
-export default function ContinuousPdf({pdf,zoom,container,onPage,initialPage}:{pdf:PDFDocumentProxy;zoom:number;container:RefObject<HTMLDivElement|null>;onPage:(page:number)=>void;initialPage:number}){
+const WindowedPage=memo(PdfPage);
+
+export default function ContinuousPdf({pdf,zoom,container,onPage,initialPage,navigation}:{pdf:PDFDocumentProxy;zoom:number;container:RefObject<HTMLDivElement|null>;onPage:(page:number)=>void;initialPage:number;navigation?:{page:number}}){
  const callback=useRef(onPage);callback.current=onPage;
- useEffect(()=>{
+ const [active,setActive]=useState<ReadonlySet<number>>(()=>new Set());
+ const anchor=useRef<number|undefined>(undefined),lastPage=useRef<number|undefined>(undefined);
+ const align=useRef<()=>void>(()=>{});
+ const onLayout=useRef(()=>align.current()).current;
+ const loadedPdf=useRef<PDFDocumentProxy|undefined>(undefined);
+ useLayoutEffect(()=>{
   const root=container.current;
   if(!root)return;
   const pages=Array.from(root.querySelectorAll<HTMLElement>('[data-pdf-page]'));
-  let cancelled=false,frame=0,restoring=true,lastPage:number|undefined;
+  let frame=0;
+  const syncAnchor=()=>{
+   const target=anchor.current===undefined?undefined:pages[anchor.current-1];
+   if(!target)return;
+   // Scroll this pane only, and keep the target aligned when estimated page sizes resolve.
+   const delta=target.getBoundingClientRect().top-root.getBoundingClientRect().top-root.clientTop;
+   const next=Math.max(0,Math.min(root.scrollHeight-root.clientHeight,root.scrollTop+delta));
+   if(Math.abs(root.scrollTop-next)>.75)root.scrollTop=next;
+  };
+  align.current=syncAnchor;
+  const report=(page:number)=>{if(page!==lastPage.current){lastPage.current=page;callback.current(page);}};
   const track=()=>{
-   if(restoring)return;
    cancelAnimationFrame(frame);
    frame=requestAnimationFrame(()=>{
+    if(anchor.current!==undefined){syncAnchor();return;}
     const viewport=root.getBoundingClientRect();
     let first=0,end=pages.length;
     while(first<end){
@@ -66,22 +99,50 @@ export default function ContinuousPdf({pdf,zoom,container,onPage,initialPage}:{p
     for(let index=first;index<pages.length;index++){
      const {top,bottom}=pages[index].getBoundingClientRect();
      if(top>=viewport.bottom)break;
-     visible.push({page:Number(pages[index].dataset.pdfPage),top,bottom});
+     visible.push({page:index+1,top,bottom});
     }
     const current=mostVisiblePdfPage(visible,viewport.top,viewport.bottom);
-    if(current&&current!==lastPage){lastPage=current;callback.current(current);}
+    if(current)report(current);
    });
   };
-  root.addEventListener('scroll',track,{passive:true});
-  // Only preceding page heights are needed for this initial position.
-  void Promise.allSettled(Array.from({length:initialPage},(_,index)=>pdf.getPage(index+1))).then(()=>{
-   if(cancelled)return;
-   frame=requestAnimationFrame(()=>{
-    pages[initialPage-1]?.scrollIntoView({block:'start'});
-    frame=requestAnimationFrame(()=>{restoring=false;track();});
+  // Explicit jumps outrank overlap until actual scrolling resumes (not a layout-induced scroll event).
+  const wheel=(event:WheelEvent)=>{if(!event.ctrlKey)anchor.current=undefined;};
+  const touch=()=>{anchor.current=undefined;};
+  const pointer=(event:globalThis.PointerEvent)=>{
+   const rect=root.getBoundingClientRect();
+   if(event.button===1||(event.target===root&&(event.clientX<rect.left+root.clientLeft||event.clientX>=rect.left+root.clientLeft+root.clientWidth)))anchor.current=undefined;
+  };
+  const keyboard=(event:KeyboardEvent)=>{if(['PageDown','PageUp','Home','End','ArrowUp','ArrowDown',' '].includes(event.key))anchor.current=undefined;};
+  const observer=new IntersectionObserver(entries=>{
+   setActive(previous=>{
+    const next=new Set(previous);
+    for(const entry of entries){
+     const page=Number((entry.target as HTMLElement).dataset.pdfPage);
+     if(entry.isIntersecting)next.add(page);else next.delete(page);
+    }
+    return next.size===previous.size&&[...next].every(page=>previous.has(page))?previous:next;
    });
-  });
-  return()=>{cancelled=true;cancelAnimationFrame(frame);root.removeEventListener('scroll',track);};
- },[pdf]);
- return <>{Array.from({length:pdf.numPages},(_,i)=><PdfPage key={i+1} pdf={pdf} number={i+1} zoom={zoom} container={container}/>)}</>;
+  },{root,rootMargin:'1000px'});
+  for(const page of pages)observer.observe(page);
+  root.addEventListener('scroll',track,{passive:true});
+  root.addEventListener('wheel',wheel,{passive:true});
+  root.addEventListener('touchmove',touch,{passive:true});
+  root.addEventListener('pointerdown',pointer);
+  root.addEventListener('keydown',keyboard);
+  const resize=new ResizeObserver(syncAnchor);resize.observe(root);
+  return()=>{
+   align.current=()=>{};cancelAnimationFrame(frame);observer.disconnect();resize.disconnect();
+   root.removeEventListener('scroll',track);root.removeEventListener('wheel',wheel);
+   root.removeEventListener('touchmove',touch);root.removeEventListener('pointerdown',pointer);root.removeEventListener('keydown',keyboard);
+  };
+ },[pdf,container]);
+ useLayoutEffect(()=>{
+  const next=readingPageInput(loadedPdf.current===pdf&&navigation?navigation.page:initialPage,pdf.numPages);
+  loadedPdf.current=pdf;
+  anchor.current=next;
+  align.current();
+  if(lastPage.current!==next){lastPage.current=next;callback.current(next);}
+ },[pdf,navigation]);
+ useLayoutEffect(()=>align.current(),[zoom]);
+ return <>{Array.from({length:pdf.numPages},(_,i)=><WindowedPage key={i+1} pdf={pdf} number={i+1} zoom={zoom} visible={active.has(i+1)} onLayout={onLayout}/>)}</>;
 }

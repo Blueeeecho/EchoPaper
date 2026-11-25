@@ -14,15 +14,16 @@ import { createProviderRegistry } from '../server/model-providers';
 import { hash } from '../server/storage';
 import { registerPresentationRoutes } from '../server/presentations/routes';
 import type { PresentationFile, PresentationJob, PresentationSlide } from '../shared/presentation-types';
-import { ensureFonts, layoutSlide, layoutSvg, LayoutOverflowError, wrapText, type SlideLayout } from '../server/presentations/layout';
+import { ensureFonts, layoutSlide, layoutSvg, LayoutOverflowError, MissingPresentationFontsError, wrapText, type SlideLayout } from '../server/presentations/layout';
 import { presentationStore } from '../server/presentations/store';
-import { resolveStyle } from '../server/presentations/styles';
+import { readPreviewFrame, resolveStyle } from '../server/presentations/styles';
+import { inlinePreviewImages, selectedAssets } from '../server/presentations/sources';
 
 const styleRoot=fileURLToPath(new URL('../../shared/presentation-styles',import.meta.url));
 const slide=(id='s1'):PresentationSlide=>({id,section:'研究内容',layout:'explanation',title:'证据约束的研究方法',titleEn:'Evidence-constrained method',keyMessage:'当前材料支持方法设计，实验结果留空。',blocks:[{id:'b1',type:'text',text:'分析原始材料，记录尚缺的实验。',textEn:'Analyze supplied materials and record missing experiments.',sourceIds:[]}],notes:{purpose:'解释设计。',speech:'本页只介绍方法，不推断实验效果。',transition:'接下来介绍验证计划。',questions:'实验是否完成？尚无结果材料。'},sourceIds:[]});
 async function fixture(ai?:any){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'echopaper-ppt-'));await fs.mkdir(path.join(root,'shared'),{recursive:true});await fs.cp(styleRoot,path.join(root,'shared/presentation-styles'),{recursive:true});await fs.mkdir(path.join(root,'_system/runtime'),{recursive:true});
- const app=Fastify();app.setErrorHandler((e:any,_q,r)=>r.code(e.statusCode||500).send({error:e.message}));await app.register(multipart,{limits:{fileSize:50*1024*1024,files:1}});
+ const app=Fastify();app.setErrorHandler((e:any,_q,r)=>r.code(e.statusCode||500).send({error:e.message,...e.extra}));await app.register(multipart,{limits:{fileSize:50*1024*1024,files:1}});
  const registry=createProviderRegistry(root,{getKey:async()=>'',credentials:{read:async()=>'',write:async()=>{}}});const service=await registerPresentationRoutes(app,root,{registry,ai});
  const request=async(method:string,url:string,payload?:Record<string,unknown>)=>{const r=await app.inject({method:method as any,url,...(payload===undefined?{}:{payload})});assert.ok(r.statusCode<300,`${r.statusCode} ${r.body}`);return r.json();};
  const create=():Promise<PresentationFile>=>request('POST','/api/presentations',{title:'可追溯方法汇报',language:'zh-en',notesLanguage:'zh',preserveExamples:true,styleId:'hzau-clean',styleVersion:'1.0.0'});
@@ -163,3 +164,88 @@ test('paper selection expands explicit chapter evidence, rejects cycles and prot
 });
 
 test('legacy paper entry-only snapshots fail before any paid request and preserve the outline',async()=>{let calls=0;const f=await fixture({fetch:async()=>{calls++;throw Error('must not call');}});try{let p=await f.create();p=await f.request('POST',`/api/presentations/${p.document.id}/sources`,{text:'\\input{tex/results}',expectedHash:p.hash});await modelConfig(f);const doc={...p.document,sources:p.document.sources.map(s=>({...s,kind:'paper'}))};p=await presentationStore(f.root).save(p.document.id,doc as any,p.hash,{allowSources:true});const done=await f.wait(p.document.id,await f.request('POST',`/api/presentations/${p.document.id}/outline`,{expectedHash:p.hash}));assert.equal(done.status,'failed');assert.match(done.error!,/章节尚未展开/);assert.equal(calls,0);assert.equal((await f.request('GET',`/api/presentations/${p.document.id}`)).hash,p.hash);}finally{await f.close();}});
+
+
+test('interactive slide SVG reads referenced image once and ignores unrelated sources without relaxing export verification',async()=>{
+ const f=await fixture();
+ try{
+  const p=await f.create();
+  const directory=await presentationStore(f.root).root(p.document.id);
+  const image=Buffer.from(createCanvas(2,2).toBuffer('image/png'));
+  await fs.mkdir(path.join(directory,'assets'));
+  const used=path.join(directory,'assets','used.png'),unused=path.join(directory,'assets','unused.pdf');
+  await fs.writeFile(used,image);
+  await fs.writeFile(unused,'unrelated material changed outside EchoPaper');
+  const usedSource={id:'used', assetId:'used.png', name:'used image', kind:'image' as const, text:'', hash:hash(image)};
+  const unusedSource={id:'unused', assetId:'unused.pdf', name:'unused PDF', kind:'pdf' as const, text:'', hash:hash('original unrelated material')};
+  const document={...p.document,sources:[usedSource,unusedSource]};
+  const originalRead=fs.readFile;
+  const reads:string[]=[];
+  let captured:Awaited<ReturnType<typeof inlinePreviewImages>>;
+  try {
+   fs.readFile=(async(file,...options)=>{
+    reads.push(String(file));
+    const snapshot=await (Reflect.apply(originalRead,fs,[file,...options]) as Promise<Buffer>);
+    if(file===used)await fs.writeFile(used,'changed just after this read');
+    return snapshot;
+   }) as typeof fs.readFile;
+   captured=await inlinePreviewImages(directory,document,['used.png','used.png']);
+  } finally { fs.readFile=originalRead; }
+  assert.deepEqual(reads,[used]);
+  assert.equal(captured['used.png'],'data:image/png;base64,'+image.toString('base64'));
+  await assert.rejects(()=>inlinePreviewImages(directory,document,['used.png']),{statusCode:409});
+  await fs.writeFile(used,image);
+  await assert.rejects(()=>selectedAssets(directory,document),{statusCode:409});
+ }finally{await f.close();}
+});
+
+test('slide frame uses the original style validation and encodes the required original bytes without a second read',async()=>{
+ const f=await fixture();
+ try{
+  const dir=path.join(f.root,'shared/presentation-styles/hzau-clean/1.0.0');
+  const logo=path.join(dir,'logo.svg');
+  const original=await fs.readFile(logo);
+  const originalRead=fs.readFile;
+  let logoReads=0;
+  try {
+   fs.readFile=(async(file,...options)=>{
+    const snapshot=await (Reflect.apply(originalRead,fs,[file,...options]) as Promise<Buffer>);
+    if(file===logo){logoReads++;await fs.writeFile(logo,'changed after validation read');}
+    return snapshot;
+   }) as typeof fs.readFile;
+   assert.deepEqual(await readPreviewFrame(f.root,'hzau-clean','1.0.0','body'),{
+    logo:'data:image/svg+xml;base64,'+original.toString('base64'),
+   });
+  } finally { fs.readFile=originalRead; }
+  assert.equal(logoReads,1);
+  await assert.rejects(()=>readPreviewFrame(f.root,'hzau-clean','1.0.0','body'),{statusCode:409});
+  await fs.writeFile(logo,original);
+  assert.deepEqual(await readPreviewFrame(f.root,'hzau-clean','1.0.0','contents'),{});
+  await fs.writeFile(path.join(dir,'cover.jpeg'),'changed unused style asset');
+  await assert.rejects(()=>readPreviewFrame(f.root,'hzau-clean','1.0.0','body'),{statusCode:409});
+  await fs.writeFile(path.join(dir,'template.pptx'),'changed template');
+  await assert.rejects(()=>readPreviewFrame(f.root,'hzau-clean','1.0.0','contents'),{statusCode:409,message:/样式模板/});
+ }finally{await f.close();}
+});
+
+test('saved SVG keeps hash checks before layout and reports exact missing fonts if the host lacks them',async()=>{
+ const f=await fixture();
+ try{
+  let p=await f.create();
+  const s=slide();
+  p=await f.request('PUT',`/api/presentations/${p.document.id}`,{document:{...p.document,slides:[s]},expectedHash:p.hash});
+  const url=`/api/presentations/${p.document.id}/slides/${s.id}/preview.svg?expectedHash=`;
+  assert.equal((await f.app.inject(url+'0'.repeat(64))).statusCode,409);
+  const response=await f.app.inject(url+p.hash);
+  try { ensureFonts(); } catch(error) {
+   assert.ok(error instanceof MissingPresentationFontsError);
+   assert.equal(response.statusCode,422,response.body);
+   assert.deepEqual(response.json(),{error:error.message,code:'presentation_fonts_missing',missingFonts:error.missingFonts});
+   assert.ok(error.missingFonts.length>0);
+   return;
+  }
+  assert.equal(response.statusCode,200,response.body);
+  assert.match(response.headers['content-type'] as string,/^image\/svg\+xml/);
+  assert.match(response.body,/<svg/);
+ }finally{await f.close();}
+});

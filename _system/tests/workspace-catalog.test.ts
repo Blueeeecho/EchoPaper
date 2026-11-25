@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import Fastify from 'fastify';
-import {PDFDocument} from 'pdf-lib';
+import {PDFDocument,StandardFonts} from 'pdf-lib';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {openCatalog} from '../server/workspace/catalog';
@@ -71,6 +71,92 @@ test('resource search reads indexed text without scanning the catalog for each r
     assert.equal(result.resources[0].name,'row-7.txt');
     assert.equal(result.resources[0].searchMatch.source,'text');
     assert.equal(fullCatalogLookups,0);
+  }finally{await f.close();}
+});
+
+test('rescan detects a same-size source replacement with the original modified time',async()=>{
+  const f=await fixture();
+  try{
+    const filename=path.join(f.source,'evidence.md');
+    const original='Unicorn evidence',updated='Dolphin evidence',old=new Date('2020-01-01T00:00:00Z');
+    assert.equal(original.length,updated.length);
+    await fs.writeFile(filename,original);await fs.utimes(filename,old,old);
+    const root=await f.connect();
+    const [first]=(await f.call('GET','/api/workspace/resources?q=unicorn')).resources;
+    const {mtime}=await fs.stat(filename);
+    await fs.writeFile(filename,updated);await fs.utimes(filename,mtime,mtime);
+    await f.call('POST',`/api/workspace/roots/${root.id}/scan`,{},202);
+    assert.equal((await f.settle(root.id)).status,'ready');
+    assert.equal((await f.call('GET','/api/workspace/resources?q=unicorn')).total,0);
+    const [found]=(await f.call('GET','/api/workspace/resources?q=dolphin')).resources;
+    assert.equal(found.id,first.id);
+    assert.equal(found.revision,first.revision+1);
+    assert.notEqual(found.hash,first.hash);
+    assert.deepEqual(await f.call('GET',`/api/workspace/resources/${first.id}/text`),{content:updated,hash:createHash('sha256').update(updated).digest('hex')});
+  }finally{await f.close();}
+});
+
+test('a source changing during preview is never returned with another version hash',async t=>{
+  const f=await fixture();
+  try{
+    const filename=path.join(f.source,'evidence.md');
+    await fs.writeFile(filename,'Unicorn evidence');await f.connect();
+    const [first]=(await f.call('GET','/api/workspace/resources')).resources;
+    const open=fs.open;
+    let changed=false;
+    const mock=t.mock.method(fs,'open',async(...args:Parameters<typeof open>)=>{
+      const handle=await open(...args);
+      if(args[0]===filename&&!changed){
+        const read=handle.read.bind(handle);
+        handle.read=(async(...args:Parameters<typeof read>)=>{
+          if(!changed){changed=true;await fs.writeFile(filename,'Dolphin evidence');}
+          return read(...args);
+        }) as typeof handle.read;
+      }
+      return handle;
+    });
+    try{await f.call('GET',`/api/workspace/resources/${first.id}/text`,undefined,409);}finally{mock.mock.restore();}
+    assert.equal(changed,true);
+    assert.deepEqual(await f.call('GET',`/api/workspace/resources/${first.id}/text`),{content:'Dolphin evidence',hash:createHash('sha256').update('Dolphin evidence').digest('hex')});
+  }finally{await f.close();}
+});
+
+test('large PDFs retain first-page titles without title loading the entire file',async t=>{
+  const f=await fixture();
+  try{
+    const filename=path.join(f.source,'large.pdf');
+    const pdf=await PDFDocument.create(),page=pdf.addPage([600,800]),font=await pdf.embedFont(StandardFonts.Helvetica);
+    const title='Reliable Evaluation of Research Projects';
+    page.drawText(title,{x:60,y:725,size:18,font});
+    const bytes=Buffer.from(await pdf.save());
+    // Keep the original xref offsets and put a copy of its trailer at EOF.
+    const trailer=bytes.subarray(bytes.lastIndexOf(Buffer.from('startxref')));
+    const file=await fs.open(filename,'w');
+    try{await file.write(bytes);await file.write(trailer,0,trailer.length,40*1024*1024);}finally{await file.close();}
+    const open=fs.open;
+    let rangeBytes=0,wholeReads=0;
+    const mock=t.mock.method(fs,'open',async(...args:Parameters<typeof open>)=>{
+      const handle=await open(...args);
+      if(args[0]===filename){
+        const read=handle.read.bind(handle),readFile=handle.readFile.bind(handle),createStream=handle.createReadStream.bind(handle);
+        let hashing=false;
+        handle.createReadStream=(...args)=>{hashing=true;return createStream(...args);};
+        handle.read=(async(...args:Parameters<typeof read>)=>{
+          const result=await read(...args);if(!hashing)rangeBytes+=result.bytesRead;return result;
+        }) as typeof handle.read;
+        handle.readFile=(async(...args:Parameters<typeof readFile>)=>{wholeReads++;return readFile(...args);}) as typeof handle.readFile;
+      }
+      return handle;
+    });
+    try{
+      await f.connect();
+      const [row]=(await f.call('GET','/api/workspace/resources')).resources;
+      assert.equal(row.title,title);
+      assert.ok(row.size>40*1024*1024);
+      assert.equal(wholeReads,0);
+      assert.ok(rangeBytes>0&&rangeBytes<=256*1024,`title-only range reads: ${rangeBytes}`);
+      await f.call('GET',`/api/workspace/resources/${row.id}/text`,undefined,415);
+    }finally{mock.mock.restore();}
   }finally{await f.close();}
 });
 

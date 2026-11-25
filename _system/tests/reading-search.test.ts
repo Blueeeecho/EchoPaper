@@ -103,6 +103,30 @@ test('library search returns cached Chinese and English matches within topic and
  }finally{await workspace.close();await app.close();await fs.rm(directory,{recursive:true,force:true});}
 });
 
+test('warm no-match OCR search checks each cache leaf without repeat file stats',async t=>{
+ const f=await fixture(),app=Fastify();
+ const resource={id:'paper-1',rootId:'papers',path:'paper.pdf',name:'paper.pdf',kind:'file' as const,size:100,modifiedAt:'',tags:[],missing:false,revision:1,hash:hash('pdf')};
+ try{
+  const catalog=await openCatalog(f.root);
+  try{catalog.state.resources.push(resource);await catalog.save();}finally{catalog.close();}
+  await f.store.writeLayout({...layout,resourceId:resource.id,sourceHash:resource.hash});
+  await registerWorkspaceRoutes(app,f.root,{watch:false});
+  const url='/api/workspace/resources?q=absent';
+  const warm=await app.inject(url);assert.equal(warm.statusCode,200);assert.equal(warm.json().total,0);
+  const lstat=fs.lstat,stat=fs.stat;
+  let checkedPaths=0,followedStats=0;
+  const source=['reading-layout','reading-search'];
+  const relevant=(value:unknown)=>typeof value==='string'&&source.some(name=>value.startsWith(path.join(f.root,'workspace',name)));
+  t.mock.method(fs,'lstat',(async(...args:Parameters<typeof lstat>)=>{if(relevant(args[0]))checkedPaths++;return lstat(...args);}) as typeof lstat);
+  t.mock.method(fs,'stat',(async(...args:Parameters<typeof stat>)=>{if(relevant(args[0]))followedStats++;return stat(...args);}) as typeof stat);
+  const next=await app.inject(url);
+  assert.equal(next.statusCode,200);
+  assert.deepEqual(next.json(),warm.json());
+  assert.equal(followedStats,0);
+  assert.ok(checkedPaths>0&&checkedPaths<=9,`cache path checks: ${checkedPaths}`);
+ }finally{await app.close();await f.close();}
+});
+
 test('disconnected searches stop after the active batch and warm scans preserve the complete page',async t=>{
  const f=await fixture(),app=Fastify();
  const abortedUrl='/api/workspace/resources?q=superseded&limit=3';

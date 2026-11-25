@@ -19,7 +19,7 @@ const flush=()=>new Promise<void>(resolve=>setImmediate(resolve));
 function drawing(){return {...deferred<void>(),cancelled:0,cancel(){this.cancelled++;}};}
 
 function harness(context:test.TestContext,pdf:PDFDocumentProxy,textLayers:ReturnType<typeof deferred<void>>[]=[]){
- const states:any[]=[true],refs:Array<{current:any}>=[],effects:Array<(()=>void|(()=>void))|undefined>=[],cleanups:Array<void|(()=>void)>=[];
+ const states:any[]=[],refs:Array<{current:any}>=[],effects:Array<(()=>void|(()=>void))|undefined>=[],cleanups:Array<void|(()=>void)>=[];
  const dependencies:Array<readonly unknown[]|undefined>=[];
  let stateIndex=0,refIndex=0,effectIndex=0;
  const hooks={...React,
@@ -38,14 +38,14 @@ function harness(context:test.TestContext,pdf:PDFDocumentProxy,textLayers:Return
  new Function('require','module','exports',compiled.outputFiles[0].text)((name:string)=>name==='react'?hooks:name==='pdfjs-dist'?{TextLayer:MockTextLayer}:require(name),module,module.exports);
  const originalDocument=Object.getOwnPropertyDescriptor(globalThis,'document');
  Object.defineProperty(globalThis,'document',{configurable:true,value:{createElement(){return {className:''};}}});
- context.after(()=>{cleanups[2]?.();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else delete (globalThis as any).document;});
+ context.after(()=>{cleanups[1]?.();if(originalDocument)Object.defineProperty(globalThis,'document',originalDocument);else delete (globalThis as any).document;});
  const canvas={width:0,height:0,getContext:()=>({})};
  const layer={children:[] as unknown[],replaceChildren(){this.children=[];},append(value:unknown){this.children.push(value);},style:{setProperty(){}}};
  return {
   states,layers,canvas,layer,
   nodes(currentCanvas:unknown=canvas,currentLayer:unknown=layer){refs[1].current=currentCanvas;refs[2].current=currentLayer;},
-  render(zoom:number){stateIndex=0;refIndex=0;effectIndex=0;renderToStaticMarkup(React.createElement(module.exports.PdfPage,{pdf,number:1,zoom,container:{current:null}}));},
-  start(){const effect=effects[2];assert.ok(effect);cleanups[2]?.();cleanups[2]=effect();effects[2]=undefined;},
+  render(zoom:number){stateIndex=0;refIndex=0;effectIndex=0;renderToStaticMarkup(React.createElement(module.exports.PdfPage,{pdf,number:1,zoom,visible:true,onLayout(){}}));},
+  start(){const effect=effects[1];assert.ok(effect);cleanups[1]?.();cleanups[1]=effect();effects[1]=undefined;},
  };
 }
 
@@ -59,19 +59,19 @@ test('a page resolving after its canvas unmounts cannot write through stale refs
  const pdf={getPage:()=>pending.promise} as unknown as PDFDocumentProxy;
  const h=harness(context,pdf);h.render(1);h.nodes();h.start();h.nodes(null,null);
  pending.resolve(source);await flush();
- assert.equal(h.canvas.width,0);assert.equal(source.count(),0);assert.equal(h.states[2],'');
+ assert.equal(h.canvas.width,0);assert.equal(source.count(),0);assert.equal(h.states[1],'');
 });
 
 test('zoom changes wait for cancelled drawing before reusing the same canvas',async context=>{
  const firstText=deferred<{items:{str:string}[]}>(),secondText=deferred<{items:{str:string}[]}>(),first=drawing(),second=drawing();
  const source=page([firstText,secondText],[first,second]),pdf={getPage:async()=>source} as unknown as PDFDocumentProxy;
  const h=harness(context,pdf);h.render(1);h.nodes();h.start();await flush();assert.equal(source.count(),1);
- h.states[2]='old rendering error';h.render(2);h.start();await flush();
+ h.states[1]='old rendering error';h.render(2);h.start();await flush();
  assert.equal(first.cancelled,1);assert.equal(source.count(),1);
  first.reject(Object.assign(new Error('cancelled'),{name:'RenderingCancelledException'}));await flush();
- assert.equal(source.count(),2);assert.equal(h.canvas.width,1200);assert.equal(h.states[2],'');
+ assert.equal(source.count(),2);assert.equal(h.canvas.width,1200);assert.equal(h.states[1],'');
  firstText.resolve({items:[{str:'old'}]});secondText.resolve({items:[{str:'current'}]});second.resolve();await flush();
- assert.equal(h.layers.length,1);assert.equal(h.layer.children.length,1);assert.equal(h.states[2],'');
+ assert.equal(h.layers.length,1);assert.equal(h.layer.children.length,1);assert.equal(h.states[1],'');
 });
 
 test('obsolete text layers are cancelled and late failures never replace the new page error state',async context=>{
@@ -82,37 +82,57 @@ test('obsolete text layers are cancelled and late failures never replace the new
  oldLayer.reject(Object.assign(new Error('old layer stopped'),{name:'AbortException'}));
  first.reject(Object.assign(new Error('cancelled'),{name:'RenderingCancelledException'}));await flush();
  secondText.resolve({items:[{str:'current'}]});second.resolve();await flush();
- assert.equal(h.canvas.width,300);assert.equal(h.layer.children.length,1);assert.equal(h.states[2],'');
+ assert.equal(h.canvas.width,300);assert.equal(h.layer.children.length,1);assert.equal(h.states[1],'');
 });
 
-test('one unavailable page cannot block position restore, and scrolling only reads the visible region',async context=>{
- let effect:(()=>()=>void)|undefined;
- const react={...React,useRef:(current:unknown)=>({current}),useEffect:(next:()=>()=>void)=>{effect=next;}};
+test('deep links avoid preceding page reads and win over overlap until user scrolling',context=>{
+ const effects:Array<()=>void|(()=>void)>=[],refs:Array<{current:unknown}>=[];
+ let index=0, observations=0, observerCount=0;
+ const react={...React,memo:()=>()=>null,useState:(make:()=>unknown)=>[make(),()=>{}],useRef:(current:unknown)=>refs[index++]??=({current}),useLayoutEffect:(next:()=>void)=>{effects.push(next);}};
  const require=createRequire(import.meta.url),module={exports:{} as {default:typeof ContinuousPdf}};
  new Function('require','module','exports',compiled.outputFiles[0].text)((name:string)=>name==='react'?react:name==='pdfjs-dist'?{}:require(name),module,module.exports);
  const frames=new Map<number,()=>void>();
- const previous=Object.getOwnPropertyDescriptors(globalThis);
  let frameId=0;
- Object.defineProperty(globalThis,'requestAnimationFrame',{configurable:true,value:(next:()=>void)=>{frames.set(++frameId,next);return frameId;}});
- Object.defineProperty(globalThis,'cancelAnimationFrame',{configurable:true,value:(index:number)=>frames.delete(index)});
- context.after(()=>{for(const name of ['requestAnimationFrame','cancelAnimationFrame']){if(previous[name])Object.defineProperty(globalThis,name,previous[name]);else Reflect.deleteProperty(globalThis,name);}});
+ const stub=(name:string,value:unknown)=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,name);
+  Object.defineProperty(globalThis,name,{configurable:true,value});
+  context.after(()=>{if(previous)Object.defineProperty(globalThis,name,previous);else Reflect.deleteProperty(globalThis,name);});
+ };
+ stub('requestAnimationFrame',(next:()=>void)=>{frames.set(++frameId,next);return frameId;});
+ stub('cancelAnimationFrame',(id:number)=>frames.delete(id));
+ stub('IntersectionObserver',class{constructor(){observerCount++;}observe(){observations++;}disconnect(){}});
+ stub('ResizeObserver',class{observe(){} disconnect(){}});
  const animation=()=>{while(frames.size){const [id,next]=frames.entries().next().value!;frames.delete(id);next();}};
- let offset=0,reads=0,scroll:(()=>void)|undefined;
+ const listeners=new Map<string,(e?:any)=>void>();
+ let reads=0;
+ const requested:number[]=[],reported:number[]=[];
  const nodes=Array.from({length:256},(_,index)=>({
   dataset:{pdfPage:String(index+1)},
-  getBoundingClientRect(){reads++;return{top:index*100-offset,bottom:(index+1)*100-offset};},
-  scrollIntoView(){offset=index*100;},
+  getBoundingClientRect(){
+   reads++;
+   const top=index*100-container.scrollTop;
+   return {top,bottom:top+(index===179||index===255?20:100)};
+  },
  }));
- const container={getBoundingClientRect:()=>({top:0,bottom:120}),querySelectorAll:()=>nodes,addEventListener:(_type:string,next:()=>void)=>{scroll=next;},removeEventListener:()=>{scroll=undefined;}};
- const reported:number[]=[],requested:number[]=[];
- const pdf={numPages:nodes.length,getPage(number:number){requested.push(number);return number===2?Promise.reject(Error('unavailable')):Promise.resolve({});}} as unknown as PDFDocumentProxy;
- module.exports.default({pdf,zoom:1,container:{current:container as unknown as HTMLDivElement},onPage:page=>reported.push(page),initialPage:3});
- const stop=effect?.();assert.ok(stop);
+ const container={
+  getBoundingClientRect:()=>({top:0,bottom:120}),querySelectorAll:()=>nodes,scrollTop:0,scrollHeight:25520,clientHeight:120,clientTop:0,
+  addEventListener:(type:string,next:()=>void)=>listeners.set(type,next),
+  removeEventListener:(type:string)=>listeners.delete(type),
+ };
+ const pdf={numPages:nodes.length,getPage(number:number){requested.push(number);return Promise.reject(Error('unavailable'));}} as unknown as PDFDocumentProxy;
+ const props:React.ComponentProps<typeof ContinuousPdf>={pdf,zoom:1,container:{current:container as unknown as HTMLDivElement},onPage:page=>reported.push(page),initialPage:180};
+ function render(navigation?:{page:number}){index=0;effects.length=0;renderToStaticMarkup(React.createElement(module.exports.default,{...props,navigation}));}
+ render();
+ const stop=effects[0]();effects[1]();
  try{
-  await flush();animation();
-  assert.deepEqual(requested,[1,2,3]);assert.deepEqual(reported,[3]);
-  reads=0;offset=15000;scroll?.();animation();
-  assert.deepEqual(reported,[3,151]);assert.ok(reads<20);
-  offset++;scroll?.();animation();assert.deepEqual(reported,[3,151]);
- }finally{stop();}
+  listeners.get('scroll')?.();animation();
+  assert.deepEqual(requested,[]);assert.deepEqual(reported,[180]);assert.equal(container.scrollTop,17900);
+  assert.equal(observerCount,1);assert.equal(observations,256);
+  render({page:256});effects[1]();listeners.get('scroll')?.();animation();
+  assert.equal(container.scrollTop,25400);assert.deepEqual(reported,[180,256]);
+  listeners.get('wheel')?.({ctrlKey:false});reads=0;container.scrollTop=15000;listeners.get('scroll')?.();animation();
+  assert.deepEqual(reported,[180,256,151]);assert.ok(reads<20);
+  listeners.get('scroll')?.();animation();assert.deepEqual(reported,[180,256,151]);
+ }finally{stop?.();}
+ assert.equal(listeners.size,0);
 });

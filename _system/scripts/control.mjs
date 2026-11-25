@@ -80,7 +80,7 @@ async function dependenciesReady() {
     try { await fs.access(path.join(system, 'node_modules', dependency)); }
     catch { return false; }
   }
-  const probe = spawnSync(process.execPath, ['-e', "require('better-sqlite3')"], { cwd: system, stdio: 'ignore' });
+  const probe = spawnSync(process.execPath, ['--input-type=module', '-e', "import { checkAgentRuntime } from './scripts/agent-runtime.mjs'; checkAgentRuntime();"], { cwd: system, stdio: 'ignore' });
   return probe.status === 0;
 }
 async function start() {
@@ -91,6 +91,7 @@ async function start() {
     console.log('正在安装当前平台依赖（首次运行或跨系统迁移需要联网）…');
     const installed = runNpm(['ci', '--no-audit', '--no-fund']);
     if (installed.status !== 0) throw new Error('依赖安装失败，详见上方输出。');
+    if (!await dependenciesReady()) throw new Error('依赖已安装，但 AI 任务的 SQLite 运行时仍不可用。请运行诊断查看详情。');
   }
   if (await distStale()) {
     const built = runNpm(['run', 'build']);

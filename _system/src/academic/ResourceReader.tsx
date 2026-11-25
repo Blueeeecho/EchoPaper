@@ -7,7 +7,7 @@ import {readingPage,type ReadingDocument,type ReadingNote} from '../../shared/re
 import {api,json} from '../api';
 import {MODEL_CONFIG_EVENT} from '../modelSettings';
 import {loadTranslationAdapters,runTranslationAdapters,type TranslationAdapter,type TranslationCard} from '../translationAdapters';
-import {readReadingDraft,writeReadingDraft,clearReadingDraft,validateReadingDraft} from './readingDraft';
+import {readReadingDraft,writeReadingDraft,clearReadingDraft,validateReadingDraft,sameReadingDocument} from './readingDraft';
 import {readingSelectionText} from './readingSelection';
 import {readingPosition,readingPageInput} from './readingPosition';
 import ContinuousPdf from './ContinuousPdf';
@@ -22,6 +22,7 @@ import './resource-reader.css';
 
 type Saved={document:ReadingDocument;hash:string|null};
 type PanelTab='excerpts'|'notes';
+type PageNavigation={page:number};
 type ReaderSelection={quote:string;page:number|null;sourceHash:string;context:string};
 const ZOOMS=[.5,.75,1,1.25,1.5,1.75,2,2.5,3];
 const PREFS='echopaper-reader:prefs';
@@ -70,6 +71,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  const [selected,setSelected]=useState<ReaderSelection>(),[translationCards,setTranslationCards]=useState<TranslationCard[]>([]),[translationError,setTranslationError]=useState('');
  const [adapters,setAdapters]=useState<TranslationAdapter[]>([]),[adapterError,setAdapterError]=useState(''),[translating,setTranslating]=useState(false);
  const [pdf,setPdf]=useState<PDFDocumentProxy>(),[text,setText]=useState<string>(),[page,setPage]=useState(1),[pageDraft,setPageDraft]=useState('1'),[zoom,setZoom]=useState(1),[fitZoom,setFitZoom]=useState(1),[busy,setBusy]=useState(false);
+ const [navigation,setNavigation]=useState<PageNavigation>();
  const [sourceError,setSourceError]=useState(''),[sourceAttempt,setSourceAttempt]=useState(0);
  const [pop,setPop]=useState<{x:number;y:number;above:boolean}>();
  const [confirmExit,setConfirmExit]=useState(false),[readingError,setReadingError]=useState(''),[readingLoading,setReadingLoading]=useState(true),[dirtyView,setDirtyView]=useState(false);
@@ -94,6 +96,8 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  async function finishClose(){
   const target=embeddedToolbar?.fullscreenTarget.current||shell.current;
   if(target&&document.fullscreenElement===target)await document.exitFullscreen().catch(()=>{});
+  if(!alive.current)return;
+  if(dirty.current){setConfirmExit(true);return;}
   onClose();
  }
 
@@ -104,8 +108,9 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   try{savedPosition=readingPosition(localStorage.getItem(posKey),r.hash);}catch{/* Use the default position when storage is unavailable. */}
   const start=initialPage&&initialPage>0?initialPage:savedPosition.page;
   setPage(start);setPageDraft(String(start));setZoom(savedPosition.zoom);
-  void loadReading();
-  return()=>{alive.current=false;translationAbort.current?.abort();clearTimeout(autosave.current);clearTimeout(draftTimer.current);clearTimeout(scrollTimer.current);dragCleanup.current?.();};
+  const controller=new AbortController();
+  void loadReading(controller.signal);
+  return()=>{controller.abort();alive.current=false;translationAbort.current?.abort();clearTimeout(autosave.current);flushDraftNow();clearTimeout(scrollTimer.current);dragCleanup.current?.();};
  },[]);
  useEffect(()=>{
   setSourceError('');setPdf(undefined);setText(undefined);sourceVersion.current=undefined;
@@ -148,7 +153,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   return()=>{request?.abort();window.removeEventListener(MODEL_CONFIG_EVENT,reload);};
  },[]);
  useEffect(()=>{if(!text||isPdf)return;try{const p=readingPosition(localStorage.getItem(posKey+':text'),sourceVersion.current);if(reading.current)reading.current.scrollTop=p.top;}catch{}},[text,isPdf,posKey]);
- useEffect(()=>{const flush=()=>{if(draftTimer.current&&docRef.current){clearTimeout(draftTimer.current);draftTimer.current=undefined;try{writeReadingDraft(sessionStorage,key,{document:docRef.current,hash:savedRef.current?.hash??null});}catch{}}};const h=(e:BeforeUnloadEvent)=>{flush();if(dirty.current)e.preventDefault();};window.addEventListener('beforeunload',h);window.addEventListener('pagehide',flush);return()=>{flush();window.removeEventListener('beforeunload',h);window.removeEventListener('pagehide',flush);};},[key]);
+ useEffect(()=>{const flush=()=>flushDraftNow();const h=(e:BeforeUnloadEvent)=>{flush();if(dirty.current)e.preventDefault();};window.addEventListener('beforeunload',h);window.addEventListener('pagehide',flush);return()=>{window.removeEventListener('beforeunload',h);window.removeEventListener('pagehide',flush);};},[key]);
  useEffect(()=>{document.addEventListener('selectionchange',select);return()=>document.removeEventListener('selectionchange',select);},[]);
  // The reader covers the whole window; keep the page behind it from scrolling.
  useEffect(()=>{if(embedded)return;const previous=document.body.style.overflow;document.body.style.overflow='hidden';return()=>{document.body.style.overflow=previous;};},[embedded]);
@@ -157,16 +162,39 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
  useLayoutEffect(()=>{if(!pdf||!reading.current)return;let width=612,cancelled=false;const measure=()=>{const host=reading.current;if(!host||cancelled)return;const available=Math.max(1,host.clientWidth-(embedded?24:56));setFitZoom(Math.max(embedded ? .25 : .5,Math.min(3,available/width)));};void pdf.getPage(1).then(p=>{if(cancelled)return;width=p.getViewport({scale:1}).width;measure();}).catch(error=>{if(!cancelled&&alive.current)setError(error instanceof Error?error.message:String(error));});const observer=new ResizeObserver(measure);observer.observe(reading.current);return()=>{cancelled=true;observer.disconnect();};},[pdf,embedded]);
  useEffect(()=>{clearSelection();if(!positionChanged.current)return;try{localStorage.setItem(posKey,JSON.stringify({hash:r.hash,page,zoom}));}catch{setError('无法保存阅读位置');}},[zoom,prefs.fit]);
 
- async function loadReading(){setReadingLoading(true);setReadingError('');setStatus('加载中');await api<Saved>(`/api/workspace/resources/${r.id}/reading`).then(v=>{if(!alive.current)return;setSaved(v);let draft;try{draft=readReadingDraft(sessionStorage,localStorage,key);if(draft!==null)validateReadingDraft(draft,r.id);}catch{throw new Error('本机草稿读取失败，无法确认未保存文字；已暂停笔记编辑和保存。原草稿保持不变，请保留此窗口并先恢复草稿存储。');}if(draft?.document?.resourceId===r.id){setDoc(draft.document);markDirty(true);if(draft.hash!==v.hash){setConflict(v);setStatus('草稿与服务器版本不同，请比较');}else setStatus('已恢复未保存草稿');}else{setDoc(v.document);setStatus('已保存');}}).catch(e=>{if(alive.current){setReadingError(e.message);setStatus('笔记加载失败');}}).finally(()=>{if(alive.current)setReadingLoading(false);});}
+ async function loadReading(signal?:AbortSignal){
+  const current=()=>alive.current&&!signal?.aborted;
+  setReadingLoading(true);setReadingError('');setStatus('加载中');
+  try{
+   const value=await api<Saved>(`/api/workspace/resources/${r.id}/reading`,{signal});
+   if(!current())return;
+   let draft;
+   try{
+    draft=readReadingDraft(sessionStorage,localStorage,key);
+    if(draft!==null){
+     validateReadingDraft(draft,r.id);
+     if(sameReadingDocument(draft.document,value.document)){clearReadingDraft(sessionStorage,key);draft=null;}
+    }
+   }catch{throw new Error('本机草稿读取失败，无法确认未保存文字；已暂停笔记编辑和保存。原草稿保持不变，请保留此窗口并先恢复草稿存储。');}
+   savedRef.current=value;setSaved(value);
+   const note=draft?.document??value.document;
+   docRef.current=note;setDoc(note);markDirty(!!draft);
+   const nextConflict=draft&&draft.hash!==value.hash?value:undefined;
+   conflictRef.current=nextConflict;setConflict(nextConflict);
+   setStatus(nextConflict?'草稿与服务器版本不同，请比较':draft?'已恢复未保存草稿':'已保存');
+  }catch(error){if(current()){setReadingError((error as Error).message);setStatus('笔记加载失败');}}
+  finally{if(current())setReadingLoading(false);}
+ }
 
  // ---------- notes persistence ----------
- const docRef=useRef<ReadingDocument|undefined>(undefined);docRef.current=doc;
- const savedRef=useRef<Saved|undefined>(undefined);savedRef.current=saved;
- const conflictRef=useRef<Saved|undefined>(undefined);conflictRef.current=conflict;
- const busyRef=useRef(false);busyRef.current=busy;
+ const docRef=useRef<ReadingDocument|undefined>(undefined);
+ const savedRef=useRef<Saved|undefined>(undefined);
+ const conflictRef=useRef<Saved|undefined>(undefined);
+ const busyRef=useRef(false);
  const saveInFlight=useRef<Promise<boolean>|undefined>(undefined);
  const save=useCallback(async():Promise<boolean>=>{
   const current=docRef.current,base=savedRef.current;
+  if(!dirty.current)return true;
   if(!current||!base||conflictRef.current||busyRef.current)return false;
   clearTimeout(autosave.current);setBusy(true);busyRef.current=true;setError('');setStatus('保存中…');
   const operation=(async()=>{
@@ -175,10 +203,10 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
     if(!alive.current)return false;
     setSaved(value);savedRef.current=value;
     if(docRef.current===current){
-     markDirty(false);setStatus('已保存');
+     markDirty(false);cancelDraftTimer();setStatus('已保存');
      try{clearReadingDraft(sessionStorage,key);}catch{setError('服务器笔记已保存，但本机旧草稿清理失败；再次打开时请比较版本。');}
     }else{
-     try{writeReadingDraft(sessionStorage,key,{document:docRef.current,hash:value.hash});}catch{}
+     flushDraftNow();
      scheduleSave();
     }
     return true;
@@ -192,21 +220,31 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   saveInFlight.current=operation;
   try{return await operation;}finally{if(saveInFlight.current===operation)saveInFlight.current=undefined;}
  },[r.id]);
+ const saveLatest=useCallback(async()=>{
+  if(saveInFlight.current)await saveInFlight.current;
+  if(!dirty.current)return true;
+  if(conflictRef.current){if(embedded)setEmbeddedPanel(true);return false;}
+  return await save()&&!dirty.current;
+ },[save,embedded]);
  useEffect(()=>{
   if(!onGuardChange)return;
-  const guard=async()=>{
-   if(saveInFlight.current)await saveInFlight.current;
-   if(!dirty.current)return true;
-   if(conflictRef.current){if(embedded)setEmbeddedPanel(true);return false;}
-   return await save()&&!dirty.current;
-  };
-  onGuardChange(guard);
+  onGuardChange(saveLatest);
   return()=>onGuardChange(undefined);
- },[onGuardChange,save,embedded]);
- function flushDraftNow(d=docRef.current){clearTimeout(draftTimer.current);draftTimer.current=undefined;if(!d)return;try{writeReadingDraft(sessionStorage,key,{document:d,hash:savedRef.current?.hash??null});}catch{setError('本机草稿保存失败，请保持页面并保存服务器笔记');}}
+ },[onGuardChange,saveLatest]);
+ function cancelDraftTimer(){clearTimeout(draftTimer.current);draftTimer.current=undefined;}
+ function flushDraftNow(){cancelDraftTimer();const document=docRef.current;if(!dirty.current||!document)return;try{writeReadingDraft(sessionStorage,key,{document,hash:savedRef.current?.hash??null});}catch{if(alive.current)setError('本机草稿保存失败，请保持页面并保存服务器笔记');}}
  function scheduleSave(){clearTimeout(autosave.current);autosave.current=setTimeout(()=>{if(dirty.current)void save();},AUTOSAVE_MS);}
- function edit(d:ReadingDocument){setDoc(d);docRef.current=d;markDirty(true);setStatus('编辑中');clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>flushDraftNow(d),300);if(!conflictRef.current)scheduleSave();}
- function requestClose(){flushDraftNow();if(busy||dirty.current){if(!conflict&&!busy&&saved){void save().then(ok=>{if(ok)void finishClose();else setConfirmExit(true);});return;}setConfirmExit(true);return;}void finishClose();}
+ function edit(d:ReadingDocument){setDoc(d);docRef.current=d;markDirty(true);setStatus('编辑中');cancelDraftTimer();draftTimer.current=setTimeout(flushDraftNow,300);if(!conflictRef.current)scheduleSave();}
+ async function saveAndClose(){flushDraftNow();if(await saveLatest()){if(alive.current)await finishClose();}else if(alive.current)setConfirmExit(true);}
+ function requestClose(){
+  if(!busyRef.current&&!dirty.current){void finishClose();return;}
+  if(!busyRef.current&&!conflictRef.current&&savedRef.current){void saveAndClose();return;}
+  setConfirmExit(true);
+ }
+ function discardAndClose(){
+  try{clearReadingDraft(sessionStorage,key);}catch{setError('无法清理当前窗口草稿，未关闭；请继续编辑或保存。');return;}
+  cancelDraftTimer();clearTimeout(autosave.current);markDirty(false);void finishClose();
+ }
 
  // ---------- selection & translation ----------
  function clearSelection(){invalidateTranslation();selectionRef.current=undefined;setSelected(undefined);setTranslationCards([]);setTranslationError('');if(!prefsRef.current.auto||!prefsRef.current.pin)setPop(undefined);}
@@ -309,7 +347,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   };
   const next={...current,notes:[...current.notes,note]};
   edit(next);
-  flushDraftNow(next);
+  flushDraftNow();
   closeTranslation();
   if(embedded)setEmbeddedPanel(true);
   else setPrefs({panel:true,tab:'excerpts'});
@@ -322,7 +360,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   const next=readingPageInput(value,pdf?.numPages??Number.MAX_SAFE_INTEGER);
   setPage(next);setPageDraft(String(next));
   if(prefsRef.current.view==='bilingual')setPrefs({view:'original'});
-  else reading.current?.querySelector(`[data-pdf-page="${next}"]`)?.scrollIntoView({block:'start'});
+  setNavigation({page:next});
  }
  function stepZoom(direction:1|-1){positionChanged.current=true;const current=effectiveZoom;const next=direction>0?ZOOMS.find(z=>z>current+.01)??ZOOMS.at(-1)!:[...ZOOMS].reverse().find(z=>z<current-.01)??ZOOMS[0];setPrefs({fit:false});setZoom(next);}
 
@@ -392,7 +430,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
     {r.missing?<div className="reader-empty"><p>原文件已失联；已有笔记仍可查看、编辑和保存。</p><p>请在资料详情中重新定位原文件后继续阅读和摘录。</p></div>
      :isPdf&&prefs.view==='bilingual'?<BilingualReading toolbarTarget={bilingualToolbar} resourceId={r.id} pdf={pdf} adapter={source} adapters={adapters} onSelectSource={id=>setPrefs({source:id})} target={prefs.target} translateAppendix={prefs.appendix} onToggleAppendix={value=>setPrefs({appendix:value})} onJumpToPage={changePage}/>
      :sourceError?<div className="reader-empty" role="alert"><p>{isPdf?'PDF 无法打开':'原文无法读取'}</p><p>{sourceError}</p><button type="button" className="reader-retry" onClick={()=>setSourceAttempt(attempt=>attempt+1)}>重试加载原文</button></div>
-     :isPdf?(pdf?<ContinuousPdf pdf={pdf} zoom={effectiveZoom} container={reading} initialPage={readingPageInput(page,pdf.numPages)} onPage={value=>{positionChanged.current=true;setPage(value);setPageDraft(String(value));try{localStorage.setItem(posKey,JSON.stringify({hash:r.hash,page:value,zoom}));}catch{}}}/>:<div className="reader-empty" role="status"><LoaderCircle className="spin" size={20}/><p>正在加载 PDF…</p></div>)
+     :isPdf?(pdf?<ContinuousPdf pdf={pdf} zoom={effectiveZoom} container={reading} initialPage={readingPageInput(page,pdf.numPages)} navigation={navigation} onPage={value=>{positionChanged.current=true;setPage(value);setPageDraft(String(value));try{localStorage.setItem(posKey,JSON.stringify({hash:r.hash,page:value,zoom}));}catch{}}}/>:<div className="reader-empty" role="status"><LoaderCircle className="spin" size={20}/><p>正在加载 PDF…</p></div>)
      :text===undefined?<div className="reader-empty" role="status"><LoaderCircle className="spin" size={20}/><p>正在加载原文…</p></div>
      :/\.(md|markdown)$/i.test(r.name)&&text?<article className="reader-text reader-md reader-md-doc" style={{fontSize:15*zoom}}><AiMarkdown text={text}/></article>:<article className="reader-text" style={{fontSize:16*zoom}}>{text||'没有可读取的文本；可打开原文件并记录笔记。'}</article>}
    </div>
@@ -436,7 +474,7 @@ export default function ResourceReader({resource:r,onClose,initialPage,embedded=
   {confirmExit&&<div className="reader-exit" role="alertdialog" aria-label="笔记尚未保存"><div>
    <h2>{busy?'笔记正在保存':'笔记尚未保存'}</h2>
    <p>{busy?'请等待保存完成。':conflict?'当前笔记与服务器版本冲突，请先在笔记栏中处理。':'关闭前请保存，或明确放弃本次修改。'}</p>
-   <div><button onClick={()=>setConfirmExit(false)}>继续编辑</button><button disabled={busy||!!conflict||!saved} className="primary" onClick={()=>void save().then(ok=>{if(ok)void finishClose();})}>保存并关闭</button><button className="danger" disabled={busy} onClick={()=>{try{clearReadingDraft(sessionStorage,key);}catch{setError('无法清理当前窗口草稿，未关闭；请继续编辑或保存。');return;}markDirty(false);void finishClose();}}>放弃修改</button></div>
+   <div><button onClick={()=>setConfirmExit(false)}>继续编辑</button><button disabled={busy||!!conflict||!saved} className="primary" onClick={()=>void saveAndClose()}>保存并关闭</button><button className="danger" disabled={busy} onClick={discardAndClose}>放弃修改</button></div>
   </div></div>}
  </div>;
 }

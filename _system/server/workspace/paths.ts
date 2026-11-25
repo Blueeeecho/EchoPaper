@@ -50,21 +50,14 @@ function rememberStatHash(filename:string,entry:FileStatHash){
   statHashCache.set(filename,entry);
   if(statHashCache.size>10000)statHashCache.delete(statHashCache.keys().next().value!);
 }
-export async function fastFileSnapshot(filename:string,hint?:{hash?:string;size:number;modifiedAt:string}):Promise<Tree>{
+const sameSignature=(a:Pick<FileStatHash,'dev'|'ino'|'size'|'mtimeNs'|'ctimeNs'>,b:Pick<FileStatHash,'dev'|'ino'|'size'|'mtimeNs'|'ctimeNs'>)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs;
+export async function fastFileSnapshot(filename:string):Promise<Tree>{
   const stat=await fs.lstat(filename,{bigint:true});
   if(stat.isSymbolicLink())throw new HttpError(403,'操作范围包含符号链接，未执行文件操作。');
   if(!stat.isFile())return snapshot(filename);
   const cached=statHashCache.get(filename);
-  if(cached&&cached.dev===stat.dev&&cached.ino===stat.ino&&cached.size===stat.size&&cached.mtimeNs===stat.mtimeNs&&cached.ctimeNs===stat.ctimeNs){
+  if(cached&&sameSignature(cached,stat)){
     return {kind:'file',hash:cached.hash,size:Number(stat.size),modifiedAt:cached.modifiedAt,mode:cached.mode};
-  }
-  const modifiedAt=isoMtime(stat);
-  const size=Number(stat.size);
-  // Racy-clean check: if a previously indexed file is older than 2s and matches size + mtime, reuse its hash.
-  if(hint?.hash&&hint.size===size&&hint.modifiedAt===modifiedAt&&Date.now()-stat.mtime.getTime()>2000){
-    const mode=Number(stat.mode&0o777n);
-    rememberStatHash(filename,{dev:stat.dev,ino:stat.ino,size:stat.size,mtimeNs:stat.mtimeNs,ctimeNs:stat.ctimeNs,hash:hint.hash,modifiedAt,mode});
-    return {kind:'file',hash:hint.hash,size,modifiedAt,mode};
   }
   return snapshot(filename);
 }
@@ -72,7 +65,7 @@ export async function snapshot(filename:string):Promise<Tree>{
   const stat=await fs.lstat(filename);if(stat.isSymbolicLink())throw new HttpError(403,'操作范围包含符号链接，未执行文件操作。');
   if(stat.isFile()){
     const handle=await fs.open(filename,constants.O_RDONLY|NOFOLLOW);try{
-      const before=await handle.stat({bigint:true});if(!before.isFile())throw new HttpError(403,'仅支持普通文件和目录。');const digest=createHash('sha256');for await(const bytes of handle.createReadStream({autoClose:false}))digest.update(bytes);const after=await handle.stat({bigint:true});if(before.size!==after.size||before.mtimeNs!==after.mtimeNs)throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
+      const before=await handle.stat({bigint:true});if(!before.isFile())throw new HttpError(403,'仅支持普通文件和目录。');const digest=createHash('sha256');for await(const bytes of handle.createReadStream({autoClose:false}))digest.update(bytes);const after=await handle.stat({bigint:true});const current=await fs.lstat(filename,{bigint:true});if(!sameSignature(before,after)||!sameSignature(after,current))throw new HttpError(409,'读取期间原始文件发生变化，请重新读取后比较。');
       const fileHash=digest.digest('hex'),modifiedAt=isoMtime(after),mode=Number(after.mode&0o777n);
       rememberStatHash(filename,{dev:after.dev,ino:after.ino,size:after.size,mtimeNs:after.mtimeNs,ctimeNs:after.ctimeNs,hash:fileHash,modifiedAt,mode});
       return{kind:'file',hash:fileHash,size:Number(after.size),modifiedAt,mode};

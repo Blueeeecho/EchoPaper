@@ -6,6 +6,7 @@ import {paperTitle} from '../../shared/resource-order';
 import type {Resource} from '../../shared/workspace-types';
 import {assertNoSymlinks} from '../security';
 import {atomicWrite} from '../storage';
+import {readingFileStamp,readingFolders,validReadingId as SAFE_ID} from './reading-files';
 
 export interface PaperMetadata {
   titleZh?: string;
@@ -32,8 +33,7 @@ interface CacheEntry {
   meta: PaperMetadata;
 }
 
-const CACHE_VERSION = 1;
-const SAFE_ID = /^[a-zA-Z0-9_-]{1,100}$/;
+const CACHE_VERSION = 2;
 
 const BOILERPLATE_TITLE = /^(?:open access|citation|copyright|abstract|keywords|index terms|introduction|research|research paper|original research|brief research report|article|review|how to cite|article history|reuse|graphical abstract|publisher'?s note|correspondence|highlights|contents lists available at sciencedirect)$/i;
 
@@ -437,16 +437,6 @@ export function extractPaperKeywords(input: {
   return out.slice(0, max);
 }
 
-async function fileStamp(filename: string): Promise<string> {
-  try {
-    const stat = await fs.stat(filename);
-    return `${Math.trunc(stat.mtimeMs)}:${stat.size}`;
-  } catch (error: any) {
-    if (error?.code === 'ENOENT') return '';
-    return '';
-  }
-}
-
 async function readJsonSafe<T>(filename: string): Promise<T | null> {
   try {
     return JSON.parse(await fs.readFile(filename, 'utf8')) as T;
@@ -500,37 +490,36 @@ export function createPaperMetadataService(workspaceRoot: string) {
     saveTimer.unref?.();
   }
 
-  async function layoutPaths(id: string) {
-    const base = `workspace/reading-layout/${id}`;
-    return {
-      layout: await assertNoSymlinks(workspaceRoot, `${base}.json`, true),
-      analysis: await assertNoSymlinks(workspaceRoot, `${base}.analysis.json`, true),
-      translations: await assertNoSymlinks(workspaceRoot, `${base}.translations.json`, true),
-    };
-  }
-
-  async function resolveLayoutId(resource: Resource, byHash?: Map<string, Resource[]>): Promise<string> {
-    if (!SAFE_ID.test(resource.id)) return resource.id;
-    const own = await layoutPaths(resource.id);
-    if (await fileStamp(own.layout)) return resource.id;
+  async function resolveLayout(resource: Resource, folder: string, byHash?: Map<string, Resource[]>) {
+    const own = path.join(folder, `${resource.id}.json`);
+    const ownStamp = await readingFileStamp(own);
+    if (ownStamp) return {id: resource.id, layout: own, stamp: ownStamp};
     if (resource.hash && byHash) {
       for (const peer of byHash.get(resource.hash) ?? []) {
         if (peer.id === resource.id || !SAFE_ID.test(peer.id)) continue;
-        const peerPaths = await layoutPaths(peer.id);
-        if (await fileStamp(peerPaths.layout)) return peer.id;
+        const layout = path.join(folder, `${peer.id}.json`);
+        const stamp = await readingFileStamp(layout);
+        if (stamp) return {id: peer.id, layout, stamp};
       }
     }
-    return resource.id;
+    return {id: resource.id, layout: own, stamp: ownStamp};
   }
 
   async function computeMeta(resource: Resource, byHash?: Map<string, Resource[]>): Promise<PaperMetadata> {
     if (resource.kind !== 'file' || !/\.pdf$/i.test(resource.name)) return {};
     await ensureDiskLoaded();
-    const layoutId = await resolveLayoutId(resource, byHash);
-    const paths = SAFE_ID.test(layoutId) ? await layoutPaths(layoutId) : null;
-    const [layoutSt, analysisSt, transSt] = paths
-      ? await Promise.all([fileStamp(paths.layout), fileStamp(paths.analysis), fileStamp(paths.translations)])
-      : ['', '', ''];
+    const [folder] = SAFE_ID.test(resource.id) ? await readingFolders(workspaceRoot, 'reading-layout') : [];
+    const resolved = folder ? await resolveLayout(resource, folder, byHash) : undefined;
+    const layoutId = resolved?.id ?? resource.id;
+    const paths = resolved?.stamp ? {
+      layout: resolved.layout,
+      analysis: path.join(folder, `${layoutId}.analysis.json`),
+      translations: path.join(folder, `${layoutId}.translations.json`),
+    } : null;
+    const layoutSt = resolved?.stamp ?? '';
+    const [analysisSt, transSt] = paths
+      ? await Promise.all([readingFileStamp(paths.analysis), readingFileStamp(paths.translations)])
+      : ['', ''];
 
     const title = paperTitle(resource);
     const sig = `${CACHE_VERSION}|${resource.hash ?? ''}|${layoutId}|${layoutSt}|${analysisSt}|${transSt}|${title}|${resource.name}|${resource.tags.join('\u0000')}`;

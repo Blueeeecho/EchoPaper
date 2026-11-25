@@ -28,3 +28,14 @@ export function validateReadingDraft(value:unknown,resourceId:string): asserts v
   ids.add(n.id);
  }
 }
+
+// JSON property order has no meaning, including in old drafts written by an earlier version.
+export function sameReadingDocument(left:ReadingDocument,right:ReadingDocument):boolean{
+ const equal=(a:unknown,b:unknown):boolean=>{
+  if(a===b)return true;
+  if(!a||!b||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;
+  const x=a as Record<string,unknown>,y=b as Record<string,unknown>,keys=Object.keys(x);
+  return keys.length===Object.keys(y).length&&keys.every(key=>Object.hasOwn(y,key)&&equal(x[key],y[key]));
+ };
+ return equal(left,right);
+}

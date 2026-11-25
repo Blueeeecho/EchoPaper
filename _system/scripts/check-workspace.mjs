@@ -2,11 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { configuredResourceBundle } from '../server/local-resource-bundle.ts';
 import { gitExecutable, pythonExecutable, tectonicExecutable } from '../server/platform.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const report = { root, node: process.version, git: null, python: null, compiler: null, agents:null, projects: [], errors: [] };
-try {const {SqliteSaver}=await import('@langchain/langgraph-checkpoint-sqlite');const {StateGraph}=await import('@langchain/langgraph');const saver=SqliteSaver.fromConnString(':memory:');saver.db.prepare('SELECT 1').get();saver.db.close();if(typeof StateGraph!=='function')throw Error('LangGraph unavailable');report.agents={runtime:'LangGraph JS',checkpoint:'SQLite',nativeAddon:true};}catch(error){report.errors.push(`AI 任务运行时不可用：${error.message}`);}
+try {const {checkAgentRuntime}=await import('./agent-runtime.mjs');checkAgentRuntime();report.agents={runtime:'LangGraph JS',checkpoint:'SQLite',nativeAddon:true};}catch(error){report.errors.push(`AI 任务运行时不可用：${error.message}`);}
+try {const bundle=await configuredResourceBundle();if(bundle)report.compilerBundle=bundle;}catch(error){report.errors.push(error.message);}
 for (const [field, label, executable] of [
   ['git', 'Git（论文列表和项目需要）', gitExecutable()],
   ['python', 'Python 3', pythonExecutable()],
