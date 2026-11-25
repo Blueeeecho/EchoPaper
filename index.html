@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="zh-CN"
+  ><head
+    ><meta charset="utf-8" /><meta
+      name="viewport"
+      content="width=device-width,initial-scale=1" /><meta
+      name="theme-color"
+      content="#FAF9F5" /><meta
+      name="description"
+      content="EchoPaper 本地研究工作台。围绕课题阅读文献、记录实验、核对证据与编写 LaTeX 论文。" /><title
+      >EchoPaper · 本地研究工作台</title
+    >
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="EchoPaper · 本地研究工作台" />
+    <meta property="og:description" content="EchoPaper 本地研究工作台。围绕课题阅读文献、记录实验、核对证据与编写 LaTeX 论文。" />
+    <meta property="og:url" content="https://blueeeecho.github.io/EchoPaper/" />
+    <meta property="og:image" content="https://blueeeecho.github.io/EchoPaper/assets/og-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="./assets/mark.svg" /><link
+      rel="stylesheet"
+      href="./assets/fonts.css" /><link
+      rel="stylesheet"
+      href="./site.css" /><script src="./site.js" defer></script></head
+  ><body>
+    <header
+      ><div class="wrap mast"
+        ><a class="brand" href="#top"
+          ><img
+            width="33"
+            height="33"
+            src="./assets/mark.svg"
+            alt=""
+          />EchoPaper</a
+        ><nav id="navigation"
+          ><a href="#workflow"><span data-en="Workflow">研究往返</span></a
+          ><a href="#modules"><span data-en="Workspaces">八个工作区</span></a
+          ><a href="#architecture"
+            ><span data-en="Local files">本地架构</span></a
+          ><a href="#start"><span data-en="Get started">下载与启动</span></a
+          ><a href="#faq"><span data-en="FAQ">常见问题</span></a></nav
+        ><div class="tools"
+          ><button id="lang" aria-label="English" title="English"
+            ><b lang="zh-CN">中</b> / <b lang="en">EN</b></button
+          ><a class="source" href="https://github.com/Blueeeecho/EchoPaper"
+            ><span data-en="View source">GitHub 源码</span
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 18 18 6M7 6h11v11" /></svg></a
+          ><button id="menu" aria-controls="navigation" aria-expanded="false"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 7h18M3 12h18M3 17h18" /></svg
+            ><span class="sr"
+              ><span data-en="Navigation">导航</span></span
+            ></button
+          ></div
+        ></div
+      ></header
+    >
+    <main id="top"
+      ><section class="hero wrap"
+        ><div class="lead"
+          ><h1
+            ><span data-en="Your research project in">把一整项研究，</span
+            ><br /><span data-en="">放回</span
+            ><mark
+              ><span data-en="one local workspace">同一个本地工作台</span></mark
+            ></h1
+          ><div class="pitch"
+            ><p
+              ><span
+                data-en="Read papers, log experiments, check evidence and write in LaTeX around a single research topic. Your drafts, notes and indexes live in ordinary folders on your computer. Pick up where you left off the next time you open them."
+                >围绕研究课题组织文献阅读、实验记录、证据核对与 LaTeX
+                论文写作。稿件、笔记与索引留在你电脑的普通文件夹里，随时停下，下次打开从上次停笔处接着往下做。</span
+              ></p
+            ><div class="actions"
+              ><a
+                class="button"
+                href="https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" /></svg
+                ><span data-en="Download for Windows (v1.0.0)"
+                  >下载 Windows 安装包 (v1.0.0)</span
+                ></a
+              ><a class="textlink" href="#start"
+                ><span data-en="macOS / run from source"
+                  >macOS / 源码启动</span
+                ></a
+              ></div
+            ><small
+              ><span
+                data-en="282.0 MiB · Tectonic and runtime included · Run from source on macOS"
+                >282.0 MiB · 内置 Tectonic 与运行环境 · macOS 支持源码启动</span
+              ></small
+            ></div
+          ></div
+        >
+        <figure
+          ><div class="frame"
+            ><div class="bar"
+              ><span class="address"
+                ><i></i><code>127.0.0.1:4173</code><em>/</em
+                ><span data-en="Research overview">研究总览</span></span
+              ><button data-open="0"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                ><span data-en="View full image">放大查看原图</span></button
+              ></div
+            ><button class="picture" data-open="0"
+              ><img
+                width="1920"
+                height="1200"
+                src="./assets/01-overview.webp"
+                alt="研究总览"
+                data-alt="Research overview" /></button></div
+          ><figcaption
+            ><span
+              data-en="Demo topic: retrieval fidelity in long-context sparse attention. Screenshots are from the public main branch. The papers and experimental values are synthetic."
+              >演示课题：长上下文稀疏注意力的检索保真边界 · 界面截自公开版
+              main，文献与实验数值均为合成演示材料</span
+            ></figcaption
+          ></figure
+        ></section
+      >
+      <section id="workflow" class="section tint"
+        ><div class="wrap"
+          ><h2
+            ><span
+              data-en="From a paper to an experiment, and back to the draft"
+              >读、记、整理、写，围绕同一个课题往返</span
+            ></h2
+          >
+          <p class="intro"
+            ><span
+              data-en="An unexpected result sends you back to the original paper. You note what changed, then revise a figure or a paragraph. Follow one demo topic through five parts of that process."
+              >科研很少按直线走完。实验出现反常结果时，人要立刻回看文献原文、补记判断，再去改稿件和图表。下面用同一个演示课题，看五个环节怎样接在一起。</span
+            ></p
+          >
+          <div class="workbench"
+            ><div
+              class="tabs"
+              role="tablist"
+              aria-label="工作环节"
+              data-label="Workflow stages"
+              aria-orientation="vertical"
+            >
+              <button
+                role="tab"
+                id="tab0"
+                aria-controls="panel0"
+                aria-selected="true"
+                tabindex="0"
+                ><strong><span data-en="Read">读</span></strong
+                ><span
+                  ><span data-en="Bilingual reading and excerpts"
+                    >双语精读与原文摘录</span
+                  ></span
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 5 7 7-7 7" /></svg
+              ></button>
+              <button
+                role="tab"
+                id="tab1"
+                aria-controls="panel1"
+                aria-selected="false"
+                tabindex="-1"
+                ><strong><span data-en="Map">整理</span></strong
+                ><span
+                  ><span data-en="Topic graph and source evidence"
+                    >课题关系图与依据溯源</span
+                  ></span
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 5 7 7-7 7" /></svg
+              ></button>
+              <button
+                role="tab"
+                id="tab2"
+                aria-controls="panel2"
+                aria-selected="false"
+                tabindex="-1"
+                ><strong><span data-en="Log">记</span></strong
+                ><span
+                  ><span data-en="Observations and negative results"
+                    >实验观察与负结果证据链</span
+                  ></span
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 5 7 7-7 7" /></svg
+              ></button>
+              <button
+                role="tab"
+                id="tab3"
+                aria-controls="panel3"
+                aria-selected="false"
+                tabindex="-1"
+                ><strong><span data-en="Write">写</span></strong
+                ><span
+                  ><span data-en="LaTeX, compilation and review"
+                    >LaTeX 源码、编译与审稿闭环</span
+                  ></span
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 5 7 7-7 7" /></svg
+              ></button>
+              <button
+                role="tab"
+                id="tab4"
+                aria-controls="panel4"
+                aria-selected="false"
+                tabindex="-1"
+                ><strong><span data-en="Present">汇</span></strong
+                ><span
+                  ><span data-en="Editable slides from papers and notes"
+                    >从论文与笔记生成可编辑汇报</span
+                  ></span
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m9 5 7 7-7 7" /></svg
+              ></button> </div
+            ><div class="panels">
+              <div id="panel0" role="tabpanel" aria-labelledby="tab0"
+                ><button class="picture frame" data-open="1"
+                  ><img
+                    loading="lazy"
+                    width="1920"
+                    height="1200"
+                    src="./assets/03-library-reading.webp"
+                    alt="双语精读与原文摘录"
+                    data-alt="Bilingual reading and excerpts" /></button
+                ><p
+                  ><span
+                    data-en="Connect a local literature folder. Read the original alongside its translation, translate a selection and keep page-linked excerpts and notes with the paper."
+                    >连接本机文献目录，原文与译文并排阅读、划词翻译，将带页码的摘录和备注直接留在文献旁。</span
+                  ></p
+                ><div class="return"
+                  ><span
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 5v4a5 5 0 0 1-5 5H4m5-5-5 5 5 5" /></svg
+                    ><span
+                      data-en="Add a mechanism you found to the topic graph and comparison table."
+                      >发现关键机制 → 纳入课题关系图与对比表</span
+                    ></span
+                  ><button data-open="1"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                    ><span data-en="View full image">放大查看原图</span></button
+                  ></div
+                ></div
+              >
+              <div id="panel1" role="tabpanel" aria-labelledby="tab1" hidden
+                ><button class="picture frame" data-open="2"
+                  ><img
+                    loading="lazy"
+                    width="1920"
+                    height="1200"
+                    src="./assets/02-topic-graph.webp"
+                    alt="课题关系图与依据溯源"
+                    data-alt="Topic graph and source evidence" /></button
+                ><p
+                  ><span
+                    data-en="Map methods, questions and evaluations across papers. Follow source links to the passage and page behind a node or comparison."
+                    >围绕同一课题梳理文献间的方法、问题与评测关系，点回 PDF
+                    原句与页码，核对图谱节点与对比结论的依据。</span
+                  ></p
+                ><div class="return"
+                  ><span
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 5v4a5 5 0 0 1-5 5H4m5-5-5 5 5 5" /></svg
+                    ><span
+                      data-en="Take a boundary identified in the graph to the experiment log."
+                      >明确待检验边界 → 进入实验与证据记录</span
+                    ></span
+                  ><button data-open="2"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                    ><span data-en="View full image">放大查看原图</span></button
+                  ></div
+                ></div
+              >
+              <div id="panel2" role="tabpanel" aria-labelledby="tab2" hidden
+                ><button class="picture frame" data-open="3"
+                  ><img
+                    loading="lazy"
+                    width="1920"
+                    height="1200"
+                    src="./assets/04-notebook-calendar.webp"
+                    alt="实验观察与负结果证据链"
+                    data-alt="Observations and negative results" /></button
+                ><p
+                  ><span
+                    data-en="Record hypotheses, ablations and negative results. Keep earlier versions and check the source file’s SHA-256 fingerprint. You supply the measurements."
+                    >记录假设、消融观察和反向结果，保留历史版本并核对来源文件
+                    SHA-256
+                    指纹。实验数值由你提供，工作台保存每次判断的依据。</span
+                  ></p
+                ><div class="return"
+                  ><span
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 5v4a5 5 0 0 1-5 5H4m5-5-5 5 5 5" /></svg
+                    ><span
+                      data-en="The gain reverses under high interference. Revisit the failure case on page 2."
+                      >高干扰组收益反转 → 回看文献第 2 页失败案例</span
+                    ></span
+                  ><button data-open="3"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                    ><span data-en="View full image">放大查看原图</span></button
+                  ></div
+                ></div
+              >
+              <div id="panel3" role="tabpanel" aria-labelledby="tab3" hidden
+                ><button class="picture frame" data-open="4"
+                  ><img
+                    loading="lazy"
+                    width="1920"
+                    height="1200"
+                    src="./assets/05-paper-writing.webp"
+                    alt="LaTeX 源码、编译与审稿闭环"
+                    data-alt="LaTeX, compilation and review" /></button
+                ><p
+                  ><span
+                    data-en="Edit LaTeX on the left. Save the build target or select Compile to preview the Tectonic PDF on the right. Double-click to locate the corresponding passage, annotate it, track reviewer replies and test the submission ZIP independently."
+                    >左侧编辑源码，主动保存编译目标或点击编译，右侧即可预览
+                    Tectonic 生成的 PDF。双击定位原文与
+                    PDF，添加批注、逐条整理审稿回复，并校验投稿 ZIP
+                    能否独立编译。</span
+                  ></p
+                ><div class="return"
+                  ><span
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 5v4a5 5 0 0 1-5 5H4m5-5-5 5 5 5" /></svg
+                    ><span
+                      data-en="Check a number in the draft against the experiment record and its source."
+                      >修稿核对数据 → 切回课题证据链与原文献</span
+                    ></span
+                  ><button data-open="4"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                    ><span data-en="View full image">放大查看原图</span></button
+                  ></div
+                ></div
+              >
+              <div id="panel4" role="tabpanel" aria-labelledby="tab4" hidden
+                ><button class="picture frame" data-open="5"
+                  ><img
+                    loading="lazy"
+                    width="1920"
+                    height="1200"
+                    src="./assets/06-presentation.webp"
+                    alt="从论文与笔记生成可编辑汇报"
+                    data-alt="Editable slides from papers and notes" /></button
+                ><p
+                  ><span
+                    data-en="Select papers and notes in the presentation workspace. Arrange the outline, figures and speaker notes, then export a .pptx for PowerPoint or WPS."
+                    >在汇报工作区选取论文与笔记，编排大纲、图表页与讲稿备注，导出可在
+                    PowerPoint 或 WPS 中继续修改的 .pptx。</span
+                  ></p
+                ><div class="return"
+                  ><span
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 5v4a5 5 0 0 1-5 5H4m5-5-5 5 5 5" /></svg
+                    ><span
+                      data-en="Check figures against the outline and adjust the template. The demo previews slide structure."
+                      >按大纲核对图表 → 调整模板样式；演示页仅作结构预览</span
+                    ></span
+                  ><button data-open="5"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5" /></svg
+                    ><span data-en="View full image">放大查看原图</span></button
+                  ></div
+                ></div
+              >
+            </div></div
+          >
+          <div
+            class="mapscroll"
+            role="img"
+            aria-label="课题下的阅读、整理、实验与写作互通，并导向汇报，日历与本地目录贯穿全程。"
+            data-label="Reading, mapping, experiments and writing feed into presentations. All share the topic, calendar and local folders."
+            ><svg class="mobilemap" viewBox="0 0 360 148" aria-hidden="true">
+              <defs>
+                <marker
+                  id="tip-m"
+                  viewBox="0 0 6 6"
+                  refX="5"
+                  refY="3"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M1 1l4 2-4 2" fill="none" stroke="currentColor" />
+                </marker>
+              </defs>
+              <text
+                x="180"
+                y="16"
+                text-anchor="middle"
+                class="context"
+                data-en="Research topic"
+              >
+                研究课题
+              </text>
+              <path
+                class="wire"
+                d="M180 21v9M34 39v-9h292v9M107 30v9M180 30v9M253 30v9"
+              />
+              <rect x="5" y="42" width="58" height="45" rx="2" />
+              <text
+                x="34"
+                y="60"
+                text-anchor="middle"
+                class="verb"
+                data-en="Read"
+              >
+                读
+              </text>
+              <text
+                x="34"
+                y="78"
+                text-anchor="middle"
+                class=""
+                data-en="Library"
+              >
+                资料库
+              </text>
+              <path
+                class="arrow"
+                d="M65 64h11"
+                marker-end="url(#tip-m)"
+                marker-start="url(#tip-m)"
+              />
+              <rect x="78" y="42" width="58" height="45" rx="2" />
+              <text
+                x="107"
+                y="60"
+                text-anchor="middle"
+                class="verb"
+                data-en="Map"
+              >
+                整理
+              </text>
+              <text
+                x="107"
+                y="78"
+                text-anchor="middle"
+                class=""
+                data-en="Questions"
+              >
+                问题关系
+              </text>
+              <path
+                class="arrow"
+                d="M138 64h11"
+                marker-end="url(#tip-m)"
+                marker-start="url(#tip-m)"
+              />
+              <rect x="151" y="42" width="58" height="45" rx="2" />
+              <text
+                x="180"
+                y="60"
+                text-anchor="middle"
+                class="verb"
+                data-en="Log"
+              >
+                记
+              </text>
+              <text
+                x="180"
+                y="78"
+                text-anchor="middle"
+                class=""
+                data-en="Evidence"
+              >
+                实验证据
+              </text>
+              <path
+                class="arrow"
+                d="M211 64h11"
+                marker-end="url(#tip-m)"
+                marker-start="url(#tip-m)"
+              />
+              <rect x="224" y="42" width="58" height="45" rx="2" />
+              <text
+                x="253"
+                y="60"
+                text-anchor="middle"
+                class="verb"
+                data-en="Write"
+              >
+                写
+              </text>
+              <text
+                x="253"
+                y="78"
+                text-anchor="middle"
+                class=""
+                data-en="Revision"
+              >
+                论文返修
+              </text>
+              <path class="arrow" d="M284 64h11" marker-end="url(#tip-m)" />
+              <rect x="297" y="42" width="58" height="45" rx="2" />
+              <text
+                x="326"
+                y="60"
+                text-anchor="middle"
+                class="verb"
+                data-en="Present"
+              >
+                汇
+              </text>
+              <text
+                x="326"
+                y="78"
+                text-anchor="middle"
+                class=""
+                data-en="Slides"
+              >
+                汇报演示
+              </text>
+              <path
+                class="wire"
+                d="M34 91v11h292V91M107 91v11M180 91v17M253 91v11"
+              />
+              <text
+                x="180"
+                y="128"
+                text-anchor="middle"
+                class="context"
+                data-en="Work calendar and local folders"
+              >
+                工作日历与本地文件目录
+              </text></svg
+            ><svg
+              aria-hidden="true"
+              class="map"
+              viewBox="0 0 1000 140"
+              role="img"
+              aria-label="研究课题、五个工作环节、工作日历与本地目录的关系"
+              data-label="A topic connects five stages, the work calendar and local files"
+            >
+              <defs>
+                <marker
+                  id="tip-d"
+                  viewBox="0 0 6 6"
+                  refX="5"
+                  refY="3"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M1 1l4 2-4 2" fill="none" stroke="currentColor" />
+                </marker>
+              </defs>
+              <text
+                x="500"
+                y="20"
+                text-anchor="middle"
+                data-en="Research topic"
+              >
+                研究课题
+              </text>
+              <path
+                class="wire"
+                d="M500 26v10M100 43v-7h800v7M300 36v7M500 36v7M700 36v7"
+              />
+              <rect x="22" y="48" width="156" height="38" rx="2" />
+              <text
+                x="100"
+                y="73"
+                text-anchor="middle"
+                data-en="Read · Library"
+              >
+                读 · 资料库
+              </text>
+              <path
+                class="arrow"
+                d="M184 67h31"
+                marker-end="url(#tip-d)"
+                marker-start="url(#tip-d)"
+              />
+              <rect x="222" y="48" width="156" height="38" rx="2" />
+              <text
+                x="300"
+                y="73"
+                text-anchor="middle"
+                data-en="Map · Questions"
+              >
+                整理 · 问题与关系图
+              </text>
+              <path
+                class="arrow"
+                d="M384 67h31"
+                marker-end="url(#tip-d)"
+                marker-start="url(#tip-d)"
+              />
+              <rect x="422" y="48" width="156" height="38" rx="2" />
+              <text
+                x="500"
+                y="73"
+                text-anchor="middle"
+                data-en="Log · Evidence"
+              >
+                记 · 实验与证据
+              </text>
+              <path
+                class="arrow"
+                d="M584 67h31"
+                marker-end="url(#tip-d)"
+                marker-start="url(#tip-d)"
+              />
+              <rect x="622" y="48" width="156" height="38" rx="2" />
+              <text
+                x="700"
+                y="73"
+                text-anchor="middle"
+                data-en="Write · Revision"
+              >
+                写 · 论文与返修
+              </text>
+              <path class="arrow" d="M784 67h31" marker-end="url(#tip-d)" />
+              <rect x="822" y="48" width="156" height="38" rx="2" />
+              <text
+                x="900"
+                y="73"
+                text-anchor="middle"
+                data-en="Present · Slides"
+              >
+                汇 · 汇报演示
+              </text>
+              <path
+                class="wire"
+                d="M100 92v10h800V92m-600 0v10m200-10v10m200-10v10m-200 0v8"
+              />
+              <text
+                x="500"
+                y="132"
+                text-anchor="middle"
+                data-en="Work calendar and local folders"
+              >
+                工作日历与本地文件目录
+              </text>
+            </svg></div
+          >
+        </div></section
+      >
+      <section id="modules" class="section"
+        ><div class="wrap"
+          ><h2
+            ><span data-en="Eight workspaces share one research context"
+              >八个工作区，共用同一套课题上下文</span
+            ></h2
+          >
+          <div class="ledger">
+            <div
+              ><h3><span data-en="Research workspaces">主流程工作区</span></h3
+              ><dl>
+                <div
+                  ><dt><span data-en="Overview">研究总览</span></dt
+                  ><dd
+                    ><span
+                      data-en="See progress and pending tasks, then return to the work in hand."
+                      >查看课题进展与待办，回到上次处理的工作。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt
+                    ><span data-en="Questions and topics">问题与选题</span></dt
+                  ><dd
+                    ><span
+                      data-en="Organize questions, check prior work and identify boundaries to test."
+                      >整理研究问题，核对前置文献与待检验边界。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt
+                    ><span data-en="Design and experiments"
+                      >方案与实验</span
+                    ></dt
+                  ><dd
+                    ><span
+                      data-en="Document the protocol, controls and run status."
+                      >记录实验方案、对照设置与执行进度。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt
+                    ><span data-en="Results and evidence">结果与证据</span></dt
+                  ><dd
+                    ><span
+                      data-en="Keep observations and negative results alongside source files."
+                      >把观察、负结果和来源文件留在同一条记录中。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt><span data-en="Manuscript">论文写作</span></dt
+                  ><dd
+                    ><span
+                      data-en="Edit LaTeX, preview the PDF and prepare replies and submission files."
+                      >编辑 LaTeX、预览 PDF，整理审稿回复与投稿包。</span
+                    ></dd
+                  ></div
+                >
+              </dl></div
+            >
+            <div
+              ><h3
+                ><span data-en="Tools across the project"
+                  >贯穿全程的工具</span
+                ></h3
+              ><dl>
+                <div
+                  ><dt><span data-en="Library">资料库</span></dt
+                  ><dd
+                    ><span
+                      data-en="Search local references and revisit bilingual reading notes."
+                      >关联本机资料，检索文献，回看双语阅读笔记。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt><span data-en="Work calendar">工作日历</span></dt
+                  ><dd
+                    ><span data-en="Review research progress and tasks by date."
+                      >按日期查看研究进展与待办。</span
+                    ></dd
+                  ></div
+                >
+                <div
+                  ><dt><span data-en="Presentations">汇报演示</span></dt
+                  ><dd
+                    ><span
+                      data-en="Compose editable slides from selected papers and notes."
+                      >将选定论文与笔记编排为可编辑的汇报。</span
+                    ></dd
+                  ></div
+                >
+              </dl></div
+            >
+          </div>
+        </div></section
+      >
+      <section id="architecture" class="section tint"
+        ><div class="wrap"
+          ><h2
+            ><span
+              data-en="Your research lives in ordinary folders on your computer"
+              >所有材料留在你电脑的普通文件夹里</span
+            ></h2
+          >
+          <div class="architecture"
+            ><figure class="tree"
+              ><div class="filehead"
+                ><span data-en="Workspace directory">工作区目录</span></div
+              ><pre><code><span data-en="EchoPaper/
+├─ papers/
+│  └─ &lt;project&gt;/
+│     ├─ manuscript/main.tex
+│     ├─ notes/
+│     ├─ reviews/
+│     └─ submissions/
+├─ materials/
+│  └─ &lt;topic&gt;/参考文献/
+└─ workspace/">EchoPaper/
+├─ papers/
+│  └─ &lt;项目&gt;/
+│     ├─ manuscript/main.tex
+│     ├─ notes/
+│     ├─ reviews/
+│     └─ submissions/
+├─ materials/
+│  └─ &lt;课题&gt;/参考文献/
+└─ workspace/</span></code></pre
+              ><figcaption
+                ><span
+                  data-en="Example layout. Track changes with Git or open the same files in VS Code or Codex."
+                  >目录示例。可用 Git 管理版本，也可从 VS Code 或 Codex
+                  打开同一份文件。</span
+                ></figcaption
+              ></figure
+            ><div class="rules">
+              <article
+                ><h3
+                  ><span data-en="Core tools work without a key"
+                    >无密钥也能读文献、写稿</span
+                  ></h3
+                ><p
+                  ><span
+                    data-en="Read, take notes, search locally and edit LaTeX without configuring a model."
+                    >阅读、笔记、本地检索和 LaTeX 编辑均可直接使用。</span
+                  ></p
+                ></article
+              >
+              <article
+                ><h3
+                  ><span data-en="Credentials stay in the system store"
+                    >密钥入系统钥匙串，改稿先看差异</span
+                  ></h3
+                ><p
+                  ><span
+                    data-en="Connect an OpenAI-compatible endpoint or local Ollama. Keys live in macOS Keychain or Windows Credential Manager. External services receive material selected for the task. Review the diff before applying an AI edit."
+                    >可自配 OpenAI 兼容接口或本地 Ollama。密钥存于 macOS
+                    钥匙串或 Windows
+                    凭据管理器。使用外接服务时按需发送所选材料，AI
+                    改稿先展示差异，由你确认后写入。</span
+                  ></p
+                ></article
+              >
+              <article
+                ><h3
+                  ><span data-en="One manuscript for the browser and CLI"
+                    >网页与命令行共用同一份主稿</span
+                  ></h3
+                ><p
+                  ><span
+                    data-en="Autosave syncs the file. A content-hash check flags concurrent changes so you can compare them before saving."
+                    >自动保存同步文件。主稿有并发修改时，内容哈希校验会提示冲突，可对照后再保存。</span
+                  ></p
+                ></article
+              >
+              <article
+                ><h3
+                  ><span data-en="Compile on demand and check the evidence"
+                    >编译与研究判断各有归属</span
+                  ></h3
+                ><p
+                  ><span
+                    data-en="Save the build target or select Compile to generate a PDF. Researchers verify the measurements, conclusions and venue requirements."
+                    >主动保存编译目标或点击编译才生成
+                    PDF。实验数值、学术结论和投稿格式要求由研究者核对。</span
+                  ></p
+                ></article
+              >
+            </div></div
+          >
+        </div></section
+      >
+      <section id="start" class="section"
+        ><div class="wrap"
+          ><h2
+            ><span data-en="Download the installer or run from source"
+              >下载安装包，或从源码启动</span
+            ></h2
+          >
+          <div class="deploy"
+            ><article
+              ><h3
+                ><span data-en="Windows x64 installer"
+                  >Windows x64 独立安装版</span
+                >
+                <code>v1.0.0</code></h3
+              ><p
+                ><span data-en="282.0 MiB · Released 24 Nov 2026"
+                  >282.0 MiB · 2026-11-24 发布</span
+                ><br /><span
+                  data-en="Includes Node.js, Python, Git, Tectonic and SQLite."
+                  >内置 Node.js、Python、Git、Tectonic 与 SQLite。</span
+                ></p
+              ><a
+                class="button"
+                href="https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/EchoPaper-1.0.0-win-x64.exe"
+                ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" /></svg
+                ><span data-en="Download EchoPaper-1.0.0-win-x64.exe"
+                  >下载 EchoPaper-1.0.0-win-x64.exe</span
+                ></a
+              ><div class="checksum"
+                ><div class="bar"
+                  ><span>SHA-256</span
+                  ><button data-copy="hash"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M8 8h12v13H8zM15 5V3H4v13h2" /></svg
+                    ><span data-en="Copy">复制</span></button
+                  ></div
+                ><code id="hash"
+                  >87271eac2f7f43cffb9e76789c081257c60d6a43e20ecc7c7fbea5d66379e854</code
+                ></div
+              ><div class="links"
+                ><a
+                  href="https://github.com/Blueeeecho/EchoPaper/releases/download/v1.0.0/SHA256SUMS-win-x64.txt"
+                  >SHA256SUMS-win-x64.txt</a
+                ><a
+                  href="https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0"
+                  ><span data-en="Release notes">发布页</span></a
+                ></div
+              ><aside
+                ><span data-en="Unsigned preview installer"
+                  >未签名预览安装包</span
+                ><p
+                  ><span
+                    data-en="If Windows shows SmartScreen, verify the checksum above. Once you have confirmed the source, select More info, then Run anyway. Choose a local workspace folder on first launch."
+                    >若 Windows 显示 SmartScreen
+                    提示，请先核对上方校验值。确认来源后，点「更多信息」再选「仍要运行」。首次启动时选择本地工作区目录。</span
+                  ></p
+                ></aside
+              ></article
+            ><article
+              ><h3
+                ><span data-en="Run from source on macOS or Windows"
+                  >macOS 与 Windows 源码运行</span
+                ></h3
+              ><p
+                ><span
+                  data-en="Node.js 22.13+ (22.x) or 24.x · Git 2.28+ · Python 3"
+                  >Node.js 22.13+（22.x）或 24.x · Git 2.28+ · Python 3</span
+                ></p
+              ><div class="terminal"
+                ><div class="bar"
+                  ><span><span data-en="Terminal">终端</span></span
+                  ><button data-copy="cmd"
+                    ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M8 8h12v13H8zM15 5V3H4v13h2" /></svg
+                    ><span data-en="Copy commands">复制命令</span></button
+                  ></div
+                ><pre><code id="cmd">git clone https://github.com/Blueeeecho/EchoPaper.git
+cd EchoPaper
+<span data-en="# Double-click 启动工作台.command (macOS) or 启动工作台.bat (Windows)."># macOS 双击「启动工作台.command」，Windows 双击「启动工作台.bat」</span>
+<span data-en="# Or build and start in the terminal:"># 或在终端构建并启动：</span>
+npm --prefix _system ci --no-audit --no-fund
+npm --prefix _system run build
+node _system/scripts/control.mjs start</code></pre></div
+              ><p
+                ><span
+                  data-en="The first run needs internet access to install dependencies. Default address:"
+                  >首次运行需联网安装依赖。默认地址为</span
+                >
+                <code>http://127.0.0.1:4173</code></p
+              ><small
+                ><span
+                  data-en="Install Tectonic to compile LaTeX. The HZAU presentation template requires LiSu and Times New Roman."
+                  >编译 LaTeX 另需 Tectonic。HZAU 汇报模板需安装隶书与 Times New
+                  Roman。</span
+                ></small
+              ></article
+            ></div
+          >
+        </div></section
+      >
+      <section id="faq" class="section tint"
+        ><div class="wrap"
+          ><h2><span data-en="Frequently asked questions">常见疑问</span></h2>
+          <details
+            ><summary
+              ><span data-en="What works without an API key?"
+                >没有 API Key 能用哪些功能？</span
+              ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16" />
+                <path class="vertical" d="M12 4v16" /></svg></summary
+            ><p
+              ><span
+                data-en="Read local PDFs, take notes, search indexed material and edit LaTeX. Configure a service for translation or writing tasks that call an external model."
+                >可阅读本地 PDF、做笔记、检索已索引材料和编辑
+                LaTeX。调用外部模型的翻译或写作任务需另行配置服务。</span
+              ></p
+            ></details
+          >
+          <details
+            ><summary
+              ><span data-en="What does an external AI service receive?"
+                >使用外接 AI 时，哪些内容会发送出去？</span
+              ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16" />
+                <path class="vertical" d="M12 4v16" /></svg></summary
+            ><p
+              ><span
+                data-en="A request contains the prompt and selected material needed for the task. Your drafts and notes are stored locally. The provider’s data policy applies to what you send."
+                >调用接口时，请求会包含完成该任务需要的提示词与所选材料。稿件与笔记保存在本地，发送给服务商的内容受其数据政策约束。</span
+              ></p
+            ></details
+          >
+          <details
+            ><summary
+              ><span
+                data-en="Does importing change my original PDFs or LaTeX project?"
+                >导入已有 PDF 或 LaTeX 工程会改写原文件吗？</span
+              ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16" />
+                <path class="vertical" d="M12 4v16" /></svg></summary
+            ><p
+              ><span
+                data-en="Link a literature folder to read its PDFs. Importing a LaTeX ZIP creates a separate project and keeps the original archive and manifest under archive/. Subsequent edits affect the project copy."
+                >关联文献目录后可直接阅读 PDF。导入 LaTeX ZIP
+                会创建独立项目，并在 archive/
+                保留原包和清单。后续编辑写入项目内的工作稿。</span
+              ></p
+            ></details
+          >
+          <details
+            ><summary
+              ><span data-en="Which license covers the public source?"
+                >公开源码采用什么许可？</span
+              ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16" />
+                <path class="vertical" d="M12 4v16" /></svg></summary
+            ><p
+              ><span
+                data-en="The repository currently specifies no single license for the whole project. Check the individual licenses of third-party dependencies before reuse."
+                >仓库目前未为整个项目指定统一许可证。第三方依赖各有许可，复用前请核对相应说明。</span
+              ></p
+            ></details
+          >
+          <details
+            ><summary
+              ><span
+                data-en="Which fonts and materials does the HZAU template use?"
+                >HZAU 汇报模板需要哪些字体？素材如何复用？</span
+              ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12h16" />
+                <path class="vertical" d="M12 4v16" /></svg></summary
+            ><p
+              ><span
+                data-en="Install LiSu and Times New Roman. The university emblem and photographs belong to their respective rights holders. Check permissions before redistributing them."
+                >模板需要隶书和 Times New
+                Roman。校徽、照片等素材归原权利人所有，再分发前请核对素材授权。</span
+              ></p
+            ></details
+          >
+        </div></section
+      > </main
+    ><footer
+      ><div class="wrap foot"
+        ><a class="brand" href="#top">EchoPaper</a
+        ><p
+          ><span
+            data-en="Screenshots show synthetic demo material in the public version."
+            >界面截自公开版，展示内容为合成演示材料。</span
+          ></p
+        ><a href="https://github.com/Blueeeecho/EchoPaper">GitHub</a
+        ><a href="https://github.com/Blueeeecho/EchoPaper/releases/tag/v1.0.0"
+          >v1.0.0</a
+        ><a
+          href="https://github.com/Blueeeecho/EchoPaper/blob/main/_system/docs/LOCAL_API.md"
+          ><span data-en="API docs">接口文档</span></a
+        ></div
+      ></footer
+    >
+    <dialog id="viewer" aria-labelledby="view-title"
+      ><div class="bar"
+        ><strong id="view-title"></strong
+        ><div class="controls"
+          ><button id="prev"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m15 5-7 7 7 7" /></svg
+            ><span class="sr"
+              ><span data-en="Previous image">上一张</span></span
+            ></button
+          ><button id="next"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m9 5 7 7-7 7" /></svg
+            ><span class="sr"
+              ><span data-en="Next image">下一张</span></span
+            ></button
+          ><button id="magnify"
+            ><span data-en="Actual size">原始尺寸</span></button
+          ><button id="close"
+            ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m5 5 14 14M19 5 5 19" /></svg
+            ><span class="sr"><span data-en="Close">关闭</span></span></button
+          ></div
+        ></div
+      ><div class="viewport"><img id="large" alt="" /></div></dialog
+    ><div id="status" role="status" class="sr"></div></body
+></html>
