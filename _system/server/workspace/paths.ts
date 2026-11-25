@@ -9,7 +9,7 @@ export const trashName='.echopaper-trash';
 const NOFOLLOW=constants.O_NOFOLLOW??0;
 const isoMtime=(stat:{mtimeNs:bigint})=>new Date(Number(stat.mtimeNs/1_000_000n)+(stat.mtimeNs%1_000_000n>=500_000n?1:0)).toISOString();
 const normFsPath=(value:string)=>process.platform==='win32'?value.toLowerCase():value;
-const sameFsPath=(a:string,b:string)=>normFsPath(a)===normFsPath(b);
+export const sameFsPath=(a:string,b:string)=>normFsPath(a)===normFsPath(b);
 export const contains=(parent:string,child:string)=>{
   const p=normFsPath(parent),c=normFsPath(child);
   if(c===p)return true;
