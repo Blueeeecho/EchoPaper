@@ -1,0 +1,952 @@
+/* Scoped to the two interactive demo mounts. The host site supplies the fonts. */
+.epwg {
+  --wg-sans: var(--sans, Onest, "Noto Sans SC", "PingFang SC", sans-serif);
+  --wg-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --wg-serif: var(--serif, "Source Serif 4", "Source Han Serif SC", "Songti SC", Georgia, serif);
+  --wg-ease: cubic-bezier(.2, .75, .25, 1);
+  container-type: inline-size;
+  inline-size: 100%;
+  min-inline-size: 0;
+  color: var(--wg-text);
+  font: 400 14px/1.55 var(--wg-sans);
+  text-align: start;
+}
+
+.epwg *,
+.epwg *::before,
+.epwg *::after {
+  box-sizing: border-box;
+}
+
+.epwg :where(button, input[role="button"], [role="button"]):focus-visible {
+  outline: 2px solid var(--wg-focus);
+  outline-offset: 2px;
+}
+
+.epwg :where(p, h3, h4, blockquote, dl, dd, ol) {
+  margin: 0;
+}
+
+.epwg :where(code, kbd) {
+  font-family: var(--wg-mono);
+  font-size: inherit;
+}
+
+.epwg button {
+  margin: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.epwg-button,
+.epwg-tabs > button,
+.epwg-sync-target {
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-block-size: 44px;
+  min-inline-size: 44px;
+}
+
+.epwg-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  max-inline-size: 100%;
+  padding: 7px 13px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  transition: background-color 180ms, color 180ms, border-color 180ms;
+}
+
+.epwg-button svg,
+.epwg-status svg {
+  flex: 0 0 auto;
+}
+
+.epwg-subtle {
+  color: var(--wg-quiet);
+}
+
+.epwg-subtle:hover {
+  color: var(--wg-text);
+  background: var(--wg-hover);
+}
+
+.epwg-primary {
+  color: #fff;
+  background: #28547d;
+  border-color: #28547d;
+}
+
+.epwg-primary:hover:not(:disabled) {
+  background: #1c4267;
+}
+
+.epwg-button:disabled {
+  opacity: .58;
+  cursor: default;
+}
+
+.epwg-toolbar,
+.epwg-controls,
+.epwg-pane-actions,
+.epwg-package-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.epwg-toolbar {
+  justify-content: space-between;
+  padding: 2px 0 8px;
+}
+
+.epwg-demo-label {
+  color: var(--wg-quiet);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.epwg-writing {
+  --wg-text: #222932;
+  --wg-quiet: #4e5965;
+  --wg-line: #e2dfd7;
+  --wg-focus: #28547d;
+  --wg-hover: #ece8de;
+  --wg-cell-padding: clamp(12px, 2.25cqi, 28px);
+  background: #f6f4ee;
+}
+
+.epwg-writing ::selection {
+  color: #292720;
+  background: #ffe077;
+}
+
+.epwg-window {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #dedbd3;
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgb(45 40 24 / .085);
+}
+
+.epwg-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 15px;
+  padding-inline: var(--wg-cell-padding);
+  background: #fbfaf7;
+}
+
+.epwg-tabs > button {
+  position: relative;
+  padding: 8px 5px;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  background: transparent;
+  color: var(--wg-quiet);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.epwg-tabs > button:hover {
+  color: var(--wg-text);
+}
+
+.epwg-tabs > button[aria-selected="true"] {
+  color: #244e75;
+  border-block-end-color: #386b97;
+}
+
+.epwg-tabs > button:focus-visible {
+  outline-offset: -3px;
+}
+
+.epwg-progress {
+  position: relative;
+  height: 1px;
+  background: var(--wg-line);
+}
+
+.epwg-progress > span {
+  position: absolute;
+  inset: -1px 0;
+  background: #3b8e69;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.epwg-progress.is-running > span {
+  animation: epwg-progress 950ms ease-out both;
+}
+
+.epwg-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-block-size: 445px;
+}
+
+.epwg-pane {
+  min-inline-size: 0;
+}
+
+.epwg-pane + .epwg-pane {
+  border-inline-start: 1px solid var(--wg-line);
+}
+
+.epwg-pane-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-block-size: 42px;
+  padding: 10px var(--wg-cell-padding);
+  background: #fbfaf7;
+  border-block-end: 1px solid var(--wg-line);
+  color: var(--wg-text);
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.epwg-pane-head small {
+  color: var(--wg-quiet);
+  font: 400 12px/1.4 var(--wg-mono);
+}
+
+.epwg-code {
+  position: relative;
+  padding: 16px var(--wg-cell-padding) 16px max(6px, calc(var(--wg-cell-padding) - 7px));
+}
+
+.epwg-source-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  padding: 3px 4px;
+  font: 400 13px/1.55 var(--wg-mono);
+}
+
+.epwg-source-row code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: inherit;
+  background: transparent;
+}
+
+.epwg-ln {
+  text-align: end;
+  color: #676f79;
+}
+
+.epwg-command { color: #244e86; }
+.epwg-number { color: #8b452b; }
+.epwg-punctuation { color: #696077; }
+
+.epwg-diff-group {
+  padding: 0 var(--wg-cell-padding) 9px;
+}
+
+.epwg-diff-group + .epwg-diff-group {
+  border-block-start: 1px solid var(--wg-line);
+}
+
+.epwg-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-block-size: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.epwg-check input {
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: #28547d;
+}
+
+.epwg-check:focus-within {
+  outline: 2px solid var(--wg-focus);
+  outline-offset: -2px;
+}
+
+.epwg-diff-lines {
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.epwg-diff-line {
+  display: grid;
+  grid-template-columns: 1ch minmax(0, 1fr);
+  column-gap: 12px;
+  padding: 3px 10px;
+  overflow-wrap: anywhere;
+  font: 400 12.5px/1.48 var(--wg-mono);
+  text-decoration: none;
+}
+
+.epwg-diff-line code {
+  color: inherit;
+  background: transparent;
+}
+
+.epwg-diff-note {
+  margin-block-start: 4px;
+  color: var(--wg-quiet);
+  font-size: 12px;
+}
+
+.epwg del.epwg-diff-line {
+  background: #fcebed;
+  color: #872e3a;
+}
+
+.epwg ins.epwg-diff-line {
+  background: #e8f4eb;
+  color: #235e40;
+}
+
+.epwg-pane-actions {
+  padding: 8px var(--wg-cell-padding) 12px;
+}
+
+.epwg-checkpoint {
+  padding: 9px var(--wg-cell-padding);
+  background: #e8f4eb;
+  color: #235e40;
+  border-block-end: 1px solid #d6e8db;
+  animation: epwg-enter 280ms var(--wg-ease) both;
+}
+
+.epwg-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.epwg-success {
+  color: #215f40;
+}
+
+.epwg-diagnostic,
+.epwg-patch {
+  padding: 10px var(--wg-cell-padding);
+  border-block: 1px solid var(--wg-line);
+}
+
+.epwg-diagnostic {
+  display: grid;
+  gap: 4px;
+  color: #822c36;
+  background: #fff5f5;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.epwg-diagnostic:has(.epwg-success) {
+  background: #edf6ef;
+}
+
+.epwg-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 6px 1px 0 0;
+  border-radius: 50%;
+  background: #bc3644;
+}
+
+.epwg-is-error {
+  animation: epwg-pulse 1.8s ease-out 2;
+}
+
+.epwg-is-fixed {
+  background: #228352;
+}
+
+.epwg-patch {
+  border-block-start: 0;
+}
+
+.epwg-patch-title {
+  display: grid;
+  gap: 2px;
+  margin-block-end: 8px;
+}
+
+.epwg-patch-title span {
+  color: var(--wg-quiet);
+  font-size: 12px;
+}
+
+.epwg-patch .epwg-pane-actions {
+  padding: 8px 0 0;
+}
+
+.epwg-preview {
+  background: #efeee9;
+}
+
+.epwg-pdf {
+  min-inline-size: 0;
+  min-block-size: 305px;
+  margin: var(--wg-cell-padding);
+  padding: clamp(12px, 2.4cqi, 24px);
+  border: 1px solid #e0ddd4;
+  background: #fffefa;
+  color: #282622;
+  font: 400 15px/1.55 var(--wg-serif);
+}
+
+.epwg-running {
+  display: flex;
+  justify-content: space-between;
+  padding-block-end: 6px;
+  margin-block-end: 15px;
+  border-block-end: 1px solid #c9c4b8;
+  color: #615c51;
+  font: 500 11px/1.4 var(--wg-sans);
+}
+
+.epwg-pdf h4 {
+  margin: 0 0 6px;
+  font: 600 19px/1.28 var(--wg-serif);
+  color: inherit;
+}
+
+.epwg-pdf p + p {
+  margin-block-start: 5px;
+}
+
+.epwg-ref {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+.epwg-ref-error {
+  color: #251112;
+  background: rgb(255 0 0 / .70);
+}
+
+.epwg-ref-fixed {
+  color: #215e44;
+  animation: epwg-ref-resolve 460ms var(--wg-ease) both;
+}
+
+.epwg-pdf-table {
+  inline-size: 100%;
+  margin-block-start: 15px;
+  border-collapse: collapse;
+  border-block: 1px solid #635f57;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.epwg-pdf-table caption {
+  padding-block-end: 5px;
+  text-align: start;
+}
+
+.epwg-pdf-table th,
+.epwg-pdf-table td {
+  padding: 3px 4px;
+  text-align: end;
+}
+
+.epwg-pdf-table th:first-child {
+  text-align: start;
+}
+
+.epwg-pdf-table thead th {
+  border-block-end: 1px solid #a19d94;
+}
+
+.epwg-sync-code {
+  display: grid;
+  gap: 4px;
+}
+
+.epwg-sync-target {
+  inline-size: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  text-align: start;
+  transition: background-color 220ms, border-color 220ms;
+}
+
+.epwg-code .epwg-sync-target {
+  align-items: center;
+  font: 400 13px/1.55 var(--wg-mono);
+}
+
+.epwg-sync-target.is-synced {
+  background: #ffe077;
+  border-color: #c98f12;
+}
+
+.epwg-sync-pdf {
+  display: grid;
+  gap: 4px;
+}
+
+.epwg-sync-pdf button {
+  padding: 5px 7px;
+}
+
+.epwg-sync-pdf button:first-child {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.epwg-annotation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 8px;
+  margin-block-start: 14px;
+  padding: 2px 6px 2px 10px;
+  background: #f6efd5;
+  font: 400 12px/1.5 var(--wg-sans);
+}
+
+.epwg-annotation strong {
+  margin-inline-start: 5px;
+}
+
+.epwg-package {
+  border-block-start: 1px solid var(--wg-line);
+  padding: 10px var(--wg-cell-padding) 16px;
+}
+
+.epwg-package-head {
+  justify-content: space-between;
+  margin-block-end: 8px;
+}
+
+.epwg-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--wg-quiet);
+}
+
+.epwg-steps li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: #f7f5f0;
+  font-size: 12px;
+  transition: background-color 200ms, color 200ms;
+}
+
+.epwg-steps li[aria-current] {
+  background: #fff1c4;
+  color: #62450c;
+}
+
+.epwg-steps .is-done {
+  background: #e8f4eb;
+  color: #215f40;
+}
+
+.epwg-step-index {
+  flex: 0 0 21px;
+  display: grid;
+  place-items: center;
+  height: 21px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font: 400 11px/1 var(--wg-mono);
+}
+
+.epwg-sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* Graph canvas and evidence drawer */
+.epwg-graph {
+  --wg-text: #f2f3f7;
+  --wg-quiet: #b3c2d6;
+  --wg-line: #303d50;
+  --wg-focus: #ffe077;
+  --wg-hover: #202f44;
+  --wg-paper-accent: #a7cefc;
+  --wg-method-accent: #ffe077;
+  --wg-model-accent: #a4dfc2;
+  background: #0e1623;
+}
+
+.epwg-graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 62fr) minmax(0, 38fr);
+  border: 1px solid var(--wg-line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.epwg-canvas {
+  min-inline-size: 0;
+  display: grid;
+  align-content: start;
+  min-block-size: 461px;
+  background: radial-gradient(circle, #253044 1px, transparent 1px) #111c2a;
+  background-size: 20px 20px;
+}
+
+.epwg-canvas > svg {
+  display: block;
+  max-inline-size: 100%;
+}
+
+.epwg-layer-name {
+  pointer-events: none;
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--wg-quiet);
+}
+
+.epwg-layer-name path,
+.epwg-layer-name circle {
+  fill: none;
+  stroke: var(--wg-quiet);
+  stroke-width: 1.15;
+}
+
+.epwg-node,
+.epwg-edge,
+.epwg-wire-hit {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.epwg-node rect {
+  fill: #19273a;
+  stroke: #526780;
+  transition: fill 180ms, stroke 180ms;
+}
+
+.epwg-node text,
+.epwg-edge text {
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.epwg-node text {
+  fill: #e9eef5;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.epwg-node.epwg-layer-0 { --wg-node-accent: var(--wg-paper-accent); }
+.epwg-node.epwg-layer-1 { --wg-node-accent: var(--wg-method-accent); }
+.epwg-node.epwg-layer-2 { --wg-node-accent: var(--wg-model-accent); }
+
+.epwg-node.is-related rect {
+  stroke: var(--wg-node-accent);
+}
+
+.epwg-node.is-related text {
+  fill: var(--wg-node-accent);
+}
+
+.epwg-node.is-current rect,
+.epwg-node:focus-visible rect {
+  fill: #293a4e;
+  stroke: var(--wg-node-accent);
+  stroke-width: 2;
+}
+
+.epwg-node.is-muted rect {
+  fill: #172233;
+  stroke: #37465a;
+}
+
+.epwg-node.is-muted text {
+  fill: #a8b5c5;
+}
+
+.epwg-wire,
+.epwg-flow,
+.epwg-wire-hit {
+  fill: none;
+}
+
+.epwg-wire {
+  stroke: #435570;
+  stroke-width: 1.2;
+  transition: stroke 200ms;
+}
+
+.epwg-wire-hit {
+  pointer-events: stroke;
+  stroke: transparent;
+  stroke-width: 44;
+}
+
+.epwg-trace.is-related .epwg-wire {
+  stroke: #9dbbe2;
+  stroke-width: 1.3;
+}
+
+.epwg-flow {
+  stroke: #ffe077;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 9;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms;
+}
+
+.epwg-trace.is-related .epwg-flow {
+  opacity: 1;
+  animation: epwg-flow 1s linear 3;
+}
+
+.epwg-edge-hit {
+  fill: transparent;
+}
+
+.epwg-edge-label {
+  fill: #1d2b40;
+  stroke: #46566d;
+  transition: fill 180ms, stroke 180ms;
+}
+
+.epwg-edge text {
+  fill: #c2cddd;
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.epwg-edge.is-related .epwg-edge-label {
+  fill: #2b3440;
+  stroke: #ac9360;
+}
+
+.epwg-edge.is-related text {
+  fill: #ffe39a;
+}
+
+.epwg-edge.is-current .epwg-edge-label,
+.epwg-edge:focus-visible .epwg-edge-label {
+  stroke: #ffe077;
+  stroke-width: 1.6;
+}
+
+.epwg-evidence {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: clamp(17px, 2.45cqi, 30px);
+  background: #131e2d;
+  border-inline-start: 1px solid var(--wg-line);
+  overflow-wrap: anywhere;
+}
+
+.epwg-evidence h3 {
+  margin: 0;
+  color: var(--wg-text);
+  font: 600 14px/1.45 var(--wg-sans);
+}
+
+.epwg-relation {
+  margin-block: 0 12px;
+  color: #a9cdf6;
+  font: 500 clamp(16px, 2.25cqi, 23px)/1.3 var(--wg-serif);
+  text-wrap: pretty;
+}
+
+.epwg-citation {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+  color: var(--wg-quiet);
+  font-size: 12px;
+}
+
+.epwg-citation cite {
+  font-style: normal;
+}
+
+.epwg-citation span,
+.epwg-hash code {
+  display: inline-block;
+  background: #26364b;
+  color: #f0f4fa;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font: 400 11px/1.55 var(--wg-mono);
+}
+
+.epwg-evidence blockquote {
+  padding: 0;
+  border: 0;
+  margin: 6px 0 0;
+  color: var(--wg-text);
+  font: 400 16px/1.57 var(--wg-serif);
+}
+
+.epwg-original {
+  margin-block-start: 6px;
+  color: #b3c2d6;
+  font: 400 13.5px/1.4 var(--wg-serif);
+}
+
+.epwg-ablation {
+  display: grid;
+  gap: 6px;
+  margin-block-start: 14px;
+  padding-block-start: 10px;
+  border-block-start: 1px solid var(--wg-line);
+  color: var(--wg-quiet);
+  font-size: 12px;
+}
+
+.epwg-ablation-heading,
+.epwg-ablation dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 5px 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.epwg-ablation-heading strong {
+  color: var(--wg-text);
+  font-size: 13px;
+}
+
+.epwg-ablation dl {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.epwg-ablation dd {
+  color: #ffdf88;
+  font: 400 14px/1.45 var(--wg-mono);
+}
+
+.epwg-evidence .epwg-reading {
+  align-self: flex-start;
+  margin-block-start: auto;
+  padding-inline: 0;
+  justify-content: flex-start;
+  text-align: start;
+  color: #ffe077;
+}
+
+.epwg-reading:hover {
+  color: #fff0b9;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.epwg-enter {
+  animation: epwg-enter 240ms var(--wg-ease) both;
+}
+
+@keyframes epwg-progress {
+  to { transform: scaleX(1); }
+}
+
+@keyframes epwg-enter {
+  from { transform: translateY(4px); opacity: .4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes epwg-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .65; transform: scale(1.28); }
+}
+
+@keyframes epwg-ref-resolve {
+  from { background-color: #f8cfce; opacity: .55; }
+  to { background-color: transparent; opacity: 1; }
+}
+
+@keyframes epwg-flow {
+  to { stroke-dashoffset: -28; }
+}
+
+@container (max-width: 720px) {
+  .epwg-graph-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .epwg-evidence {
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--wg-line);
+  }
+}
+
+@container (max-width: 610px) {
+  .epwg-columns,
+  .epwg-steps {
+    grid-template-columns: minmax(0, 1fr);
+    min-block-size: 0;
+  }
+
+  .epwg-pane + .epwg-pane {
+    border-inline-start: 0;
+    border-block-start: 1px solid var(--wg-line);
+  }
+}
+
+@container (max-width: 380px) {
+  .epwg-tabs {
+    gap: 0 7px;
+  }
+
+  .epwg-tabs > button {
+    padding-inline: 3px;
+    font-size: 12px;
+  }
+
+  .epwg-node text { font-size: 12px; }
+  .epwg-edge text { font-size: 10.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .epwg *,
+  .epwg *::before,
+  .epwg *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .epwg-progress.is-running > span {
+    transform: scaleX(1);
+  }
+}
