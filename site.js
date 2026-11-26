@@ -167,7 +167,9 @@ const sections = sectionLinks.map(link => document.querySelector(link.hash));
 let sectionObserver;
 function observeCurrentSection() {
   sectionObserver?.disconnect();
-  const probe = Math.round(header.offsetHeight + (innerHeight - header.offsetHeight) * .22);
+  const height = Math.max(1, window.innerHeight);
+  const headerHeight = Math.min(header.offsetHeight, height - 1);
+  const probe = Math.round(headerHeight + (height - headerHeight - 1) * .22);
   sectionObserver = new IntersectionObserver(() => {
     const current = sections.findIndex(section => {
       const { top, bottom } = section.getBoundingClientRect();
@@ -177,7 +179,7 @@ function observeCurrentSection() {
       if (index === current) link.setAttribute("aria-current", "location");
       else link.removeAttribute("aria-current");
     });
-  }, { rootMargin: `-${probe}px 0px -${innerHeight - probe - 1}px 0px` });
+  }, { rootMargin: `${-probe}px 0px ${probe + 1 - height}px 0px` });
   sections.forEach(section => sectionObserver.observe(section));
 }
 observeCurrentSection();
