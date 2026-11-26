@@ -107,6 +107,19 @@ test('default archive folders reuse a connected writable parent without creating
  assert.deepEqual(await fs.readFile(path.join(materials,'library','参考文献','paper.pdf')),original);
 });
 
+test('Windows default imports reuse a connected parent with different directory casing',{skip:process.platform!=='win32'},async t=>{
+ const f=await fixture(t);
+ const materials=path.join(f.root,'MATERIALS');
+ await fs.mkdir(materials);
+ const connected=await f.app.inject({method:'POST',url:'/api/workspace/roots',payload:{path:materials,permission:'write'}});
+ assert.equal(connected.statusCode,201,connected.body);
+ await f.service.checkpoint();
+ const uploaded=await f.upload();
+ assert.equal(uploaded.statusCode,201,uploaded.body);
+ assert.equal(uploaded.json().root.id,connected.json().id);
+ assert.equal(uploaded.json().resource.path,'library/参考文献/paper.pdf');
+});
+
 test('index scans between uploads keep a writable folder available and permission changes take effect',async t=>{
  const f=await fixture(t),root=await f.connect();
  const first=await f.upload({rootId:root.id,directory:'nested'});assert.equal(first.statusCode,201,first.body);

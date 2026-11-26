@@ -302,7 +302,7 @@ export function parseDiagnostics(log: string, prefix: string, main: string, opti
   };
   const currentFile = (): string | undefined => [...stack].reverse().find(Boolean);
   const normalize = (value: string): string | undefined => {
-    let cleaned = value.replace(/^\.\//, '').replace(/\\/g, '/');
+    let cleaned = value.replace(/\\/g, '/').replace(/^\.\//, '');
     if (cleaned.includes('/source/')) {
       // An absolute engine path is navigable only when its snapshot-relative
       // suffix is actually present in this build's frozen manifest.
@@ -373,7 +373,7 @@ export function parseDiagnostics(log: string, prefix: string, main: string, opti
     let text = marker ? raw.slice(marker.index + marker[0].length) : raw.trimStart();
     const severity: Diagnostic['severity'] | undefined = marker ? marker[1] === 'error' ? 'error' : 'warning' : undefined;
     let detail = text.match(/^([^()]+?):(\d+):\s*(.*)$/);
-    if (detail && !marker && /\s/.test(detail[1])) detail = null;
+    if (detail && !marker && /\s/.test(detail[1]) && !(knownFiles && normalize(detail[1]))) detail = null;
     if (detail) {
       let message = detail[3];
       if (!message.trim() && index + 1 < lines.length && !enginePrefix(lines[index + 1]) && lines[index + 1].trim()) message = lines[++index].trim();
