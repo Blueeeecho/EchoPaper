@@ -441,12 +441,13 @@ test('build status reuses unchanged file identities but hashes equal-size edits 
  t.after(()=>f.cleanup());
  const asset=path.join(f.directory,'manuscript','large-asset.bin');
  await fs.writeFile(asset,Buffer.alloc(4*1024*1024,65));
+ const assetReal=await fs.realpath(asset);
  const fixed=new Date('2024-01-01T00:00:00Z');
  await fs.utimes(asset,fixed,fixed);
  const originalOpen=fs.open;
  let opens=0;
  const spy=t.mock.method(fs,'open',(...args:Parameters<typeof originalOpen>)=>{
-  if(args[0]===asset)opens++;
+  if(args[0]===asset||args[0]===assetReal)opens++;
   return originalOpen(...args);
  });
  const old=await currentBuildSource(f.root,'test','main');
