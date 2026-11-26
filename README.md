@@ -34,7 +34,7 @@ npm --prefix _system run build
 node _system/scripts/control.mjs start
 ```
 
-Reading, notes, local search and LaTeX editing don't need an API key. To compile LaTeX, install **Tectonic** (set `TECTONIC_PATH` if it isn't found) and the template's fonts. The first build may need to download a TeX bundle; offline builds need the relevant assets cached. The HZAU slide template requires **LiSu (隶书)** and **Times New Roman** and does not silently replace them. If setup fails, run `npm --prefix _system run doctor` after installing npm dependencies.
+Reading, notes, local search and LaTeX editing don't need an API key. To compile LaTeX, install **Tectonic** (set `TECTONIC_PATH` if it isn't found) and the template's fonts. The first build may need to download a TeX bundle; offline builds need cached assets or a trusted local Tectonic resource bundle. Set `TECTONIC_BUNDLE_PATH` to the absolute path of a compatible directory, ZIP or TTB before starting EchoPaper. If it is set, EchoPaper uses that bundle without retrying the default network bundle. The HZAU slide template requires **LiSu (隶书)** and **Times New Roman** and does not silently replace them. If setup fails, run `npm --prefix _system run doctor` after installing npm dependencies.
 
 For AI chat, document translation, or OCR parsing, add your own endpoint and key in **Settings**. Credentials stay in macOS Keychain or Windows Credential Manager, not in the repository.
 

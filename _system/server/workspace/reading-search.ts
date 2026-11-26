@@ -5,13 +5,14 @@ import {textFingerprint} from '../../shared/bilingual-cache';
 import type {Resource,ResourceSearchMatch} from '../../shared/workspace-types';
 import {assertNoSymlinks} from '../security';
 import {atomicWrite,withLock} from '../storage';
+import path from 'node:path';
+import {readingFolders,readingFileStamp as stamp,validReadingId as safeId} from './reading-files';
 import type {IndexedResource} from './catalog';
 
 export interface ReadingTextBlock {text:string;page:number;translations?:string[]}
 interface SearchDocument {version:2;resourceId:string;sourceHash:string;layoutStamp:string;translationStamp:string;blocks:ReadingTextBlock[]}
 interface SearchPassage {text:string;normalized:string;source:'ocr'|'translation';page:number}
 interface CachedDocument {stamp:string;document:SearchDocument;passages:SearchPassage[];normalized:string}
-const safeId=/^[a-zA-Z0-9_-]{1,100}$/;
 function validDocument(value:SearchDocument|null):value is SearchDocument{
  return !!value&&value.version===2&&typeof value.resourceId==='string'&&typeof value.sourceHash==='string'
   &&typeof value.layoutStamp==='string'&&typeof value.translationStamp==='string'&&Array.isArray(value.blocks)
@@ -25,7 +26,6 @@ const file=async(root:string,id:string,kind:'layout'|'translation'|'search')=>{
  const relative=kind==='search'?`workspace/reading-search/${id}.json`:`workspace/reading-layout/${id}${kind==='translation'?'.translations':''}.json`;
  return assertNoSymlinks(root,relative,true);
 };
-async function stamp(filename:string){try{const stat=await fs.stat(filename);return `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`;}catch(error:any){if(error.code==='ENOENT')return '';throw error;}}
 async function readJson<T>(filename:string):Promise<T|null>{try{return JSON.parse(await fs.readFile(filename,'utf8'));}catch(error:any){if(error.code==='ENOENT')return null;throw error;}}
 function tableText(html:string):string{
  if(!html)return '';
@@ -89,7 +89,8 @@ export function createReadingSearch(root:string,options:{getText?:(id:string)=>s
  }
  async function document(resource:Resource):Promise<CachedDocument|undefined>{
   if(resource.missing||resource.kind!=='file'||!/\.pdf$/i.test(resource.name)||!safeId.test(resource.id))return;
-  const [layoutFile,translationFile,searchFile]=await Promise.all([file(root,resource.id,'layout'),file(root,resource.id,'translation'),file(root,resource.id,'search')]);
+  const [layoutFolder,searchFolder]=await readingFolders(root,'reading-layout','reading-search');
+  const layoutFile=path.join(layoutFolder,`${resource.id}.json`),translationFile=path.join(layoutFolder,`${resource.id}.translations.json`),searchFile=path.join(searchFolder,`${resource.id}.json`);
   const [layoutStamp,translationStamp,searchStamp]=await Promise.all([stamp(layoutFile),stamp(translationFile),stamp(searchFile)]);
   const signature=`${layoutStamp}|${translationStamp}|${searchStamp}`;
   const existing=cache.get(resource.id);
@@ -98,26 +99,35 @@ export function createReadingSearch(root:string,options:{getText?:(id:string)=>s
    return existing.document.sourceHash===resource.hash?existing:undefined;
   }
   let value=searchStamp?await readJson<SearchDocument>(searchFile).catch(()=>null):null;
-  if(!validDocument(value)||value.resourceId!==resource.id||value.layoutStamp!==layoutStamp||value.translationStamp!==translationStamp)value=await refreshReadingSearch(root,resource.id);
+  let currentSearchStamp=searchStamp;
+  if(!validDocument(value)||value.resourceId!==resource.id||value.layoutStamp!==layoutStamp||value.translationStamp!==translationStamp){
+   value=await refreshReadingSearch(root,resource.id);
+   currentSearchStamp=await stamp(searchFile);
+  }
   if(!value||value.sourceHash!==resource.hash){cache.delete(resource.id);return;}
   const passages:SearchPassage[]=value.blocks.flatMap(block=>[
    {text:block.text,normalized:normalize(block.text),source:'ocr' as const,page:block.page},
    ...(block.translations??[]).map(text=>({text,normalized:normalize(text),source:'translation' as const,page:block.page})),
   ]);
-  const result:CachedDocument={stamp:`${layoutStamp}|${translationStamp}|${await stamp(searchFile)}`,document:value,passages,normalized:passages.map(passage=>passage.normalized).join(' ')};
+  const result:CachedDocument={stamp:`${layoutStamp}|${translationStamp}|${currentSearchStamp}`,document:value,passages,normalized:passages.map(passage=>passage.normalized).join(' ')};
   putCache(resource.id,result);return result;
  }
  async function match(resource:IndexedResource,terms:string[]):Promise<ResourceSearchMatch|undefined>{
   const extra=options.getMeta?await options.getMeta(resource).catch(()=>undefined):undefined;
   const venueLabel=[extra?.venue,extra?.year].filter(Boolean).join(' ');
   const metadata=[resource.title??'',extra?.titleZh??'',venueLabel,...(extra?.keywords??[]),resource.name,resource.path,...resource.tags].filter(Boolean).join(' ');
-  if(allTerms(normalize(metadata),terms))return {source:'metadata',snippet:excerpt(metadata,terms),terms};
+  const normalizedMetadata=normalize(metadata);
+  if(allTerms(normalizedMetadata,terms))return {source:'metadata',snippet:excerpt(metadata,terms),terms};
   const text=resource.text??options.getText?.(resource.id)??'';
   let indexed:CachedDocument|undefined;
   try{indexed=await document(resource);}catch{/* A damaged OCR cache does not prevent searching other documents. */}
-  if(!allTerms(`${normalize(metadata)} ${normalize(text)} ${indexed?.normalized??''}`,terms))return;
-  const passage=indexed?.passages.map(passage=>({passage,hits:terms.filter(term=>passage.normalized.includes(term)).length})).sort((a,b)=>b.hits-a.hits)[0];
-  if(passage?.hits)return {source:passage.passage.source,snippet:excerpt(passage.passage.text,terms),page:passage.passage.page,terms};
+  if(!allTerms(`${normalizedMetadata} ${normalize(text)} ${indexed?.normalized??''}`,terms))return;
+  let best:SearchPassage|undefined,bestHits=0;
+  for(const passage of indexed?.passages??[]){
+   let hits=0;for(const term of terms)if(passage.normalized.includes(term))hits++;
+   if(hits>bestHits){best=passage;bestHits=hits;}
+  }
+  if(best)return {source:best.source,snippet:excerpt(best.text,terms),page:best.page,terms};
   return {source:'text',snippet:excerpt(text,terms),terms};
  }
  async function find(resources:IndexedResource[],query:string,signal?:AbortSignal){

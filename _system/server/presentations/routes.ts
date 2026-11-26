@@ -11,8 +11,8 @@ import { hash, withLock } from '../storage';
 import { checkAbort, redact } from '../agents/model-gateway';
 import { expectedHash, outlineHash } from './schema';
 import { now, presentationStore } from './store';
-import { listStyles, resolveStyle } from './styles';
-import { sourceFromInput, snapshotBuffer, selectedAssets, assetMime, type ResourceFile } from './sources';
+import { listStyles, readPreviewFrame, resolveStyle } from './styles';
+import { sourceFromInput, snapshotBuffer, selectedAssets, inlinePreviewImages, assetMime, type ResourceFile } from './sources';
 import { generateOutline, manualOutline, parseOutlineJson, prepareModelOutline } from './outline';
 import { exportPresentation } from './export';
 import { layoutSlide, layoutSvg, LayoutOverflowError } from './layout';
@@ -106,6 +106,17 @@ export async function registerPresentationRoutes(app:FastifyInstance,workspaceRo
  app.post<{Params:{id:string;jobId:string}}>('/api/presentations/:id/jobs/:jobId/cancel',async request=>{const job=await store.job(request.params.id,request.params.jobId),entry=active.get(job.id);if(entry){entry.controller.abort(new Error('用户取消任务。'));await entry.promise;return store.job(job.presentationId,job.id);}return job;});
  app.get<{Params:{id:string;jobId:string}}>('/api/presentations/:id/jobs/:jobId/download',async(request,reply)=>{const job=await store.job(request.params.id,request.params.jobId);if(job.kind!=='export'||job.status!=='succeeded'||!job.downloadUrl)throw new HttpError(409,'此任务尚无可下载的成功产物。');const bytes=await verifiedArtifact(request.params.id,job.id,'presentation.pptx');return reply.type('application/vnd.openxmlformats-officedocument.presentationml.presentation').header('Content-Disposition',`attachment; filename="${job.presentationId}.pptx"`).send(bytes);});
  app.get<{Params:{id:string;jobId:string;page:string}}>('/api/presentations/:id/jobs/:jobId/previews/:page.svg',async(request,reply)=>{const job=await store.job(request.params.id,request.params.jobId);if(job.kind!=='export'||job.status!=='succeeded')throw new HttpError(409,'预览尚未生成。');if(!/^\d{1,3}$/.test(request.params.page))throw new HttpError(400,'页码无效。');const bytes=await verifiedArtifact(request.params.id,job.id,`slide-${Number(request.params.page)}.svg`);return reply.type('image/svg+xml').header('Content-Security-Policy',"sandbox; default-src 'none'; img-src data:").send(bytes);});
- app.get<{Params:{id:string;slideId:string};Querystring:{expectedHash?:string}}>('/api/presentations/:id/slides/:slideId/preview.svg',async(request,reply)=>{const{document}=request.query.expectedHash===undefined?await store.read(request.params.id):await current(request.params.id,request.query.expectedHash),index=document.slides.findIndex(s=>s.id===request.params.slideId);if(index<0)throw new HttpError(404,'页面不存在。');const style=await resolveStyle(workspaceRoot,document.styleId,document.styleVersion),assets=await selectedAssets(await store.root(document.id),document),inline:Record<string,string>={};for(const[id,filename]of Object.entries(assets))inline[id]=`data:${assetMime(filename)};base64,${(await fs.readFile(filename)).toString('base64')}`;const frame={logo:'data:image/svg+xml;base64,'+(await fs.readFile(style.logo)).toString('base64'),cover:'data:image/jpeg;base64,'+(await fs.readFile(path.join(style.directory,'cover.jpeg'))).toString('base64')};return reply.type('image/svg+xml').header('Content-Security-Policy',"sandbox; default-src 'none'; img-src data:").send(layoutSvg(layoutSlide(document,document.slides[index],index),inline,frame));});
+ app.get<{Params:{id:string;slideId:string};Querystring:{expectedHash?:string}}>('/api/presentations/:id/slides/:slideId/preview.svg',async(request,reply)=>{
+  const{document}=request.query.expectedHash===undefined?await store.read(request.params.id):await current(request.params.id,request.query.expectedHash);
+  const index=document.slides.findIndex(slide=>slide.id===request.params.slideId);
+  if(index<0)throw new HttpError(404,'页面不存在。');
+  const layout=layoutSlide(document,document.slides[index],index);
+  const assetIds=layout.items.flatMap(item=>item.kind==='image'?[item.assetId]:[]);
+  const [inline,frame]=await Promise.all([
+   assetIds.length?inlinePreviewImages(await store.root(document.id),document,assetIds):{},
+   readPreviewFrame(workspaceRoot,document.styleId,document.styleVersion,layout.kind),
+  ]);
+  return reply.type('image/svg+xml').header('Content-Security-Policy',"sandbox; default-src 'none'; img-src data:").send(layoutSvg(layout,inline,frame));
+ });
  return{busy:()=>active.size>0||preparing.size>0,async checkpoint(){await Promise.all([...preparing]);await Promise.all([...active.values()].map(e=>e.promise));},async close(){closing=true;for(const entry of active.values())entry.controller.abort(new Error('服务关闭，任务取消。'));await Promise.allSettled([...preparing]);for(const entry of active.values())entry.controller.abort(new Error('服务关闭，任务取消。'));await Promise.allSettled([...active.values()].map(e=>e.promise));}};
 }

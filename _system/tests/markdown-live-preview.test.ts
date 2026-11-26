@@ -130,3 +130,25 @@ test('selecting any line of a wrapped link exposes the entire source without hid
  assert.ok(!active.some(item=>item.spec.widget||item.from!==item.to&&!item.spec.class));
  assert.equal(state.doc.toString(),link);
 });
+
+test('cursor-only updates reuse decorations inside an active region and restore replaced widgets across regions',()=>{
+ const link='[Evidence](/local)',code='```txt\nraw\n```',content=link+'\n\n'+code+'\n\nPlan $x^2$';
+ let state=stateFor(content,1).update({effects:markdownFocus.of(true)}).state;
+ const linkActive=state.field(liveMarkdown);
+ state=state.update({selection:{anchor:3}}).state;
+ assert.equal(state.field(liveMarkdown),linkActive);
+ const summarize=(state:EditorState)=>{
+  const rows:string[]=[];
+  state.field(liveMarkdown).between(0,state.doc.length,(from,to,value)=>{
+   rows.push(JSON.stringify([from,to,value.spec.class,value.spec.widget?.text,value.spec.block]));
+  });
+  return rows.sort();
+ };
+ for(const anchor of [content.indexOf('raw'),content.indexOf('Plan'),3,content.length,0]){
+  state=state.update({selection:{anchor}}).state;
+  const fresh=stateFor(content,anchor).update({effects:markdownFocus.of(true)}).state;
+  assert.deepEqual(summarize(state),summarize(fresh));
+ }
+ state=state.update({effects:markdownFocus.of(false)}).state;
+ assert.deepEqual(summarize(state),summarize(stateFor(content)));
+});

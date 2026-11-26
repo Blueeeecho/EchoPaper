@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import type { Build, BuildService, BuildRequestOptions, EmitEvent, Submission } from '../shared/types.ts';
 import {withLock,withProjectMutation} from './storage';
-import { atomicJSON, contained, fingerprint, readProject, runCompiler, safeId, serviceError, snapshotSource, sourceFiles, targetSource, terminate } from './compile-utils.ts';
+import { atomicJSON, contained, fingerprint, readProject, runCompiler, safeId, serviceError, snapshotSource, currentSourceFingerprint, targetSource, terminate } from './compile-utils.ts';
 import { DIAGNOSTICS_VERSION, dedupeDiagnostics, parseDiagnostics, placeholderDiagnostics } from './diagnostics.ts';
 import type { SourceFile } from './compile-utils.ts';
 import { createSubmissionArchive } from './submissions.ts';
@@ -16,7 +16,7 @@ type CurrentSource = Awaited<ReturnType<typeof currentBuildSource>>;
 export interface BuildServiceOptions { workspaceRoot: string; emit: EmitEvent; compilerPath?: string; timeoutMs?: number }
 const terminal = (build: Build) => ['succeeded', 'failed', 'cancelled'].includes(build.status);
 const clone = <T>(value: T): T => structuredClone(value);
-export async function currentBuildSource(workspaceRoot:string,projectId:string,targetId:string):Promise<{sourceHash:string;targetMain:string}>{const source=await targetSource(workspaceRoot,projectId,targetId);return {sourceHash:fingerprint(await sourceFiles(source.sourceDirectory,source.main)),targetMain:source.target.main};}
+export async function currentBuildSource(workspaceRoot:string,projectId:string,targetId:string):Promise<{sourceHash:string;targetMain:string}>{const source=await targetSource(workspaceRoot,projectId,targetId);return {sourceHash:await currentSourceFingerprint(source.sourceDirectory,source.main),targetMain:source.target.main};}
 
 export function createBuildService(options: BuildServiceOptions): BuildService {
   const workspaceRoot = path.resolve(options.workspaceRoot);
@@ -181,7 +181,7 @@ export function createBuildService(options: BuildServiceOptions): BuildService {
         record.build.status = 'failed';
         record.build.reason = result.timedOut ? '编译超时。首次运行可能仍在下载依赖，可查看完整日志后重试。'
           : result.error ? `无法启动 Tectonic：${result.error}`
-          : /download|network|HTTP|TLS|certificate|failed to get bundle|failed to open bundle/i.test(result.log) && !record.build.diagnostics.some(item => item.severity === 'error') ? '依赖下载或网络访问失败，请查看完整日志后重试。'
+          : /download|network|HTTP|TLS|certificate|failed to get bundle|failed to open bundle/i.test(result.log) && !record.build.diagnostics.some(item => item.severity === 'error') ? '依赖下载或网络访问失败，请查看完整日志。离线环境可配置本地 Tectonic 宏包（TECTONIC_BUNDLE_PATH）。'
           : result.code === 0 ? '编译器未生成有效 PDF。' : 'LaTeX 编译失败，请查看错误和完整日志。';
         if (!record.build.diagnostics.some(item => item.severity === 'error')) record.build.diagnostics.push({ severity: 'error', category: 'compile', message: record.build.reason });
       }

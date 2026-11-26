@@ -148,3 +148,61 @@ test('a failed PDF can be reopened and selected text can be saved with translati
  assert.match(render(),/p\.3/);
  stopSecond?.();stopSettings?.();unload?.();
 });
+
+test('closing saves the latest notes and never restores a clean, acknowledged, or discarded draft',async context=>{
+ const states:any[]=[],refs:Array<{current:any}>=[],effects:Array<()=>void|(()=>void)>=[],nodes:Array<{tag:unknown;props:any}>=[];
+ let si=0,ri=0,closed=0;
+ const hooks={...React,
+  useState(initial:any){const index=si++;if(!(index in states))states[index]=typeof initial==='function'?initial():initial;return[states[index],(next:any)=>{states[index]=typeof next==='function'?next(states[index]):next;}];},
+  useRef(initial:any){return refs[ri++]??=({current:initial});},
+  useEffect(effect:()=>void|(()=>void)){effects.push(effect);},
+ } as typeof React;
+ const fixture={...resource,name:'note.md',path:'note.md'};
+ const key=`echopaper-reading:${resource.id}`;
+ const isolated=load(hooks,(tag,props)=>nodes.push({tag,props}));
+ const render=()=>{si=0;ri=0;effects.length=0;nodes.length=0;return renderToStaticMarkup(React.createElement(isolated.default,{resource:fixture,onClose(){closed++;}}));};
+ const stub=(name:string,value:unknown)=>{const original=Object.getOwnPropertyDescriptor(globalThis,name);Object.defineProperty(globalThis,name,{configurable:true,value});context.after(()=>{if(original)Object.defineProperty(globalThis,name,original);else Reflect.deleteProperty(globalThis,name);});};
+ const session=new Map<string,string>();
+ const doc={version:1,resourceId:resource.id,notes:[],content:'completely saved'};
+ session.set(key,JSON.stringify({hash:'before',document:{content:doc.content,notes:[],resourceId:resource.id,version:1}}));
+ stub('sessionStorage',{getItem:(name:string)=>session.get(name)??null,setItem:(name:string,value:string)=>session.set(name,value),removeItem:(name:string)=>session.delete(name)});
+ stub('localStorage',{getItem:(name:string)=>name==='echopaper-reader:prefs'?'{"tab":"notes","auto":false}':null});
+ const dom={fullscreenElement:null as any,exitFullscreen:async()=>{}};
+ stub('document',dom);
+ const gets={hash:'h0',document:doc};
+ const writes:Array<{request:{expectedHash:string;document:typeof doc};finish:(value:Response)=>void}>=[];
+ context.mock.method(globalThis,'fetch',(_url:string,init?:RequestInit)=>{
+  if(init?.method==='PUT')return new Promise<Response>(finish=>writes.push({request:JSON.parse(String(init.body)),finish}));
+  return Promise.resolve(Response.json(gets));
+ });
+ function effect(pattern:RegExp){const run=effects.find(fn=>pattern.test(fn.toString()));assert.ok(run);return run();}
+ const flush=()=>new Promise<void>(resolve=>setImmediate(resolve));
+ function input(text:string){render();const field=nodes.find(({props})=>props['aria-label']==='文档笔记');assert.ok(field);field.props.onChange(text);}
+ function click(label:string){render();const node=nodes.find(({tag,props})=>tag==='button'&&(props['aria-label']===label||props.children===label));assert.ok(node,label);node.props.onClick();}
+ function acknowledge(index:number){const sent=writes[index];sent.finish(Response.json({hash:`h${index+1}`,document:sent.request.document}));}
+
+ render();const unload=effect(/loadReading/);
+ try {
+  await flush();assert.equal(session.has(key),false,'a validated identical legacy draft is removed, regardless of hash');
+  click('返回上一页');assert.equal(closed,1);assert.equal(writes.length,0);assert.equal(session.has(key),false);
+  // Continue exercising the same component without actually unmounting the test harness.
+  input('first revision');click('返回上一页');
+  assert.equal(writes[0].request.expectedHash,'h0');
+  input('edit during Return');acknowledge(0);await flush();
+  assert.equal(closed,1);assert.match(render(),/笔记尚未保存/);
+  assert.deepEqual(JSON.parse(session.get(key)!),{document:{...doc,content:'edit during Return'},hash:'h1'});
+  click('保存并关闭');input('edit during modal save');acknowledge(1);await flush();
+  assert.equal(closed,1);assert.equal(JSON.parse(session.get(key)!).hash,'h2');
+  click('保存并关闭');
+  let allowExit!:()=>void;
+  const shell=nodes.find(({props})=>String(props.className).startsWith('reader-shell'))!.props.ref;
+  shell.current=dom.fullscreenElement={};dom.exitFullscreen=()=>new Promise<void>(resolve=>{allowExit=resolve;});
+  acknowledge(2);await flush();
+  assert.equal(session.has(key),false);
+  input('edit while exiting fullscreen');allowExit();await flush();
+  assert.equal(closed,1);assert.match(render(),/笔记尚未保存/);
+  click('放弃修改');await new Promise(resolve=>setTimeout(resolve,320));
+  assert.equal(session.has(key),false);assert.equal(closed,1);
+  allowExit();await flush();assert.equal(closed,2);assert.equal(writes.length,3);
+ }finally{unload?.();}
+});

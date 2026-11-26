@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { promises as fs } from 'node:fs';
+import { promises as fs, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { CompileTarget, Project } from '../shared/types.ts';
-import { localResourceBundle, missingCachedResource } from './local-resource-bundle.ts';
+import { configuredResourceBundle, localResourceBundle, missingCachedResource } from './local-resource-bundle.ts';
 
 export function serviceError(message: string, statusCode = 400): Error & { statusCode: number } {
   return Object.assign(new Error(message), { statusCode });
@@ -65,9 +65,9 @@ export async function targetSource(workspaceRoot: string, projectId: string, tar
 const OMIT_DIRECTORIES = new Set(['.git', 'build', 'node_modules', 'submissions', 'reviews', 'notes', 'literature', '.cache', '.workbench', '__pycache__']);
 const OMIT_FILE = /(?:\.aux|\.log|\.out|\.toc|\.fls|\.fdb_latexmk|\.synctex(?:\.gz)?|\.blg|\.xdv|\.dvi|\.bcf|\.run\.xml)$/i;
 export interface SourceFile { path: string; bytes: Buffer; hash: string }
-export async function sourceFiles(root: string, main?: string): Promise<SourceFile[]> {
+async function walkSource<T extends {path:string}>(root: string, main: string|undefined, file: (relative:string, real:string, stat:BigIntStats)=>Promise<T>): Promise<T[]> {
   const realRoot = await fs.realpath(root);
-  const files: SourceFile[] = [];
+  const files: T[] = [];
   async function walk(directory: string, prefix: string, ancestry: Set<string>): Promise<void> {
     const realDirectory = await fs.realpath(directory);
     if (!contained(realRoot, realDirectory)) throw serviceError('源文件符号链接越界', 403);
@@ -80,16 +80,48 @@ export async function sourceFiles(root: string, main?: string): Promise<SourceFi
       const absolute = path.join(directory, item.name);
       const real = await fs.realpath(absolute);
       if (!contained(realRoot, real)) throw serviceError(`源文件符号链接越界：${relative}`, 403);
-      const stat = await fs.stat(real);
+      const stat = await fs.stat(real, { bigint: true });
       if (stat.isDirectory()) await walk(absolute, relative, next);
       else if (stat.isFile() && !OMIT_FILE.test(item.name) && !(main && relative === main.replace(/\.tex$/i, '.pdf'))) {
-        const bytes = await fs.readFile(real);
-        files.push({ path: relative, bytes, hash: createHash('sha256').update(bytes).digest('hex') });
+        files.push(await file(relative, real, stat));
       }
     }
   }
   await walk(realRoot, '', new Set());
   return files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+export function sourceFiles(root: string, main?: string): Promise<SourceFile[]> {
+  return walkSource(root,main,async(relative,real)=>{
+    const bytes = await fs.readFile(real);
+    return {path:relative,bytes,hash:createHash('sha256').update(bytes).digest('hex')};
+  });
+}
+
+const sourceIdentity = (stat:BigIntStats) => [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
+const fingerprintCache = new Map<string,{identity:string;hash:string}>();
+// Only status checks may reuse strong filesystem identity. Frozen builds still read and
+// hash exactly the bytes they copy. If inode identity is unavailable, hash every time.
+export async function currentSourceFingerprint(root:string, main:string):Promise<string>{
+  return fingerprint(await walkSource(root,main,async(relative,real,stat)=>{
+    const identity=sourceIdentity(stat), cacheable=stat.ino!==0n;
+    const cached=cacheable?fingerprintCache.get(real):undefined;
+    if(cached?.identity===identity)return {path:relative,hash:cached.hash};
+    const handle=await fs.open(real,'r');
+    try{
+      const before=await handle.stat({bigint:true});
+      if(!before.isFile()||sourceIdentity(before)!==identity)throw serviceError('源文件在检查期间已变动，请重试。',409);
+      const digest=createHash('sha256');
+      for await(const chunk of handle.createReadStream({autoClose:false}))digest.update(chunk);
+      const [after,current]=await Promise.all([handle.stat({bigint:true}),fs.lstat(real,{bigint:true})]);
+      if(sourceIdentity(after)!==identity||!current.isFile()||sourceIdentity(current)!==identity)throw serviceError('源文件在检查期间已变动，请重试。',409);
+      const hash=digest.digest('hex');
+      if(cacheable){
+        if(fingerprintCache.size>=4096&&!fingerprintCache.has(real))fingerprintCache.delete(fingerprintCache.keys().next().value!);
+        fingerprintCache.set(real,{identity,hash});
+      }
+      return {path:relative,hash};
+    }finally{await handle.close();}
+  }));
 }
 export function fingerprint(files: Pick<SourceFile, 'path' | 'hash'>[]): string {
   return createHash('sha256').update(JSON.stringify(files.map(file => [file.path, file.hash]))).digest('hex');
@@ -133,11 +165,18 @@ export async function runCompiler(options: CompilerOptions): Promise<ProcessResu
   await previous;
   try {
     const deadline=Date.now()+options.timeoutMs;
+    let configured: string|undefined;
+    try{configured=await configuredResourceBundle();}
+    catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      return {code:null,log:message,timedOut:false,error:message};
+    }
     let bundle: Awaited<ReturnType<typeof localResourceBundle>>;
-    try{bundle=await localResourceBundle({compiler:options.compiler,mirrorRoot:options.resourceMirrorRoot,signal:options.signal,deadline});}catch{/* Cache adaptation is optional; normal Tectonic remains the fallback. */}
+    if(!configured)try{bundle=await localResourceBundle({compiler:options.compiler,mirrorRoot:options.resourceMirrorRoot,signal:options.signal,deadline});}catch{/* Cache adaptation is optional; normal Tectonic remains the fallback. */}
     const remaining=()=>Math.max(0,deadline-Date.now());
     if(options.signal?.aborted)return {code:null,log:'编译已取消。',timedOut:false,error:'编译已取消。'};
     if(!remaining())return {code:null,log:'编译准备超时。',timedOut:true};
+    if(configured)return await runCompilerNow({...options,timeoutMs:remaining()},configured);
     if(bundle)options.onOutput?.(`note: Using local cached resource bundle ${bundle.digest} ...\n`);
     const first=await runCompilerNow({...options,timeoutMs:remaining()},bundle?.directory);
     if(!bundle||first.code===0||first.timedOut||first.error||options.signal?.aborted||!missingCachedResource(first.log))return first;

@@ -1,3 +1,4 @@
+import ViewBoundary from './ViewBoundary';
 import {libraryPathInput} from './libraryPathInput';
 import {ProcessingControls,useReadingProcessing} from './ReadingProcessing';
 import {usePdfImport,PdfImportButton,PdfImportFeedback,PdfImportOverlay} from './PdfImport';
@@ -186,7 +187,7 @@ export default function Library({overview,initialQuery='',initialResourceId,topi
   <button role="tab" aria-selected={libraryView==='files'&&group==='other'} onClick={()=>{chooseView('files');chooseGroup('other');}}>{RESOURCE_GROUP_LABELS.other}{groupCounts&&<small>{groupCounts.other}</small>}</button>
   <button role="tab" aria-selected={libraryView==='files'&&!group} onClick={()=>{chooseView('files');chooseGroup('');}}>全部文件</button>
  </nav>{libraryView==='files'&&libraryTools}</div>
- {libraryView==='notes'&&<Suspense fallback={<p role="status">正在打开阅读笔记…</p>}><ReadingNotes topicResourceIds={topicId?overview?.topics.find(t=>t.id===topicId)?.resourceIds:undefined} onError={onError}/></Suspense>}
+ {libraryView==='notes'&&<ViewBoundary fallback={<p role="alert">阅读笔记暂时无法打开。其他资料功能仍可使用；请刷新页面后重试。</p>}><Suspense fallback={<p role="status">正在打开阅读笔记…</p>}><ReadingNotes topicResourceIds={topicId?overview?.topics.find(t=>t.id===topicId)?.resourceIds:undefined} onError={onError}/></Suspense></ViewBoundary>}
  {linkError&&<p role="alert" className="academic-inline-error">{linkError}</p>}
  <div className="academic-library-layout" hidden={libraryView!=='files'}><aside className="academic-locations" hidden={!locationsOpen}><h2>文件位置 <small>{roots.length}</small></h2><button className={!rootId?'active':''} onClick={()=>chooseRoot('')}><FilesIcon/>全部位置</button>{roots.map(r=><button key={r.id} className={rootId===r.id?'active':''} onClick={()=>chooseRoot(r.id)} title={r.path}><Folder size={16}/><span>{r.label}<small>{r.status==='scanning'?'正在建立索引…':r.status==='offline'?'目录离线':r.status==='error'?'索引失败':`${r.scannedFiles} 项 · ${r.permission==='write'?'可整理':'只读'}`}</small></span>{r.status==='scanning'&&<LoaderCircle size={13} className="spin"/>}</button>)}{!roots.length&&<p>连接本机目录后，即可检索与整理文件。</p>}<div className="academic-location-note">已有论文继续由论文工作区管理。外部目录原件不包含在工作台完整备份中。</div></aside>
  <div className="academic-file-browser library-reference-browser">

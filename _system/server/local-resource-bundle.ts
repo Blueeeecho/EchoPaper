@@ -10,6 +10,16 @@ const defaultMirrorRoot = process.env.WORKBENCH_RUNTIME_DIR ? path.join(process.
 export interface LocalResourceBundle { directory: string; digest: string }
 interface Options { compiler: string; mirrorRoot?: string; signal?: AbortSignal; deadline: number }
 
+// Machine-owner configuration only; workspace manifests and HTTP requests cannot select an engine bundle.
+export async function configuredResourceBundle(value=process.env.TECTONIC_BUNDLE_PATH):Promise<string|undefined>{
+  if(!value)return;
+  if(!path.isAbsolute(value))throw Error('TECTONIC_BUNDLE_PATH 必须是本机绝对路径。');
+  const real=await fs.realpath(value).catch(()=>{throw Error('TECTONIC_BUNDLE_PATH 指定的本地宏包不存在。');});
+  const stat=await fs.stat(real);
+  if(!stat.isDirectory()&&!(stat.isFile()&&/\.(zip|ttb)$/i.test(real)))throw Error('TECTONIC_BUNDLE_PATH 需要本地目录、.zip 或 .ttb 宏包。');
+  return real;
+}
+
 /** Adapt the cache layout verified with the installed engine; unknown versions use its normal resolver. */
 export async function localResourceBundle(options: Options): Promise<LocalResourceBundle | undefined> {
   const check=()=>{if(options.signal?.aborted)throw Error('cancelled');if(Date.now()>=options.deadline)throw Error('timeout');};

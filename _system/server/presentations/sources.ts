@@ -42,4 +42,27 @@ export async function sourceFromInput(workspaceRoot:string,directory:string,inpu
  if(input.paperId!==undefined){if(typeof input.paperId!=='string')throw new HttpError(400,'论文编号无效。');const paper=await getProject(workspaceRoot,input.paperId),target=paper.targets[0];if(!target)throw new HttpError(400,'论文未配置主稿入口。');const text=await paperSourceText(await registeredRoot(workspaceRoot,input.paperId),target.main);return{id:'src-'+randomUUID(),name:name||paper.title,kind:'paper',text,hash:hash(text),paperId:paper.id,path:target.main};}
  if(typeof input.text!=='string'||!input.text.trim())throw new HttpError(400,'请添加文字，或明确选择论文、资源文件。');if(input.text.length>2_000_000)throw new HttpError(413,'文字材料超过 200 万字符。');return{id:'src-'+randomUUID(),name:name||'文字材料',kind:'text',text:input.text,hash:hash(input.text)};
 }
-export async function selectedAssets(directory:string,document:PresentationDocument):Promise<Record<string,string>>{const assets:Record<string,string>={};for(const source of document.sources.filter(s=>s.assetId)){const filename=await assertNoSymlinks(directory,'assets/'+source.assetId!);if(hash(await fs.readFile(filename))!==source.hash)throw new HttpError(409,'已冻结材料资产被外部修改，请恢复后重试。');if(assetMime(filename).startsWith('image/'))assets[source.assetId!]=filename;}return assets;}
+export async function selectedAssets(directory:string,document:PresentationDocument):Promise<Record<string,string>>{const assets:Record<string,string>={};for(const source of document.sources.filter(s=>s.assetId)){const {filename}=await verifiedSourceAsset(directory,source);if(assetMime(filename).startsWith('image/'))assets[source.assetId!]=filename;}return assets;}
+
+
+async function verifiedSourceAsset(directory:string,source:PresentationSource){
+ const filename=await assertNoSymlinks(directory,'assets/'+source.assetId!);
+ const bytes=await fs.readFile(filename);
+ if(hash(bytes)!==source.hash)throw new HttpError(409,'已冻结材料资产被外部修改，请恢复后重试。');
+ return {filename,bytes};
+}
+
+/** Only the images used by the measured slide, served from the exact bytes verified in this read. */
+export async function inlinePreviewImages(directory:string,document:PresentationDocument,assetIds:Iterable<string>){
+ const assets:Record<string,string>=Object.create(null);
+ const selected=new Set(assetIds);
+ for(const source of document.sources){
+  const id=source.assetId;
+  if(!id||!selected.has(id))continue;
+  const mime=assetMime(id);
+  if(!mime.startsWith('image/'))continue;
+  const {bytes}=await verifiedSourceAsset(directory,source);
+  assets[id]=`data:${mime};base64,${bytes.toString('base64')}`;
+ }
+ return assets;
+}

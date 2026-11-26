@@ -59,16 +59,50 @@ function Block({ block, document }: { block: PresentationBlock; document: Presen
   </section>;
 }
 
-export default function PresentationPreview({ document, slide, index, style, previewUrl, savedPreviewUrl, compact = false }: Props) {
+export default function PresentationPreview(props: Props) {
+  return <SlidePreview key={props.previewUrl || props.savedPreviewUrl || 'structured'} {...props}/>;
+}
+
+function SlidePreview({ document, slide, index, style, previewUrl, savedPreviewUrl, compact = false }: Props) {
   const candidate = previewUrl || savedPreviewUrl;
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [candidate]);
+  const [imageState, setImageState] = useState<'loading' | 'decoded' | 'failed'>('loading');
+  const [explanation, setExplanation] = useState('');
+  useEffect(() => {
+    if (!candidate || imageState !== 'failed') return;
+    const controller = new AbortController();
+    void fetch(candidate, { signal: controller.signal }).then(async response => {
+      if (response.status !== 422) {
+        // Diagnostic only: do not download a second full image after a decode failure.
+        await response.body?.cancel();
+        return;
+      }
+      const body = await response.json().catch(() => null);
+      const missing = body?.code === 'presentation_fonts_missing' && Array.isArray(body.missingFonts)
+        ? body.missingFonts.filter((font: unknown) => font === '隶书' || font === 'Times New Roman') : [];
+      if (missing.length && !controller.signal.aborted) {
+        setExplanation('缺少 ' + missing.join('、') + '。安装字体并重启 EchoPaper 后可使用模板预览和导出。');
+      }
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [candidate, imageState]);
+  const decoded = !!candidate && imageState === 'decoded';
   const navigation = style?.navigation?.length ? style.navigation : ['研究背景', '研究内容', '研究结果', '未来计划'];
   const logoUrl = style?.logoUrl;
   const isCover = slide.layout === 'cover' || slide.layout === 'thanks';
-  return <div className={`presentation-preview ${compact ? 'is-compact' : ''}`} data-layout={slide.layout}>
-    {candidate && !failed ? <img className="presentation-rendered-preview" src={candidate} alt={`第 ${index + 1} 页：${slide.title || slide.titleEn}`} onError={() => setFailed(true)}/>
-      : <article className={`presentation-slide presentation-layout-${slide.layout}`} aria-label={`第 ${index + 1} 页内容预览`}>
+  return <>
+  <div className={`presentation-preview ${compact ? 'is-compact' : ''}`} data-layout={slide.layout}>
+    {candidate && imageState !== 'failed' && <img
+      className="presentation-rendered-preview"
+      src={candidate}
+      alt={'第 ' + (index + 1) + ' 页：' + (slide.title || slide.titleEn)}
+      style={decoded ? undefined : { position: 'absolute', visibility: 'hidden' }}
+      onLoad={event => {
+        setImageState(event.currentTarget.naturalWidth > 0 && event.currentTarget.naturalHeight > 0 ? 'decoded' : 'failed');
+      }}
+      onError={() => setImageState('failed')}
+    />}
+    {!decoded &&
+      <article className={`presentation-slide presentation-layout-${slide.layout}`} aria-label={`第 ${index + 1} 页内容预览`}>
         <header className="presentation-slide-header"><span className="presentation-hzau-mark">{logoUrl ? <img src={logoUrl} alt="华中农业大学"/> : <span className="presentation-hzau-wordmark"><span className="presentation-text-zh">华中农业大学</span><small>HUAZHONG AGRICULTURAL UNIVERSITY</small></span>}</span><nav aria-label="幻灯片章节">{navigation.map(item => <span key={item} className={item === slide.section ? 'active' : ''}><PresentationText text={item}/></span>)}</nav></header>
         <div className="presentation-slide-content"><Bilingual primary={slide.title} english={slide.titleEn} language={document.language} className="presentation-slide-title"/>
           {slide.keyMessage && <p className="presentation-key-message"><PresentationText text={slide.keyMessage}/></p>}
@@ -76,5 +110,11 @@ export default function PresentationPreview({ document, slide, index, style, pre
           {isCover && (document.presenter || document.advisor) && <p className="presentation-cover-byline"><PresentationText text={[document.presenter && `汇报人：${document.presenter}`, document.advisor && `指导教师：${document.advisor}`].filter(Boolean).join('    ')}/></p>}
         </div><footer className="presentation-slide-footer"><span><PresentationText text={document.title}/></span><span>{index + 1} / {document.slides.length}</span></footer>
       </article>}
-  </div>;
+  </div>
+  {!compact && <p className="presentation-preview-disclaimer" role="status">
+    {decoded ? (previewUrl ? '导出模板预览' : '模板排版预览')
+      : candidate && imageState === 'loading' ? '正在加载模板预览，暂显示结构化内容。'
+      : '结构化内容预览，不代表实际排版。' + (imageState === 'failed' ? explanation || '模板预览暂不可用。' : '')}
+  </p>}
+  </>;
 }
