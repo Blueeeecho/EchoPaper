@@ -28,7 +28,7 @@ import {openCatalog,type IndexedResource} from './catalog.ts';
 import {parseTimelineConferences} from './conference-timeline.ts';
 import {createTimelineSourceService} from './timeline-sources.ts';
 import {createFileOperations,publicOperation,trashedResourceIds} from './operations.ts';
-import {canonicalRoot,fastFileSnapshot,fileError,overlaps,resourcePath,rootFile,snapshot,type Tree} from './paths.ts';
+import {canonicalRoot,contains,fastFileSnapshot,fileError,overlaps,resourcePath,rootFile,sameFsPath,snapshot,type Tree} from './paths.ts';
 
 const textExtensions=new Set(['.txt','.md','.markdown','.tex','.bib','.csv','.tsv','.json','.yaml','.yml','.xml','.html','.htm','.css','.js','.ts','.log','.rst']);
 const previewTypes:Record<string,string>={'.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.avif':'image/avif','.txt':'text/plain; charset=utf-8','.md':'text/plain; charset=utf-8','.tex':'text/plain; charset=utf-8','.bib':'text/plain; charset=utf-8','.csv':'text/plain; charset=utf-8','.tsv':'text/plain; charset=utf-8','.json':'text/plain; charset=utf-8'};
@@ -333,11 +333,12 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
     if(target.topicId&&!topic)throw new HttpError(404,'课题不存在。');
     if(topic){revision(target.expectedRevision,topic.revision);if(topic.archived)throw new HttpError(409,'该课题已归档，请恢复课题后导入。');}
     const selectedRoot=target.rootId?root(target.rootId):undefined;
-    const directory=topic?path.join(workspaceRoot,'materials',topic.id,'参考文献'):path.join(workspaceRoot,'materials','library','参考文献');
+    const archivePath=`materials/${topic?.id ?? 'library'}/参考文献`;
+    const directory=path.join(workspaceRoot,archivePath);
     let folder='';
     if(selectedRoot){
       folder=target.directory?resourcePath(target.directory):'';
-      const topicReferences=!!topic&&selectedRoot.path===directory&&!folder;
+      const topicReferences=!!topic&&sameFsPath(selectedRoot.path,directory)&&!folder;
       if(selectedRoot.permission!=='write'&&!topicReferences)throw new HttpError(403,'所选目录为只读，请选择可整理的目录。');
       const destination=await rootFile(workspaceRoot,selectedRoot,folder);
       if(!(await fs.stat(destination)).isDirectory())throw new HttpError(400,'PDF 归档位置必须是目录。');
@@ -373,14 +374,14 @@ export async function registerWorkspaceRoutes(app:FastifyInstance,workspaceRoot:
       }
       return {topic:topic?clone(topic):undefined,resource:publicResource(item),root:clone(root(item.rootId)),reused:true,alreadyLinked};
     }
-    const existingSource=selectedRoot||state.roots.find(item=>directory===item.path||directory.startsWith(item.path+path.sep));
+    const existingSource=selectedRoot||state.roots.find(item=>contains(item.path,directory));
     if(!selectedRoot){
       if(existingSource){
-        const topicReferences=!!topic&&existingSource.path===directory;
+        const topicReferences=!!topic&&sameFsPath(existingSource.path,directory);
         if(existingSource.permission!=='write'&&!topicReferences)throw new HttpError(403,'归档目录为只读，请选择可整理的目录。');
         folder=path.relative(existingSource.path,directory).split(path.sep).join('/');
       }else if(state.roots.some(item=>overlaps(item.path,directory)))throw new HttpError(409,'归档目录包含已连接的位置，请选择现有文件位置后导入。');
-      await assertNoSymlinks(workspaceRoot,path.relative(workspaceRoot,directory),true);await fs.mkdir(directory,{recursive:true});await canonicalRoot(workspaceRoot,directory);
+      await assertNoSymlinks(workspaceRoot,archivePath,true);await fs.mkdir(directory,{recursive:true});await canonicalRoot(workspaceRoot,directory);
     }
     const source:SourceRoot=existingSource??{id:randomUUID(),label:topic?`${topic.title} · 参考文献`:'资料库 · 参考文献',path:directory,permission:topic?'read':'write',status:'ready',scannedFiles:0,revision:1,createdAt:new Date().toISOString()};
     const name=path.basename(filename).replace(/[^\p{L}\p{N} ._-]/gu,'_').slice(0,160)||'paper.pdf';

@@ -66,9 +66,10 @@ export function parseSyncTeX(text: string): ParsedSyncTeX {
 }
 
 function inputRelative(value: string, buildId: string, manifest: Set<string>): string | undefined {
-  if (!value || value.includes('\0') || value.includes('\\') || value.split('/').includes('..')) return;
+  value = value.replace(/\\/g, '/');
+  if (!value || value.includes('\0') || value.split('/').includes('..')) return;
   let candidate = value;
-  if (path.posix.isAbsolute(value)) {
+  if (path.win32.isAbsolute(value)) {
     const marker = `/build/${buildId}/source/`;
     const position = value.lastIndexOf(marker);
     if (position < 0) return;

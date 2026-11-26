@@ -1,0 +1,29 @@
+name: Windows path regressions
+on:
+  pull_request:
+    paths:
+      - '_system/server/**'
+      - '_system/src/academic/Library.tsx'
+      - '_system/src/academic/libraryPathInput.ts'
+      - '_system/tests/**'
+      - '.github/workflows/windows-paths.yml'
+permissions:
+  contents: read
+jobs:
+  paths:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: _system
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.1'
+      - run: npm ci --no-audit --no-fund
+      - name: Check Windows paths and PDF imports
+        run: >-
+          node --import tsx --test --test-name-pattern="Windows|global library imports"
+          tests/pdf-import.test.ts tests/research-notes.test.ts
+          tests/library-path-input.test.ts tests/diagnostics.test.ts tests/synctex.test.ts

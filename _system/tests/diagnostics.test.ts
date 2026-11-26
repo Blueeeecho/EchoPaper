@@ -216,3 +216,12 @@ test('engine termination summary does not count the preceding missing file twice
  assert.equal(result.find(item=>item.message.startsWith('halted'))?.severity,'info');
  assert.equal(parseDiagnostics('error: halted on potentially-recoverable error as specified','','main.tex',{succeeded:false})[0].severity,'error');
 });
+
+test('Windows compiler locations map dotted paths and snapshot paths with spaces to frozen sources', () => {
+  const source = files({'tex/body.tex': 'first\nsecond'});
+  for (const filename of [String.raw`.\tex\body.tex`, String.raw`C:\论文 目录\build\b-test\source\tex\body.tex`]) {
+    const result = parseDiagnostics(filename + ':2: Undefined control sequence.', 'manuscript', 'main.tex', {files:source});
+    assert.equal(result[0]?.file, 'manuscript/tex/body.tex');
+    assert.equal(result[0]?.line, 2);
+  }
+});

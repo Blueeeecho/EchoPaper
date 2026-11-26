@@ -9,6 +9,7 @@ interface PdfImportOptions {
  target?:PdfImportTarget;
  destination:string;
  blocked?:string;
+ dropDisabled?:boolean;
  onImported:(results:PdfImportResult[])=>Promise<void>;
 }
 
@@ -27,17 +28,27 @@ export function usePdfImport(options:PdfImportOptions){
   alive.current=true;
   const reset=()=>{depth.current=0;setDrag(false);};
   const fileDrag=(event:DragEvent)=>!!event.dataTransfer&&Array.from(event.dataTransfer.types).includes('Files');
-  const enter=(event:DragEvent)=>{if(fileDrag(event)){event.preventDefault();depth.current++;setDrag(true);}};
-  const over=(event:DragEvent)=>{if(fileDrag(event)){event.preventDefault();event.dataTransfer!.dropEffect='copy';}};
+  const blockedDrop=()=>latest.current.dropDisabled||Array.from(document.querySelectorAll('[aria-modal="true"]')).some(dialog=>dialog.getClientRects().length>0);
+  const enter=(event:DragEvent)=>{if(fileDrag(event)&&!event.defaultPrevented&&!blockedDrop()){event.preventDefault();depth.current++;setDrag(true);}};
+  const over=(event:DragEvent)=>{if(fileDrag(event)&&!event.defaultPrevented){event.preventDefault();event.dataTransfer!.dropEffect=blockedDrop()?'none':'copy';}};
   const leave=(event:DragEvent)=>{if(fileDrag(event)){depth.current=Math.max(0,depth.current-1);if(!depth.current)setDrag(false);}};
   const drop=(event:DragEvent)=>{
-   reset();if(!event.dataTransfer?.files.length)return;
-   event.preventDefault();void upload(Array.from(event.dataTransfer.files));
+   reset();
+   const transfer=event.dataTransfer;
+   if(!transfer||event.defaultPrevented||!fileDrag(event))return;
+   event.preventDefault();
+   if(blockedDrop())return;
+   const items=Array.from(transfer.items).filter(item=>item.kind==='file');
+   if(items.some(item=>item.webkitGetAsEntry?.()?.isDirectory)){
+    setError('请拖入 PDF 文件。要索引整个文件夹，请在资料库选择“连接文件夹”。本次拖放未导入文件。');
+    return;
+   }
+   void upload(Array.from(transfer.files));
   };
   const key=(event:KeyboardEvent)=>{if(event.key==='Escape')reset();};
   const unload=(event:BeforeUnloadEvent)=>{if(busyRef.current){event.preventDefault();event.returnValue='';}};
-  window.addEventListener('dragenter',enter);window.addEventListener('dragover',over);window.addEventListener('dragleave',leave);window.addEventListener('drop',drop);window.addEventListener('dragend',reset);window.addEventListener('keydown',key);window.addEventListener('beforeunload',unload);
-  return()=>{alive.current=false;window.removeEventListener('dragenter',enter);window.removeEventListener('dragover',over);window.removeEventListener('dragleave',leave);window.removeEventListener('drop',drop);window.removeEventListener('dragend',reset);window.removeEventListener('keydown',key);window.removeEventListener('beforeunload',unload);};
+  window.addEventListener('dragenter',enter);window.addEventListener('dragover',over);window.addEventListener('dragleave',leave);window.addEventListener('drop',drop);window.addEventListener('dragend',reset);window.addEventListener('blur',reset);window.addEventListener('keydown',key);window.addEventListener('beforeunload',unload);
+  return()=>{alive.current=false;window.removeEventListener('dragenter',enter);window.removeEventListener('dragover',over);window.removeEventListener('dragleave',leave);window.removeEventListener('drop',drop);window.removeEventListener('dragend',reset);window.removeEventListener('blur',reset);window.removeEventListener('keydown',key);window.removeEventListener('beforeunload',unload);};
  },[]);
  async function upload(files:File[]){
   if(!files.length)return;

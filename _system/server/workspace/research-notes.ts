@@ -9,7 +9,7 @@ import {researchDay,validResearchDay} from '../../shared/research-calendar';
 import {assertNoSymlinks,HttpError} from '../security';
 import {atomicWrite,hash,preserveRecovery,withLock} from '../storage';
 import type {CatalogState,IndexedResource,JournalOperation} from './catalog';
-import {canonicalRoot,rootFile,trashName} from './paths';
+import {canonicalRoot,rootFile,sameFsPath,trashName} from './paths';
 import type {createFileOperations} from './operations';
 
 const SECTIONS={ideation:{directory:'课题笔记',field:null},experiments:{directory:'方案与实验',field:'experimentPlan'},results:{directory:'结果与证据',field:'resultSummary'}} as const;
@@ -54,7 +54,7 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
    if(!exists)return null;
   }
   await canonicalRoot(root,directory);
-  let source=state.roots.find(source=>source.path===directory);
+  let source=state.roots.find(source=>sameFsPath(source.path,directory));
   if(!source){source={id:randomUUID(),path:directory,label:`${t.title} · ${SECTIONS[s].directory}`,permission:'write',status:'ready',scannedFiles:0,revision:1,createdAt:new Date().toISOString()};state.roots.push(source);}
   return source;
  }
@@ -93,7 +93,7 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
   if(id==='overview'){const previous=legacy(t,s);if(!previous)throw new HttpError(404,'该分区没有原有记录。');return previous;}
   const item=state.resources.find(item=>item.id===id&&t.resourceIds.includes(id));
   const source=item&&state.roots.find(source=>source.id===item.rootId);
-  if(!item||!source||source.path!==path.join(root,folder(t,s))||item.kind!=='file'||item.name.startsWith('.')||!/\.md$/i.test(item.name)||item.path!==item.name)throw new HttpError(404,'指定研究记录不存在。');
+  if(!item||!source||!sameFsPath(source.path,path.join(root,folder(t,s)))||item.kind!=='file'||item.name.startsWith('.')||!/\.md$/i.test(item.name)||item.path!==item.name)throw new HttpError(404,'指定研究记录不存在。');
   await rootFile(root,source,item.path);
   const bytes=await readBytes(`${folder(t,s)}/${item.name}`);
   const indexed=index(t,source,item.name,bytes,s);
@@ -153,7 +153,7 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
   if(operation.researchNote)return operation.researchNote.topicId===t.id&&operation.researchNote.section===s?operation:undefined;
   const source=state.roots.find(item=>item.id===operation.source?.rootId);
   const record=operation.records?.find(item=>item.id===operation.resourceId);
-  return source?.path===path.join(root,folder(t,s))&&record?.kind==='file'&&record.path===record.name&&/\.md$/i.test(record.name)?operation:undefined;
+  return source&&sameFsPath(source.path,path.join(root,folder(t,s)))&&record?.kind==='file'&&record.path===record.name&&/\.md$/i.test(record.name)?operation:undefined;
  }
  function trashEntry(operation:JournalOperation):ResearchNoteTrashEntry {
   const metadata=operation.researchNote,record=operation.records?.find(item=>item.id===operation.resourceId);
@@ -171,7 +171,7 @@ export function registerResearchNoteRoutes(app:FastifyInstance,{root,state,mutat
   const entry=trashEntry(operation);
   if(operation.researchNote?.legacyField){const content=operation.researchNote.legacyContent!;if(hash(content)!==entry.hash)throw new HttpError(409,'回收内容校验失败。');return {content,hash:entry.hash,filename:'原有记录.md'};}
   const source=state.roots.find(item=>item.id===operation.destination?.rootId);
-  if(!source||source.path!==path.join(root,folder(t,s))||operation.destination?.path!==`${trashName}/${operation.id}/content`)throw new HttpError(409,'回收路径与原笔记不匹配。');
+  if(!source||!sameFsPath(source.path,path.join(root,folder(t,s)))||operation.destination?.path!==`${trashName}/${operation.id}/content`)throw new HttpError(409,'回收路径与原笔记不匹配。');
   const bytes=await readBytes(`${folder(t,s)}/${operation.destination.path}`);
   if(bytes.hash!==entry.hash)throw new HttpError(409,'回收副本已在其他位置修改，请保留当前内容。');
   return {content:bytes.content,hash:bytes.hash,filename:operation.records?.find(item=>item.id===entry.noteId)?.name||'recovered-note.md'};

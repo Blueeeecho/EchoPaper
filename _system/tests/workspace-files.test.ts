@@ -8,6 +8,7 @@ import {createRequire} from 'node:module';
 import Fastify from 'fastify';
 import {workspaceMaintenance} from '../server/agents/maintenance.ts';
 import {openCatalog} from '../server/workspace/catalog.ts';
+import {canonicalRoot,resourcePath} from '../server/workspace/paths.ts';
 
 async function fixture(){
   const directory=await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()),'workspace-files-')),root=path.join(directory,'app'),source=path.join(directory,'originals'),other=path.join(directory,'second');
@@ -20,6 +21,33 @@ async function fixture(){
   async function resource(name:string){const items=(await call('GET','/api/workspace/resources')).resources;const item=items.find((r:any)=>r.path===name);assert.ok(item,`missing indexed ${name}`);return await call('GET',`/api/workspace/resources/${item.id}`);}
   return {directory,root,source,other,app,service,call,settle,connect,resource,async close(){await service.close();await app.close();await fs.rm(directory,{recursive:true,force:true});}};
 }
+
+test('connecting a document, its child, a missing location or an inaccessible folder gives distinct feedback',async t=>{
+  const f=await fixture();try{
+    const document=path.join(f.source,'article.pdf');await fs.writeFile(document,'paper');
+    const connect=(folder:string,status:number)=>f.call('POST','/api/workspace/roots',{path:folder,permission:'read'},status);
+    assert.match((await connect(document,400)).error,/拖入资料库/);
+    assert.match((await connect(path.join(document,'subfolder'),400)).error,/文件夹/);
+    assert.match((await connect(path.join(f.source,'missing'),404)).error,/不存在/);
+    for(const code of ['EACCES','EPERM']){
+      const stub=t.mock.method(fs,'lstat',async()=>{throw Object.assign(new Error(code),{code});});
+      try{await assert.rejects(canonicalRoot(f.root,f.source),{statusCode:403,message:/访问权限/});}
+      finally{stub.mock.restore();}
+    }
+  }finally{await f.close();}
+});
+
+test('library path validation respects Windows and POSIX filename rules',()=>{
+  const platform=Object.getOwnPropertyDescriptor(process,'platform')!;
+  const platformNames=['dir/paper:stream','a?.md','a*.md','bad|name','dir/CON.txt','lpt³.md','trail.','trail '];
+  try{
+    Object.defineProperty(process,'platform',{...platform,value:'win32'});
+    for(const name of platformNames)assert.throws(()=>resourcePath(name),/Windows/);
+    assert.equal(resourcePath('资料/COM10.md'),'资料/COM10.md');
+    Object.defineProperty(process,'platform',{...platform,value:'linux'});
+    for(const name of platformNames)assert.equal(resourcePath(name),name);
+  }finally{Object.defineProperty(process,'platform',platform);}
+});
 
 test('rename preserves resource identity, tags and topic links and supports undo',async()=>{
   const f=await fixture();try{

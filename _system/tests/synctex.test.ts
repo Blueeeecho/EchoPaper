@@ -45,6 +45,20 @@ test('inverse retains nearby source candidates when overlapping input records di
  assert.ok(result.alternatives?.some(candidate=>candidate.path==='manuscript/left.tex'&&candidate.line===6));
  assert.ok(result.alternatives!.length<=8);
 });
+test('Windows snapshot inputs resolve only within the named build and manifest', () => {
+  const parsed = parseSyncTeX(raw);
+  parsed.inputs = new Map([
+    [1, String.raw`C:\论文 目录\build\b-unit\source\main.tex`],
+    [2, String.raw`.\tex\body.tex`],
+    [3, String.raw`C:\other\main.tex`],
+    [4, String.raw`\\server\share\build\b-unit\source\..\main.tex`],
+  ]);
+  const manifest = new Set(['main.tex', 'tex/body.tex']);
+  const result = indexSyncTeX(parsed, 'b-unit', 'manuscript', manifest, [{width:612,height:792}]);
+  assert.deepEqual(result.files, ['manuscript/main.tex', 'manuscript/tex/body.tex']);
+  assert.ok(result.nodes.every(node => node.sourceLine !== 1 && node.sourceLine !== 100));
+});
+
 const index = () => indexSyncTeX(parseSyncTeX(raw),'b-unit','manuscript',new Set(['main.tex','tex/body.tex','article.cls']),[{width:612,height:792}]);
 test('v1 positions apply scaled-point units and keep local source mappings', () => {
   const data=index();assert.deepEqual(data.files,['manuscript/main.tex','manuscript/tex/body.tex']);

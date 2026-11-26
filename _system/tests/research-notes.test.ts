@@ -44,6 +44,25 @@ test('independent blank Markdown records have stable date names, topic links and
  }finally{await f.close();}
 });
 
+test('Windows reopening a workspace with different casing preserves note and source IDs',{skip:process.platform!=='win32'},async()=>{
+ const f=await fixture();
+ const reopened=Fastify();
+ try{
+  const note=await f.create();
+  await f.service.close();await f.app.close();
+  const service=await registerWorkspaceRoutes(reopened,path.join(f.directory,'APP'),{watch:false});
+  try{
+   const listing=await reopened.inject(f.url());
+   assert.equal(listing.statusCode,200,listing.body);
+   assert.deepEqual(listing.json().notes.map((item:{id:string})=>item.id),[note.id]);
+   const read=await reopened.inject(f.url('experiments',note.id));
+   assert.equal(read.statusCode,200,read.body);
+   assert.equal(read.json().hash,note.hash);
+   assert.equal((await reopened.inject('/api/workspace/roots')).json().roots.length,1);
+  }finally{await service.close();await reopened.close();}
+ }finally{await f.close();}
+});
+
 test('legacy fields remain separate virtual records and use hash compare-and-swap',async()=>{
  const f=await fixture();try{
   const original=await f.call('PATCH',`/api/workspace/topics/${f.topic.id}`,{expectedRevision:f.topic.revision,experimentPlan:'已有方案',resultSummary:'已有证据'});
